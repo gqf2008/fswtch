@@ -36,6 +36,28 @@ FREESWITCH_LIB_DIR=/usr/lib/freeswitch cargo build
 
 The vendored `freeswitch/` tree is useful source context, but it does not include generated config headers until FreeSWITCH has been configured.
 
+## Docker Smoke Test
+
+The repository includes a Docker image that builds FreeSWITCH, builds the Rust example modules, installs them into the FreeSWITCH module directory, starts FreeSWITCH, and verifies the module APIs through `fs_cli`.
+
+```sh
+docker build -t fswtch-freeswitch-smoke .
+docker run --rm fswtch-freeswitch-smoke
+```
+
+If you use Podman:
+
+```sh
+podman build -t fswtch-freeswitch-smoke .
+podman run --rm fswtch-freeswitch-smoke
+```
+
+Successful output ends with:
+
+```text
+all fswtch example module checks passed
+```
+
 ## Publishing
 
 Publish crates in dependency order:
