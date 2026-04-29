@@ -7,44 +7,61 @@ use std::{
 use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
 use serde_json::Value;
 
+const REGISTRATION_CHECK_DELAY: Duration = Duration::from_millis(150);
+
 fswtch::module_exports! {
     module = mod_registration_check,
     load = switch_module_load,
 }
 
+// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
 unsafe extern "C" fn check_registration_api(
     cmd: *const c_char,
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     let Some(request) = RegistrationRequest::parse(cmd) else {
-        write_response(
+        let status = write_response(
             stream,
             "usage: rust_check_registration <user@domain> <https://server/check>\n",
         );
-        return FALSE;
+        return if status == SUCCESS { FALSE } else { status };
     };
 
-    write_response(stream, "registration check queued\n");
+    let status = write_response(stream, "registration check queued\n");
+    if status != SUCCESS {
+        return status;
+    }
 
-    thread::spawn(move || {
-        let result = check_registration_remotely(&request);
-        let _ = fire_registration_event(&request, &result);
-    });
+    let worker = thread::Builder::new()
+        .name("fswtch-registration-check".to_owned())
+        .spawn(move || {
+            let result = check_registration_remotely(&request);
+            if let Err(error) = fire_registration_event(&request, &result) {
+                eprintln!("failed to fire registration check event: {error}");
+            }
+        });
+    if let Err(error) = worker {
+        eprintln!("failed to start registration check worker: {error}");
+        return fswtch::GENERR;
+    }
 
     SUCCESS
 }
 
+// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
 unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
+    // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_registration_check") }
     {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
+    // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
     if let Err(error) = unsafe {
         module.add_api(
             c"rust_check_registration",
@@ -85,7 +102,7 @@ struct RegistrationResult {
 }
 
 fn check_registration_remotely(request: &RegistrationRequest) -> RegistrationResult {
-    thread::sleep(Duration::from_millis(150));
+    thread::sleep(REGISTRATION_CHECK_DELAY);
 
     let pretend_json = if request.user.ends_with("@blocked.example") {
         r#"{"accepted":false,"score":15,"reason":"blocked_domain","request_id":"reg-1002"}"#
@@ -127,6 +144,7 @@ fn fire_registration_event(
     result: &RegistrationResult,
 ) -> fswtch::Result<()> {
     let mut event = ptr::null_mut();
+    // SAFETY: FreeSWITCH initializes `event` for the custom subclass when the call succeeds.
     let status = unsafe {
         sys::switch_event_create_subclass_detailed(
             c"mod_registration_check.rs".as_ptr(),
@@ -150,6 +168,7 @@ fn fire_registration_event(
     add_event_header(event, c"Registration-Reason", &result.reason)?;
     add_event_header(event, c"Registration-Request-ID", &result.request_id)?;
 
+    // SAFETY: `event` was created above and ownership is transferred to FreeSWITCH on success.
     let status = unsafe {
         sys::switch_event_fire_detailed(
             c"mod_registration_check.rs".as_ptr(),
@@ -168,6 +187,8 @@ fn add_event_header(
     value: &str,
 ) -> fswtch::Result<()> {
     let value = CString::new(value).map_err(|_| fswtch::SwitchError(fswtch::GENERR))?;
+    // SAFETY: `event` is a live FreeSWITCH event and the header/value C strings are valid for
+    // the duration of this call.
     let status = unsafe {
         sys::switch_event_add_header_string(
             event,
@@ -184,6 +205,7 @@ fn command_text(cmd: *const c_char) -> Option<String> {
         return None;
     }
 
+    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
     unsafe { CStr::from_ptr(cmd) }
         .to_str()
         .ok()
@@ -192,8 +214,14 @@ fn command_text(cmd: *const c_char) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) {
-    if let Some(mut stream) = unsafe { Stream::from_raw(stream) } {
-        let _ = stream.write_str(text);
+fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
+    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
+    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+        return SUCCESS;
+    };
+    if let Err(error) = stream.write_str(text) {
+        return error.0;
     }
+
+    SUCCESS
 }

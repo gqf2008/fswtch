@@ -10,67 +10,89 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+const FRAME_INTERVAL: Duration = Duration::from_millis(20);
+const MAX_FRAMES: usize = 80;
+const LOCAL_VAD_ENERGY_THRESHOLD: u32 = 50_000;
+const LOCAL_VAD_PERIOD: u64 = 23;
+
 fswtch::module_exports! {
     module = mod_remote_vad,
     load = switch_module_load,
 }
 
+// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
 unsafe extern "C" fn start_vad_api(
     cmd: *const c_char,
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     let Some(config) = VadConfig::parse(cmd) else {
-        write_response(
+        let status = write_response(
             stream,
             "usage: rust_vad_start <call-uuid> <wss://vad.example/session>\n",
         );
-        return FALSE;
+        return if status == SUCCESS { FALSE } else { status };
     };
 
-    write_response(stream, "remote VAD worker started\n");
+    let status = write_response(stream, "remote VAD worker started\n");
+    if status != SUCCESS {
+        return status;
+    }
 
-    thread::spawn(move || {
-        let runtime = match tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                let _ = fire_vad_event(
-                    &config,
-                    VadEventKind::Error,
-                    &format!("failed to start async runtime: {error}"),
-                    None,
-                );
-                return;
-            }
-        };
+    let worker = thread::Builder::new()
+        .name("fswtch-remote-vad".to_owned())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    if let Err(event_error) = fire_vad_event(
+                        &config,
+                        VadEventKind::Error,
+                        &format!("failed to start async runtime: {error}"),
+                        None,
+                    ) {
+                        eprintln!("failed to fire VAD runtime error event: {event_error}");
+                    }
+                    return;
+                }
+            };
 
-        runtime.block_on(async move {
-            if let Err(error) = run_remote_vad_worker(config.clone()).await {
-                let _ = fire_vad_event(
-                    &config,
-                    VadEventKind::Error,
-                    &format!("remote VAD worker failed: {error}"),
-                    None,
-                );
-            }
+            runtime.block_on(async move {
+                if let Err(error) = run_remote_vad_worker(config.clone()).await
+                    && let Err(event_error) = fire_vad_event(
+                        &config,
+                        VadEventKind::Error,
+                        &format!("remote VAD worker failed: {error}"),
+                        None,
+                    )
+                {
+                    eprintln!("failed to fire VAD worker error event: {event_error}");
+                }
+            });
         });
-    });
+    if let Err(error) = worker {
+        eprintln!("failed to start remote VAD worker: {error}");
+        return fswtch::GENERR;
+    }
 
     SUCCESS
 }
 
+// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
 unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
+    // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_remote_vad") } {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
+    // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
     if let Err(error) = unsafe {
         module.add_api(
             c"rust_vad_start",
@@ -106,19 +128,19 @@ impl VadConfig {
 }
 
 async fn run_remote_vad_worker(config: VadConfig) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let _ = fire_vad_event(
+    fire_vad_event(
         &config,
         VadEventKind::Started,
         "connecting to remote VAD",
         None,
-    );
+    )?;
 
     let (mut socket, _) = connect_async(config.websocket_url.as_str()).await?;
-    let _ = fire_vad_event(&config, VadEventKind::Started, "remote VAD connected", None);
+    fire_vad_event(&config, VadEventKind::Started, "remote VAD connected", None)?;
 
     // A production media module would feed this from a FreeSWITCH media bug attached to the call.
     // This example keeps the current binding surface small by modeling party audio from the UUID.
-    for frame in PartyAudioFrames::new(&config).take(80) {
+    for frame in PartyAudioFrames::new(&config).take(MAX_FRAMES) {
         let payload = encode_audio_message(&config, &frame);
         socket.send(Message::Text(payload.into())).await?;
 
@@ -131,12 +153,12 @@ async fn run_remote_vad_worker(config: VadConfig) -> Result<(), Box<dyn Error + 
             } else {
                 "silence detected"
             };
-            let _ = fire_vad_event(&config, VadEventKind::Result, message, Some(&result));
+            fire_vad_event(&config, VadEventKind::Result, message, Some(&result))?;
         }
     }
 
-    let _ = socket.close(None).await;
-    let _ = fire_vad_event(&config, VadEventKind::Stopped, "remote VAD stopped", None);
+    socket.close(None).await?;
+    fire_vad_event(&config, VadEventKind::Stopped, "remote VAD stopped", None)?;
     Ok(())
 }
 
@@ -165,7 +187,7 @@ impl Iterator for PartyAudioFrames {
     type Item = AudioFrame;
 
     fn next(&mut self) -> Option<Self::Item> {
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(FRAME_INTERVAL);
         self.sequence += 1;
 
         let speech_like =
@@ -261,7 +283,8 @@ fn local_vad_fallback(frame: &AudioFrame) -> VadResult {
         .iter()
         .map(|sample| sample.unsigned_abs() as u32)
         .sum();
-    let speech = energy > 50_000 || frame.sequence.is_multiple_of(23);
+    let speech =
+        energy > LOCAL_VAD_ENERGY_THRESHOLD || frame.sequence.is_multiple_of(LOCAL_VAD_PERIOD);
 
     VadResult {
         sequence: frame.sequence,
@@ -297,6 +320,7 @@ fn fire_vad_event(
     result: Option<&VadResult>,
 ) -> fswtch::Result<()> {
     let mut event = ptr::null_mut();
+    // SAFETY: FreeSWITCH initializes `event` for the custom subclass when the call succeeds.
     let status = unsafe {
         sys::switch_event_create_subclass_detailed(
             c"mod_remote_vad.rs".as_ptr(),
@@ -325,6 +349,7 @@ fn fire_vad_event(
         add_event_header(event, c"VAD-Label", &result.label)?;
     }
 
+    // SAFETY: `event` was created above and ownership is transferred to FreeSWITCH on success.
     let status = unsafe {
         sys::switch_event_fire_detailed(
             c"mod_remote_vad.rs".as_ptr(),
@@ -343,6 +368,8 @@ fn add_event_header(
     value: &str,
 ) -> fswtch::Result<()> {
     let value = CString::new(value).map_err(|_| fswtch::SwitchError(fswtch::GENERR))?;
+    // SAFETY: `event` is a live FreeSWITCH event and the header/value C strings are valid for
+    // the duration of this call.
     let status = unsafe {
         sys::switch_event_add_header_string(
             event,
@@ -359,6 +386,7 @@ fn command_text(cmd: *const c_char) -> Option<String> {
         return None;
     }
 
+    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
     unsafe { CStr::from_ptr(cmd) }
         .to_str()
         .ok()
@@ -367,8 +395,14 @@ fn command_text(cmd: *const c_char) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) {
-    if let Some(mut stream) = unsafe { Stream::from_raw(stream) } {
-        let _ = stream.write_str(text);
+fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
+    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
+    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+        return SUCCESS;
+    };
+    if let Err(error) = stream.write_str(text) {
+        return error.0;
     }
+
+    SUCCESS
 }

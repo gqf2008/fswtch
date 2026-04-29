@@ -57,9 +57,11 @@ impl Module {
             return Err(SwitchError(GENERR));
         }
 
+        // SAFETY: The caller guarantees `pool` and `name` are valid for FreeSWITCH's loader.
         let raw =
             unsafe { sys::switch_loadable_module_create_module_interface(pool, name.as_ptr()) };
         let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
+        // SAFETY: `slot` was checked for null above and points to FreeSWITCH's output slot.
         unsafe {
             *slot = raw.as_ptr();
         }
@@ -87,6 +89,7 @@ impl Module {
             *mut sys::switch_stream_handle_t,
         ) -> Status,
     ) -> Result<ApiInterface> {
+        // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
         let raw = unsafe {
             sys::switch_loadable_module_create_interface(
                 self.raw.as_ptr(),
@@ -96,6 +99,8 @@ impl Module {
         let api =
             NonNull::new(raw.cast::<sys::switch_api_interface_t>()).ok_or(SwitchError(GENERR))?;
 
+        // SAFETY: `api` is a valid API interface allocation returned by FreeSWITCH, and all
+        // assigned C string/function pointers have static lifetimes.
         unsafe {
             let api_ref = api.as_ptr();
             (*api_ref).interface_name = name.as_ptr();
@@ -139,10 +144,13 @@ impl Stream {
 
     pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
         let raw = self.raw.as_ptr();
+        // SAFETY: `self.raw` is guaranteed valid by `Stream::from_raw`'s caller contract.
         let Some(write) = (unsafe { &*raw }).raw_write_function else {
             return Err(SwitchError(GENERR));
         };
 
+        // SAFETY: FreeSWITCH's stream writer accepts the stream handle and a byte buffer valid for
+        // the duration of the call.
         let status = unsafe { write(raw, bytes.as_ptr().cast_mut(), bytes.len()) };
         status_to_result(status)
     }
