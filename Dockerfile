@@ -68,7 +68,7 @@ RUN set -eux; \
 RUN set -eux; \
     FREESWITCH_INCLUDE_DIR="${FS_PREFIX}/include/freeswitch" \
     FREESWITCH_LIB_DIR="${FS_PREFIX}/lib" \
-    cargo build -p fswtch --examples --release --features bindgen; \
+    cargo build -p fswtch --examples --release; \
     for module in \
       mod_api_suite \
       mod_hello \

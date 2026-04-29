@@ -11,7 +11,7 @@ links = "freeswitch"
 build = "build.rs"
 
 [features]
-default = []
+default = ["bundled"]
 bindgen = ["dep:bindgen"]
 bundled = ["bindgen", "dep:fswtch-src"]
 

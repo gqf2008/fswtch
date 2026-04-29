@@ -5,18 +5,27 @@
 
 Rust bindings for writing FreeSWITCH modules.
 
-This workspace is split into two crates:
+This workspace is split into three crates:
 
-- `fswtch-sys`: raw FreeSWITCH ABI bindings. By default it exposes a small handwritten module ABI that builds without a configured FreeSWITCH source tree. Enable the `bindgen` feature to generate broader bindings from `switch.h`.
+- `fswtch-sys`: raw FreeSWITCH ABI bindings. By default it enables `bundled`, runs bindgen, and generates bindings from the packaged FreeSWITCH headers.
 - `fswtch`: higher-level helpers for module exports, module interface creation, API command registration, and stream writes.
-- `fswtch-src`: vendored FreeSWITCH headers used by `fswtch-sys` when the `bundled` feature is enabled.
+- `fswtch-src`: vendored FreeSWITCH headers used by `fswtch-sys` for default bundled bindgen builds.
 
 ## Header Discovery
 
-For generated bindings, point the build at configured FreeSWITCH headers:
+By default, `fswtch` and `fswtch-sys` generate bindings from the vendored headers:
 
 ```sh
-FREESWITCH_INCLUDE_DIR=/usr/include/freeswitch cargo check -p fswtch-sys --features bindgen
+cargo check -p fswtch-sys
+cargo check -p fswtch
+```
+
+This default `bundled` feature is for generating Rust bindings from the vendored headers. It does not compile or statically link FreeSWITCH itself.
+
+To generate bindings from a configured FreeSWITCH installation instead, disable default features and enable `bindgen`:
+
+```sh
+FREESWITCH_INCLUDE_DIR=/usr/include/freeswitch cargo check -p fswtch-sys --no-default-features --features bindgen
 ```
 
 If FreeSWITCH is installed with `pkg-config`, `fswtch-sys` will also try the `freeswitch` package for link metadata. You can override linking with:
@@ -26,15 +35,6 @@ FREESWITCH_LIB_DIR=/usr/lib/freeswitch cargo build
 ```
 
 The vendored `freeswitch/` tree is useful source context, but it does not include generated config headers until FreeSWITCH has been configured.
-
-The `bundled` feature enables bindgen and points it at the packaged `fswtch-src` vendored headers:
-
-```sh
-cargo check -p fswtch-sys --features bundled
-cargo check -p fswtch --features bundled
-```
-
-This feature is for generating Rust bindings from the vendored headers. It does not compile or statically link FreeSWITCH itself.
 
 ## Publishing
 
