@@ -1,5 +1,8 @@
 # fswtch
 
+[![Crates.io Version](https://img.shields.io/crates/v/fswtch)](https://crates.io/crates/fswtch)
+[![Crates.io Version](https://img.shields.io/crates/v/fswtch-sys)](https://crates.io/crates/fswtch-sys)
+
 Rust bindings for writing FreeSWITCH modules.
 
 This workspace is split into two crates:
