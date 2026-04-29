@@ -1,0 +1,50 @@
+[package]
+name = "fswtch"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description.workspace = true
+readme.workspace = true
+repository.workspace = true
+
+[dependencies]
+fswtch-sys = { version = "0.1.1", path = "../fswtch-sys" }
+
+[dev-dependencies]
+futures-util = "0.3"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "time"] }
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+
+[features]
+default = []
+bindgen = ["fswtch-sys/bindgen"]
+bundled = ["fswtch-sys/bundled"]
+
+[[example]]
+name = "mod_api_suite"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_hello"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_lifecycle"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_registration_check"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_remote_vad"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_stream_tools"
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true

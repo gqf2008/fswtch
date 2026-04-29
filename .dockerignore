@@ -1,0 +1,5 @@
+target/
+freeswitch/.git/
+**/.git/
+**/.github/
+**/target/

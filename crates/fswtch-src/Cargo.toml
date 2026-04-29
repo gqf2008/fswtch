@@ -1,0 +1,25 @@
+[package]
+name = "fswtch-src"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Vendored FreeSWITCH headers for fswtch-sys bindgen builds"
+readme.workspace = true
+repository.workspace = true
+include = [
+    "Cargo.toml",
+    "src/**",
+    "freeswitch/src/include/**",
+    "freeswitch/libs/apr/include/**",
+    "freeswitch/libs/libteletone/src/**",
+]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
