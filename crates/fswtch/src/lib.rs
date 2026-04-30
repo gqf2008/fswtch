@@ -4,7 +4,7 @@ pub use fswtch_sys as sys;
 
 use std::{
     error::Error,
-    ffi::{CStr, c_char},
+    ffi::{CStr, CString, c_char},
     fmt,
     ptr::NonNull,
 };
@@ -37,7 +37,33 @@ pub fn status_to_result(status: Status) -> Result<()> {
 }
 
 pub fn log_example(module: &str, message: impl fmt::Display) {
-    eprintln!("[fswtch:{module}] {message}");
+    log_example_at(sys::switch_log_level_t_SWITCH_LOG_INFO, module, message);
+}
+
+pub fn log_example_error(module: &str, message: impl fmt::Display) {
+    log_example_at(sys::switch_log_level_t_SWITCH_LOG_ERROR, module, message);
+}
+
+fn log_example_at(level: sys::switch_log_level_t, module: &str, message: impl fmt::Display) {
+    let text = format!("[fswtch:{module}] {message}");
+    let text = text.replace('\0', "\\0");
+    let Ok(text) = CString::new(text) else {
+        return;
+    };
+
+    // SAFETY: All C strings are valid for the duration of the varargs logging call.
+    unsafe {
+        sys::switch_log_printf(
+            sys::switch_text_channel_t_SWITCH_CHANNEL_ID_LOG,
+            c"fswtch-rs".as_ptr(),
+            c"log_example".as_ptr(),
+            line!() as _,
+            std::ptr::null(),
+            level,
+            c"%s\n".as_ptr(),
+            text.as_ptr(),
+        );
+    }
 }
 
 #[derive(Copy, Clone)]

@@ -9,6 +9,7 @@ use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
 
 static LIMITERS: LazyLock<Mutex<HashMap<String, Bucket>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+const MAX_BUCKETS: usize = 10_000;
 
 fswtch::module_exports! {
     module = mod_rate_limiter,
@@ -68,6 +69,10 @@ unsafe extern "C" fn allow_api(
     let mut limiters = LIMITERS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !limiters.contains_key(&request.key) && limiters.len() >= MAX_BUCKETS {
+        fswtch::log_example_error("mod_rate_limiter", "rate limiter bucket limit reached");
+        return write_response(stream, "rate limiter bucket limit reached\n");
+    }
     let bucket = limiters
         .entry(request.key.clone())
         .or_insert_with(|| Bucket {

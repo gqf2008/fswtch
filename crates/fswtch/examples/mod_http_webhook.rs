@@ -83,7 +83,10 @@ unsafe extern "C" fn post_api(
             }
             Err(error) => {
                 WEBHOOKS_FAILED.fetch_add(1, Ordering::Relaxed);
-                eprintln!("webhook delivery failed: {error}");
+                fswtch::log_example_error(
+                    "mod_http_webhook",
+                    format!("webhook delivery failed: {error}"),
+                );
             }
         });
     if worker.is_err() {

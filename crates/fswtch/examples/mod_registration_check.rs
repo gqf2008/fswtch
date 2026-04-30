@@ -44,13 +44,19 @@ unsafe extern "C" fn check_registration_api(
             );
             let result = check_registration_remotely(&request);
             if let Err(error) = fire_registration_event(&request, &result) {
-                eprintln!("failed to fire registration check event: {error}");
+                fswtch::log_example_error(
+                    "mod_registration_check",
+                    format!("failed to fire registration check event: {error}"),
+                );
             } else {
                 fswtch::log_example("mod_registration_check", "worker fired result event");
             }
         });
     if let Err(error) = worker {
-        eprintln!("failed to start registration check worker: {error}");
+        fswtch::log_example_error(
+            "mod_registration_check",
+            format!("failed to start registration check worker: {error}"),
+        );
         return fswtch::GENERR;
     }
 

@@ -9,7 +9,7 @@ readme.workspace = true
 repository.workspace = true
 
 [dependencies]
-fswtch-sys = { version = "0.1.5", path = "../fswtch-sys" }
+fswtch-sys = { version = "0.1.6", path = "../fswtch-sys" }
 
 [dev-dependencies]
 futures-util = "0.3"

@@ -30,6 +30,7 @@ struct AiState {
     asr: Mutex<OrtSpeechRecognizer>,
     tts: Mutex<OrtSpeechSynthesizer>,
     openai: OpenAiClient,
+    allow_mock: bool,
 }
 
 impl AiState {
@@ -42,6 +43,7 @@ impl AiState {
             asr: Mutex::new(OrtSpeechRecognizer::new(env_path("FSWTCH_ASR_ONNX"))),
             tts: Mutex::new(OrtSpeechSynthesizer::new(env_path("FSWTCH_TTS_ONNX"))),
             openai: OpenAiClient::from_env(),
+            allow_mock: env_flag("FSWTCH_AI_ALLOW_MOCK"),
         }
     }
 }
@@ -162,7 +164,11 @@ impl OpenAiClient {
         self.api_key.is_some()
     }
 
-    fn respond(&self, prompt: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    fn respond(
+        &self,
+        prompt: &str,
+        allow_mock: bool,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         NLP_RUNS.fetch_add(1, Ordering::Relaxed);
         fswtch::log_example(
             "mod_local_ai_bridge",
@@ -174,7 +180,10 @@ impl OpenAiClient {
         );
 
         let Some(api_key) = &self.api_key else {
-            return Ok(format!("mock nlp response: {}", prompt.trim()));
+            if allow_mock {
+                return Ok(format!("mock nlp response: {}", prompt.trim()));
+            }
+            return Err("OPENAI_API_KEY is required unless FSWTCH_AI_ALLOW_MOCK=1".into());
         };
 
         let client = reqwest::blocking::Client::builder()
@@ -231,12 +240,14 @@ unsafe extern "C" fn status_api(
         stream,
         &format!(
             "asr_backend={} tts_backend={} nlp_backend={} asr_runs={} tts_runs={} nlp_runs={}\n",
-            if asr.is_ready() { "ort" } else { "mock" },
-            if tts.is_ready() { "ort" } else { "mock" },
+            backend_name(asr.is_ready(), STATE.allow_mock, "ort"),
+            backend_name(tts.is_ready(), STATE.allow_mock, "ort"),
             if STATE.openai.is_ready() {
                 "openai"
-            } else {
+            } else if STATE.allow_mock {
                 "mock"
+            } else {
+                "unavailable"
             },
             ASR_RUNS.load(Ordering::Relaxed),
             TTS_RUNS.load(Ordering::Relaxed),
@@ -263,11 +274,21 @@ unsafe extern "C" fn asr_api(
         );
         Vec::new()
     });
-    let result = STATE
+    let mut asr = STATE
         .asr
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .transcribe(&audio);
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !asr.is_ready() && !STATE.allow_mock {
+        fswtch::log_example_error(
+            "mod_local_ai_bridge",
+            "ASR backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
+        );
+        return write_response(
+            stream,
+            "asr backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1\n",
+        );
+    }
+    let result = asr.transcribe(&audio);
 
     write_response(
         stream,
@@ -290,12 +311,22 @@ unsafe extern "C" fn tts_api(
         return if status == SUCCESS { FALSE } else { status };
     };
 
-    match STATE
+    let mut tts = STATE
         .tts
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .synthesize(&text)
-    {
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !tts.is_ready() && !STATE.allow_mock {
+        fswtch::log_example_error(
+            "mod_local_ai_bridge",
+            "TTS backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
+        );
+        return write_response(
+            stream,
+            "tts backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1\n",
+        );
+    }
+
+    match tts.synthesize(&text) {
         Ok(result) => {
             fswtch::log_example(
                 "mod_local_ai_bridge",
@@ -335,8 +366,11 @@ unsafe extern "C" fn nlp_api(
         .name("fswtch-local-ai-nlp".to_owned())
         .spawn(move || {
             fswtch::log_example("mod_local_ai_bridge", "NLP worker started");
-            if let Err(error) = STATE.openai.respond(&prompt) {
-                eprintln!("OpenAI NLP request failed: {error}");
+            if let Err(error) = STATE.openai.respond(&prompt, STATE.allow_mock) {
+                fswtch::log_example_error(
+                    "mod_local_ai_bridge",
+                    format!("OpenAI NLP request failed: {error}"),
+                );
             } else {
                 fswtch::log_example("mod_local_ai_bridge", "NLP worker completed");
             }
@@ -360,7 +394,7 @@ unsafe extern "C" fn nlp_sync_api(
         return if status == SUCCESS { FALSE } else { status };
     };
 
-    match STATE.openai.respond(&prompt) {
+    match STATE.openai.respond(&prompt, STATE.allow_mock) {
         Ok(text) => write_response(stream, &format!("{text}\n")),
         Err(error) => write_response(stream, &format!("nlp failed: {error}\n")),
     }
@@ -460,6 +494,22 @@ fn env_path(name: &str) -> Option<PathBuf> {
     env::var_os(name)
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
+fn backend_name(ready: bool, allow_mock: bool, ready_name: &'static str) -> &'static str {
+    if ready {
+        ready_name
+    } else if allow_mock {
+        "mock"
+    } else {
+        "unavailable"
+    }
 }
 
 fn unix_millis() -> u128 {

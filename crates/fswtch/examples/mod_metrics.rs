@@ -8,6 +8,7 @@ use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
 
 static METRICS: LazyLock<Mutex<HashMap<String, u64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+const MAX_METRICS: usize = 1024;
 
 fswtch::module_exports! {
     module = mod_metrics,
@@ -29,16 +30,18 @@ unsafe extern "C" fn hit_api(
     let mut metrics = METRICS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let count = metrics.entry(metric_key(&name)).or_default();
+    let key = metric_key(&name);
+    if !metrics.contains_key(&key) && metrics.len() >= MAX_METRICS {
+        fswtch::log_example_error("mod_metrics", "metric cardinality limit reached");
+        return write_response(stream, "metric cardinality limit reached\n");
+    }
+    let count = metrics.entry(key.clone()).or_default();
     *count += 1;
     fswtch::log_example(
         "mod_metrics",
-        format!("incremented metric={} count={count}", metric_key(&name)),
+        format!("incremented metric={key} count={count}"),
     );
-    write_response(
-        stream,
-        &format!("metric={} count={count}\n", metric_key(&name)),
-    )
+    write_response(stream, &format!("metric={key} count={count}\n"))
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.

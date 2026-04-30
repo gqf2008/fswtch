@@ -13,6 +13,7 @@ use std::{
 use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
 
 static JOB_QUEUE: LazyLock<JobQueue> = LazyLock::new(JobQueue::start);
+const MAX_JOB_RESULTS: usize = 4096;
 
 fswtch::module_exports! {
     module = mod_async_job_queue,
@@ -33,14 +34,14 @@ struct JobResult {
 
 struct JobQueue {
     next_id: AtomicU64,
-    sender: Sender<Job>,
+    sender: Option<Sender<Job>>,
     results: Mutex<HashMap<u64, JobResult>>,
 }
 
 impl JobQueue {
     fn start() -> Self {
         let (sender, receiver) = mpsc::channel::<Job>();
-        thread::Builder::new()
+        let worker = thread::Builder::new()
             .name("fswtch-async-job-queue".to_owned())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
@@ -53,14 +54,25 @@ impl JobQueue {
                         status: "done",
                         detail: format!("processed {} bytes", job.payload.len()),
                     };
-                    JOB_QUEUE
+                    let mut results = JOB_QUEUE
                         .results
                         .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .insert(job.id, result);
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    prune_oldest_result(&mut results);
+                    results.insert(job.id, result);
                 }
-            })
-            .expect("failed to start async job queue worker");
+            });
+
+        let sender = match worker {
+            Ok(_) => Some(sender),
+            Err(error) => {
+                fswtch::log_example_error(
+                    "mod_async_job_queue",
+                    format!("failed to start async job queue worker: {error}"),
+                );
+                None
+            }
+        };
 
         Self {
             next_id: AtomicU64::new(1),
@@ -69,20 +81,36 @@ impl JobQueue {
         }
     }
 
-    fn submit(&self, payload: String) -> Result<u64, mpsc::SendError<Job>> {
+    fn submit(&self, payload: String) -> Result<u64, &'static str> {
+        let Some(sender) = &self.sender else {
+            return Err("worker unavailable");
+        };
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        self.results
+        let mut results = self
+            .results
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(
-                id,
-                JobResult {
-                    status: "queued",
-                    detail: "waiting for worker".to_owned(),
-                },
-            );
-        self.sender.send(Job { id, payload })?;
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        prune_oldest_result(&mut results);
+        results.insert(
+            id,
+            JobResult {
+                status: "queued",
+                detail: "waiting for worker".to_owned(),
+            },
+        );
+        sender
+            .send(Job { id, payload })
+            .map_err(|_| "worker channel closed")?;
         Ok(id)
+    }
+}
+
+fn prune_oldest_result(results: &mut HashMap<u64, JobResult>) {
+    if results.len() < MAX_JOB_RESULTS {
+        return;
+    }
+    if let Some(oldest) = results.keys().min().copied() {
+        results.remove(&oldest);
     }
 }
 
@@ -101,7 +129,10 @@ unsafe extern "C" fn submit_api(
 
     match JOB_QUEUE.submit(payload) {
         Ok(id) => write_response(stream, &format!("job queued id={id}\n")),
-        Err(_) => fswtch::GENERR,
+        Err(error) => {
+            fswtch::log_example_error("mod_async_job_queue", error);
+            write_response(stream, &format!("job queue unavailable: {error}\n"))
+        }
     }
 }
 

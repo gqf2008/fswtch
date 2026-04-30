@@ -4,6 +4,7 @@ set -euo pipefail
 FS_PREFIX="${FS_PREFIX:-/usr/local/freeswitch}"
 export LD_LIBRARY_PATH="${FS_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 export PATH="${FS_PREFIX}/bin:${PATH}"
+export FSWTCH_AI_ALLOW_MOCK=1
 
 mkdir -p \
   "${FS_PREFIX}/db" \

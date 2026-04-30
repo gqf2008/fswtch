@@ -60,7 +60,10 @@ unsafe extern "C" fn start_vad_api(
                         &format!("failed to start async runtime: {error}"),
                         None,
                     ) {
-                        eprintln!("failed to fire VAD runtime error event: {event_error}");
+                        fswtch::log_example_error(
+                            "mod_remote_vad",
+                            format!("failed to fire VAD runtime error event: {event_error}"),
+                        );
                     }
                     return;
                 }
@@ -75,12 +78,18 @@ unsafe extern "C" fn start_vad_api(
                         None,
                     )
                 {
-                    eprintln!("failed to fire VAD worker error event: {event_error}");
+                    fswtch::log_example_error(
+                        "mod_remote_vad",
+                        format!("failed to fire VAD worker error event: {event_error}"),
+                    );
                 }
             });
         });
     if let Err(error) = worker {
-        eprintln!("failed to start remote VAD worker: {error}");
+        fswtch::log_example_error(
+            "mod_remote_vad",
+            format!("failed to start remote VAD worker: {error}"),
+        );
         return fswtch::GENERR;
     }
 

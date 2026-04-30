@@ -246,7 +246,7 @@ dependencies = [
 
 [[package]]
 name = "fswtch"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "fswtch-sys",
  "futures-util",
@@ -258,11 +258,11 @@ dependencies = [
 
 [[package]]
 name = "fswtch-src"
-version = "0.1.5"
+version = "0.1.6"
 
 [[package]]
 name = "fswtch-sys"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "bindgen",
  "fswtch-src",
