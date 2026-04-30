@@ -6,8 +6,13 @@
     <load module="mod_event_socket"/>
 
     <load module="mod_api_suite"/>
+    <load module="mod_app_playback_control"/>
+    <load module="mod_chatbot_bridge"/>
+    <load module="mod_config_xml"/>
+    <load module="mod_endpoint_skeleton"/>
     <load module="mod_hello"/>
     <load module="mod_lifecycle"/>
+    <load module="mod_media_bug_meter"/>
     <load module="mod_registration_check"/>
     <load module="mod_remote_vad"/>
     <load module="mod_stream_tools"/>

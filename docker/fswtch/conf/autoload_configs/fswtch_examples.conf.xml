@@ -1,0 +1,7 @@
+<configuration name="fswtch_examples.conf" description="Rust fswtch example settings">
+  <settings>
+    <param name="enabled" value="true"/>
+    <param name="greeting" value="hello from fswtch XML"/>
+    <param name="max-sessions" value="16"/>
+  </settings>
+</configuration>

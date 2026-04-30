@@ -27,11 +27,31 @@ name = "mod_api_suite"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "mod_app_playback_control"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_chatbot_bridge"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_config_xml"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_endpoint_skeleton"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "mod_hello"
 crate-type = ["cdylib"]
 
 [[example]]
 name = "mod_lifecycle"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_media_bug_meter"
 crate-type = ["cdylib"]
 
 [[example]]
