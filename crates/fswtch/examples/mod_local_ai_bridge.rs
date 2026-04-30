@@ -13,9 +13,7 @@ use std::{
 use serde_json::{Value, json};
 
 static STATE: LazyLock<AiState> = LazyLock::new(AiState::from_env);
-static ASR_RUNS: AtomicUsize = AtomicUsize::new(0);
-static TTS_RUNS: AtomicUsize = AtomicUsize::new(0);
-static NLP_RUNS: AtomicUsize = AtomicUsize::new(0);
+static RUNS: RunCounters = RunCounters::new();
 
 fswtch::module_exports! {
     module = mod_local_ai_bridge,
@@ -28,6 +26,23 @@ struct AiState {
     tts: Mutex<OrtSpeechSynthesizer>,
     openai: OpenAiClient,
     allow_mock: bool,
+}
+
+#[derive(Debug)]
+struct RunCounters {
+    asr: AtomicUsize,
+    tts: AtomicUsize,
+    nlp: AtomicUsize,
+}
+
+impl RunCounters {
+    const fn new() -> Self {
+        Self {
+            asr: AtomicUsize::new(0),
+            tts: AtomicUsize::new(0),
+            nlp: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl AiState {
@@ -60,7 +75,7 @@ impl OrtSpeechRecognizer {
     }
 
     fn transcribe(&mut self, audio: &[u8]) -> AsrResult {
-        ASR_RUNS.fetch_add(1, Ordering::Relaxed);
+        RUNS.asr.fetch_add(1, Ordering::Relaxed);
         fswtch::log_info(
             "mod_local_ai_bridge",
             format!(
@@ -103,7 +118,7 @@ impl OrtSpeechSynthesizer {
     }
 
     fn synthesize(&mut self, text: &str) -> std::io::Result<TtsResult> {
-        TTS_RUNS.fetch_add(1, Ordering::Relaxed);
+        RUNS.tts.fetch_add(1, Ordering::Relaxed);
         fswtch::log_info(
             "mod_local_ai_bridge",
             format!(
@@ -166,7 +181,7 @@ impl OpenAiClient {
         prompt: &str,
         allow_mock: bool,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        NLP_RUNS.fetch_add(1, Ordering::Relaxed);
+        RUNS.nlp.fetch_add(1, Ordering::Relaxed);
         fswtch::log_info(
             "mod_local_ai_bridge",
             format!(
@@ -241,9 +256,9 @@ fswtch::api_callback! {
                 } else {
                     "unavailable"
                 },
-                ASR_RUNS.load(Ordering::Relaxed),
-                TTS_RUNS.load(Ordering::Relaxed),
-                NLP_RUNS.load(Ordering::Relaxed)
+                RUNS.asr.load(Ordering::Relaxed),
+                RUNS.tts.load(Ordering::Relaxed),
+                RUNS.nlp.load(Ordering::Relaxed)
             ),
         )
     }
