@@ -26,9 +26,9 @@ unsafe extern "C" fn start_vad_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_remote_vad", "rust_vad_start invoked");
+    fswtch::log_info("mod_remote_vad", "rust_vad_start invoked");
     let Some(config) = VadConfig::parse(cmd) else {
-        fswtch::log_example("mod_remote_vad", "invalid command syntax");
+        fswtch::log_info("mod_remote_vad", "invalid command syntax");
         let status = write_response(
             stream,
             "usage: rust_vad_start <call-uuid> <wss://vad.example/session>\n",
@@ -44,7 +44,7 @@ unsafe extern "C" fn start_vad_api(
     let worker = thread::Builder::new()
         .name("fswtch-remote-vad".to_owned())
         .spawn(move || {
-            fswtch::log_example(
+            fswtch::log_info(
                 "mod_remote_vad",
                 format!("worker starting for {}", config.call_uuid),
             );
@@ -60,7 +60,7 @@ unsafe extern "C" fn start_vad_api(
                         &format!("failed to start async runtime: {error}"),
                         None,
                     ) {
-                        fswtch::log_example_error(
+                        fswtch::log_error(
                             "mod_remote_vad",
                             format!("failed to fire VAD runtime error event: {event_error}"),
                         );
@@ -78,7 +78,7 @@ unsafe extern "C" fn start_vad_api(
                         None,
                     )
                 {
-                    fswtch::log_example_error(
+                    fswtch::log_error(
                         "mod_remote_vad",
                         format!("failed to fire VAD worker error event: {event_error}"),
                     );
@@ -86,7 +86,7 @@ unsafe extern "C" fn start_vad_api(
             });
         });
     if let Err(error) = worker {
-        fswtch::log_example_error(
+        fswtch::log_error(
             "mod_remote_vad",
             format!("failed to start remote VAD worker: {error}"),
         );
@@ -101,7 +101,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_remote_vad", "loading module");
+    fswtch::log_info("mod_remote_vad", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_remote_vad") } {
         Ok(module) => module,
@@ -144,7 +144,7 @@ impl VadConfig {
 }
 
 async fn run_remote_vad_worker(config: VadConfig) -> Result<(), Box<dyn Error + Send + Sync>> {
-    fswtch::log_example("mod_remote_vad", "remote VAD worker connecting");
+    fswtch::log_info("mod_remote_vad", "remote VAD worker connecting");
     fire_vad_event(
         &config,
         VadEventKind::Started,
@@ -153,7 +153,7 @@ async fn run_remote_vad_worker(config: VadConfig) -> Result<(), Box<dyn Error + 
     )?;
 
     let (mut socket, _) = connect_async(config.websocket_url.as_str()).await?;
-    fswtch::log_example("mod_remote_vad", "remote VAD websocket connected");
+    fswtch::log_info("mod_remote_vad", "remote VAD websocket connected");
     fire_vad_event(&config, VadEventKind::Started, "remote VAD connected", None)?;
 
     // A production media module would feed this from a FreeSWITCH media bug attached to the call.
@@ -176,7 +176,7 @@ async fn run_remote_vad_worker(config: VadConfig) -> Result<(), Box<dyn Error + 
     }
 
     socket.close(None).await?;
-    fswtch::log_example("mod_remote_vad", "remote VAD worker stopped");
+    fswtch::log_info("mod_remote_vad", "remote VAD worker stopped");
     fire_vad_event(&config, VadEventKind::Stopped, "remote VAD stopped", None)?;
     Ok(())
 }

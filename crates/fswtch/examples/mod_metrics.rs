@@ -21,7 +21,7 @@ unsafe extern "C" fn hit_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_metrics", "rust_metrics_hit invoked");
+    fswtch::log_info("mod_metrics", "rust_metrics_hit invoked");
     let Some(name) = command_text(cmd) else {
         let status = write_response(stream, "usage: rust_metrics_hit <name>\n");
         return if status == SUCCESS { FALSE } else { status };
@@ -32,12 +32,12 @@ unsafe extern "C" fn hit_api(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let key = metric_key(&name);
     if !metrics.contains_key(&key) && metrics.len() >= MAX_METRICS {
-        fswtch::log_example_error("mod_metrics", "metric cardinality limit reached");
+        fswtch::log_error("mod_metrics", "metric cardinality limit reached");
         return write_response(stream, "metric cardinality limit reached\n");
     }
     let count = metrics.entry(key.clone()).or_default();
     *count += 1;
-    fswtch::log_example(
+    fswtch::log_info(
         "mod_metrics",
         format!("incremented metric={key} count={count}"),
     );
@@ -50,7 +50,7 @@ unsafe extern "C" fn show_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_metrics", "rust_metrics_show invoked");
+    fswtch::log_info("mod_metrics", "rust_metrics_show invoked");
     let metrics = METRICS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -70,7 +70,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_metrics", "loading module");
+    fswtch::log_info("mod_metrics", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_metrics") } {
         Ok(module) => module,

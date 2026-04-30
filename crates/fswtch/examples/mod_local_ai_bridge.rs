@@ -35,7 +35,7 @@ struct AiState {
 
 impl AiState {
     fn from_env() -> Self {
-        fswtch::log_example(
+        fswtch::log_info(
             "mod_local_ai_bridge",
             "initializing AI state from environment",
         );
@@ -64,7 +64,7 @@ impl OrtSpeechRecognizer {
 
     fn transcribe(&mut self, audio: &[u8]) -> AsrResult {
         ASR_RUNS.fetch_add(1, Ordering::Relaxed);
-        fswtch::log_example(
+        fswtch::log_info(
             "mod_local_ai_bridge",
             format!(
                 "ASR request received bytes={} backend={}",
@@ -107,7 +107,7 @@ impl OrtSpeechSynthesizer {
 
     fn synthesize(&mut self, text: &str) -> std::io::Result<TtsResult> {
         TTS_RUNS.fetch_add(1, Ordering::Relaxed);
-        fswtch::log_example(
+        fswtch::log_info(
             "mod_local_ai_bridge",
             format!(
                 "TTS request received chars={} backend={}",
@@ -170,7 +170,7 @@ impl OpenAiClient {
         allow_mock: bool,
     ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         NLP_RUNS.fetch_add(1, Ordering::Relaxed);
-        fswtch::log_example(
+        fswtch::log_info(
             "mod_local_ai_bridge",
             format!(
                 "NLP request received chars={} backend={}",
@@ -226,7 +226,7 @@ unsafe extern "C" fn status_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_local_ai_bridge", "rust_local_ai_status invoked");
+    fswtch::log_info("mod_local_ai_bridge", "rust_local_ai_status invoked");
     let asr = STATE
         .asr
         .lock()
@@ -262,13 +262,13 @@ unsafe extern "C" fn asr_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_local_ai_bridge", "rust_local_asr invoked");
+    fswtch::log_info("mod_local_ai_bridge", "rust_local_asr invoked");
     let Some(path) = command_text(cmd) else {
         let status = write_response(stream, "usage: rust_local_asr <pcm16le-file>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
     let audio = fs::read(&path).unwrap_or_else(|error| {
-        fswtch::log_example(
+        fswtch::log_info(
             "mod_local_ai_bridge",
             format!("failed to read ASR input {path}: {error}"),
         );
@@ -279,7 +279,7 @@ unsafe extern "C" fn asr_api(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if !asr.is_ready() && !STATE.allow_mock {
-        fswtch::log_example_error(
+        fswtch::log_error(
             "mod_local_ai_bridge",
             "ASR backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
         );
@@ -305,7 +305,7 @@ unsafe extern "C" fn tts_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_local_ai_bridge", "rust_local_tts invoked");
+    fswtch::log_info("mod_local_ai_bridge", "rust_local_tts invoked");
     let Some(text) = command_text(cmd) else {
         let status = write_response(stream, "usage: rust_local_tts <text>\n");
         return if status == SUCCESS { FALSE } else { status };
@@ -316,7 +316,7 @@ unsafe extern "C" fn tts_api(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if !tts.is_ready() && !STATE.allow_mock {
-        fswtch::log_example_error(
+        fswtch::log_error(
             "mod_local_ai_bridge",
             "TTS backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
         );
@@ -328,7 +328,7 @@ unsafe extern "C" fn tts_api(
 
     match tts.synthesize(&text) {
         Ok(result) => {
-            fswtch::log_example(
+            fswtch::log_info(
                 "mod_local_ai_bridge",
                 format!("TTS wrote {}", result.output_path.display()),
             );
@@ -344,7 +344,7 @@ unsafe extern "C" fn tts_api(
             )
         }
         Err(error) => {
-            fswtch::log_example("mod_local_ai_bridge", format!("TTS failed: {error}"));
+            fswtch::log_info("mod_local_ai_bridge", format!("TTS failed: {error}"));
             write_response(stream, &format!("tts failed: {error}\n"))
         }
     }
@@ -356,7 +356,7 @@ unsafe extern "C" fn nlp_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_local_ai_bridge", "rust_local_nlp invoked");
+    fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp invoked");
     let Some(prompt) = command_text(cmd) else {
         let status = write_response(stream, "usage: rust_local_nlp <prompt>\n");
         return if status == SUCCESS { FALSE } else { status };
@@ -365,14 +365,14 @@ unsafe extern "C" fn nlp_api(
     let worker = thread::Builder::new()
         .name("fswtch-local-ai-nlp".to_owned())
         .spawn(move || {
-            fswtch::log_example("mod_local_ai_bridge", "NLP worker started");
+            fswtch::log_info("mod_local_ai_bridge", "NLP worker started");
             if let Err(error) = STATE.openai.respond(&prompt, STATE.allow_mock) {
-                fswtch::log_example_error(
+                fswtch::log_error(
                     "mod_local_ai_bridge",
                     format!("OpenAI NLP request failed: {error}"),
                 );
             } else {
-                fswtch::log_example("mod_local_ai_bridge", "NLP worker completed");
+                fswtch::log_info("mod_local_ai_bridge", "NLP worker completed");
             }
         });
     if worker.is_err() {
@@ -388,7 +388,7 @@ unsafe extern "C" fn nlp_sync_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_local_ai_bridge", "rust_local_nlp_sync invoked");
+    fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp_sync invoked");
     let Some(prompt) = command_text(cmd) else {
         let status = write_response(stream, "usage: rust_local_nlp_sync <prompt>\n");
         return if status == SUCCESS { FALSE } else { status };
@@ -405,7 +405,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_local_ai_bridge", "loading module");
+    fswtch::log_info("mod_local_ai_bridge", "loading module");
     LazyLock::force(&STATE);
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_local_ai_bridge") } {

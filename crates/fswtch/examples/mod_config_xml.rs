@@ -36,7 +36,7 @@ unsafe extern "C" fn show_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_config_xml", "rust_config_xml_show invoked");
+    fswtch::log_info("mod_config_xml", "rust_config_xml_show invoked");
     let config = CONFIG
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -55,7 +55,7 @@ unsafe extern "C" fn reload_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_config_xml", "rust_config_xml_reload invoked");
+    fswtch::log_info("mod_config_xml", "rust_config_xml_reload invoked");
     match load_config() {
         Ok(config) => {
             *CONFIG
@@ -72,7 +72,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_config_xml", "loading module");
+    fswtch::log_info("mod_config_xml", "loading module");
     if let Ok(config) = load_config() {
         *CONFIG
             .lock()
@@ -114,7 +114,7 @@ unsafe extern "C" fn switch_module_load(
 }
 
 fn load_config() -> Result<Config, &'static str> {
-    fswtch::log_example("mod_config_xml", "loading fswtch_examples.conf");
+    fswtch::log_info("mod_config_xml", "loading fswtch_examples.conf");
     let mut config = Config::default();
     let mut settings = ptr::null_mut();
     // SAFETY: FreeSWITCH writes the configuration node into `settings` when the file is found.

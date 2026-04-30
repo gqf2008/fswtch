@@ -22,7 +22,7 @@ unsafe extern "C" fn stats_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_lifecycle", "rust_lifecycle_stats invoked");
+    fswtch::log_info("mod_lifecycle", "rust_lifecycle_stats invoked");
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
     let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
         return SUCCESS;
@@ -44,7 +44,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_lifecycle", "loading module");
+    fswtch::log_info("mod_lifecycle", "loading module");
     LOADS.fetch_add(1, Ordering::Relaxed);
 
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
@@ -71,13 +71,13 @@ unsafe extern "C" fn switch_module_load(
 // SAFETY: FreeSWITCH invokes runtime callbacks using the module function-table ABI.
 unsafe extern "C" fn switch_module_runtime() -> Status {
     RUNTIME_TICKS.fetch_add(1, Ordering::Relaxed);
-    fswtch::log_example("mod_lifecycle", "runtime tick");
+    fswtch::log_info("mod_lifecycle", "runtime tick");
     SUCCESS
 }
 
 // SAFETY: FreeSWITCH invokes shutdown callbacks using the module function-table ABI.
 unsafe extern "C" fn switch_module_shutdown() -> Status {
     SHUTDOWNS.fetch_add(1, Ordering::Relaxed);
-    fswtch::log_example("mod_lifecycle", "shutdown callback invoked");
+    fswtch::log_info("mod_lifecycle", "shutdown callback invoked");
     SUCCESS
 }

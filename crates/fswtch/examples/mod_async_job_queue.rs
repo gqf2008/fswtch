@@ -45,7 +45,7 @@ impl JobQueue {
             .name("fswtch-async-job-queue".to_owned())
             .spawn(move || {
                 while let Ok(job) = receiver.recv() {
-                    fswtch::log_example(
+                    fswtch::log_info(
                         "mod_async_job_queue",
                         format!("worker processing job {}", job.id),
                     );
@@ -66,7 +66,7 @@ impl JobQueue {
         let sender = match worker {
             Ok(_) => Some(sender),
             Err(error) => {
-                fswtch::log_example_error(
+                fswtch::log_error(
                     "mod_async_job_queue",
                     format!("failed to start async job queue worker: {error}"),
                 );
@@ -120,9 +120,9 @@ unsafe extern "C" fn submit_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_async_job_queue", "rust_job_submit invoked");
+    fswtch::log_info("mod_async_job_queue", "rust_job_submit invoked");
     let Some(payload) = command_text(cmd) else {
-        fswtch::log_example("mod_async_job_queue", "missing job payload");
+        fswtch::log_info("mod_async_job_queue", "missing job payload");
         let status = write_response(stream, "usage: rust_job_submit <payload>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -130,7 +130,7 @@ unsafe extern "C" fn submit_api(
     match JOB_QUEUE.submit(payload) {
         Ok(id) => write_response(stream, &format!("job queued id={id}\n")),
         Err(error) => {
-            fswtch::log_example_error("mod_async_job_queue", error);
+            fswtch::log_error("mod_async_job_queue", error);
             write_response(stream, &format!("job queue unavailable: {error}\n"))
         }
     }
@@ -142,7 +142,7 @@ unsafe extern "C" fn status_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_async_job_queue", "rust_job_status invoked");
+    fswtch::log_info("mod_async_job_queue", "rust_job_status invoked");
     let Some(id) = command_text(cmd).and_then(|text| text.parse::<u64>().ok()) else {
         let status = write_response(stream, "usage: rust_job_status <id>\n");
         return if status == SUCCESS { FALSE } else { status };
@@ -169,7 +169,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_async_job_queue", "loading module");
+    fswtch::log_info("mod_async_job_queue", "loading module");
     LazyLock::force(&JOB_QUEUE);
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_async_job_queue") } {

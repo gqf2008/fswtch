@@ -11,7 +11,18 @@ This workspace is intentionally split into three crates:
 - `fswtch-sys`: raw FreeSWITCH ABI bindings generated with bindgen.
 - `fswtch-src`: packaged FreeSWITCH headers used by default bundled builds.
 
-The higher-level wrapper is still small. The examples show both the supported helper API and carefully scoped raw ABI usage for FreeSWITCH interfaces that do not have safe wrappers yet.
+## Wrapper API
+
+The `fswtch` crate provides a small higher-level layer over the raw FreeSWITCH ABI. It focuses on the parts that every module needs first:
+
+- `module_exports!` declares the exported FreeSWITCH module table.
+- `Module::create` builds the loader-owned module interface from the raw load callback arguments.
+- `Module::add_api` registers API commands with static names, descriptions, syntax strings, and callbacks.
+- `Stream` wraps `switch_stream_handle_t` for byte and string responses.
+- `Status`, `SwitchError`, and `status_to_result` convert common FreeSWITCH status handling into Rust `Result` values.
+- `LogLevel`, `log`, and convenience helpers such as `log_info`, `log_warning`, `log_error`, and `log_debug1` through `log_debug10` route module logs through FreeSWITCH logging.
+
+The wrapper does not try to hide the full ABI yet. Examples use `fswtch::sys` directly where FreeSWITCH exposes interfaces that still need raw pointer setup, such as dialplan applications, media bugs, endpoint skeletons, chat interfaces, XML config, and custom events. Keep those raw calls narrow, document the callback and ownership assumptions, and prefer adding focused helpers to `fswtch` when the same unsafe pattern appears in more than one module.
 
 ## Build
 
@@ -97,7 +108,7 @@ if let Err(error) = unsafe {
 }
 ```
 
-Examples use `fswtch::log_example` and `fswtch::log_example_error`, which route through FreeSWITCH logging.
+Examples use `fswtch::log_info` and `fswtch::log_error`, which route through FreeSWITCH logging.
 
 ## Examples
 

@@ -20,9 +20,9 @@ unsafe extern "C" fn check_registration_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_registration_check", "rust_check_registration invoked");
+    fswtch::log_info("mod_registration_check", "rust_check_registration invoked");
     let Some(request) = RegistrationRequest::parse(cmd) else {
-        fswtch::log_example("mod_registration_check", "invalid command syntax");
+        fswtch::log_info("mod_registration_check", "invalid command syntax");
         let status = write_response(
             stream,
             "usage: rust_check_registration <user@domain> <https://server/check>\n",
@@ -38,22 +38,22 @@ unsafe extern "C" fn check_registration_api(
     let worker = thread::Builder::new()
         .name("fswtch-registration-check".to_owned())
         .spawn(move || {
-            fswtch::log_example(
+            fswtch::log_info(
                 "mod_registration_check",
                 format!("worker started for {}", request.user),
             );
             let result = check_registration_remotely(&request);
             if let Err(error) = fire_registration_event(&request, &result) {
-                fswtch::log_example_error(
+                fswtch::log_error(
                     "mod_registration_check",
                     format!("failed to fire registration check event: {error}"),
                 );
             } else {
-                fswtch::log_example("mod_registration_check", "worker fired result event");
+                fswtch::log_info("mod_registration_check", "worker fired result event");
             }
         });
     if let Err(error) = worker {
-        fswtch::log_example_error(
+        fswtch::log_error(
             "mod_registration_check",
             format!("failed to start registration check worker: {error}"),
         );
@@ -68,7 +68,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_registration_check", "loading module");
+    fswtch::log_info("mod_registration_check", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_registration_check") }
     {

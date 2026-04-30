@@ -20,9 +20,9 @@ unsafe extern "C" fn emit_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_event_sink", "rust_event_sink_emit invoked");
+    fswtch::log_info("mod_event_sink", "rust_event_sink_emit invoked");
     let Some(request) = EventRequest::parse(cmd) else {
-        fswtch::log_example("mod_event_sink", "invalid event sink command");
+        fswtch::log_info("mod_event_sink", "invalid event sink command");
         let status = write_response(
             stream,
             "usage: rust_event_sink_emit <subclass> <json-object>\n",
@@ -33,7 +33,7 @@ unsafe extern "C" fn emit_api(
     match fire_event(&request) {
         Ok(()) => {
             let count = EVENTS_FIRED.fetch_add(1, Ordering::Relaxed) + 1;
-            fswtch::log_example(
+            fswtch::log_info(
                 "mod_event_sink",
                 format!("fired event subclass={} count={count}", request.subclass),
             );
@@ -49,7 +49,7 @@ unsafe extern "C" fn stats_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_event_sink", "rust_event_sink_stats invoked");
+    fswtch::log_info("mod_event_sink", "rust_event_sink_stats invoked");
     write_response(
         stream,
         &format!("events_fired={}\n", EVENTS_FIRED.load(Ordering::Relaxed)),
@@ -61,7 +61,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_event_sink", "loading module");
+    fswtch::log_info("mod_event_sink", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_event_sink") } {
         Ok(module) => module,

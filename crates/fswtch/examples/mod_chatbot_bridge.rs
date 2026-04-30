@@ -15,7 +15,7 @@ fswtch::module_exports! {
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_chat_application_function_t`.
 unsafe extern "C" fn chatbot_app(event: *mut sys::switch_event_t, data: *const c_char) -> Status {
-    fswtch::log_example("mod_chatbot_bridge", "chat application invoked");
+    fswtch::log_info("mod_chatbot_bridge", "chat application invoked");
     let text = command_text(data).unwrap_or_else(|| "empty chat payload".to_owned());
     let from = event_header(event, c"from").unwrap_or_else(|| "unknown".to_owned());
     let to = event_header(event, c"to").unwrap_or_else(|| "unknown".to_owned());
@@ -61,7 +61,7 @@ unsafe extern "C" fn chatbot_app(event: *mut sys::switch_event_t, data: *const c
         return status;
     }
     MESSAGES_BRIDGED.fetch_add(1, Ordering::Relaxed);
-    fswtch::log_example(
+    fswtch::log_info(
         "mod_chatbot_bridge",
         format!("bridged chat message from={from} to={to}"),
     );
@@ -75,7 +75,7 @@ unsafe extern "C" fn stats_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_chatbot_bridge", "rust_chatbot_bridge_stats invoked");
+    fswtch::log_info("mod_chatbot_bridge", "rust_chatbot_bridge_stats invoked");
     write_response(
         stream,
         &format!(
@@ -90,7 +90,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_chatbot_bridge", "loading module");
+    fswtch::log_info("mod_chatbot_bridge", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_chatbot_bridge") } {
         Ok(module) => module,

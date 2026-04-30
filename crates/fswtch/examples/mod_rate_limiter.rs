@@ -56,7 +56,7 @@ unsafe extern "C" fn allow_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_rate_limiter", "rust_rate_limit invoked");
+    fswtch::log_info("mod_rate_limiter", "rust_rate_limit invoked");
     let Some(request) = LimitRequest::parse(cmd) else {
         let status = write_response(
             stream,
@@ -70,7 +70,7 @@ unsafe extern "C" fn allow_api(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if !limiters.contains_key(&request.key) && limiters.len() >= MAX_BUCKETS {
-        fswtch::log_example_error("mod_rate_limiter", "rate limiter bucket limit reached");
+        fswtch::log_error("mod_rate_limiter", "rate limiter bucket limit reached");
         return write_response(stream, "rate limiter bucket limit reached\n");
     }
     let bucket = limiters
@@ -89,7 +89,7 @@ unsafe extern "C" fn allow_api(
     if allowed {
         bucket.remaining -= 1;
     }
-    fswtch::log_example(
+    fswtch::log_info(
         "mod_rate_limiter",
         format!(
             "key={} allowed={} remaining={}",
@@ -112,7 +112,7 @@ unsafe extern "C" fn reset_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_rate_limiter", "rust_rate_limit_reset invoked");
+    fswtch::log_info("mod_rate_limiter", "rust_rate_limit_reset invoked");
     LIMITERS
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -125,7 +125,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_rate_limiter", "loading module");
+    fswtch::log_info("mod_rate_limiter", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_rate_limiter") } {
         Ok(module) => module,

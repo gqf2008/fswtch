@@ -29,15 +29,15 @@ unsafe extern "C" fn enrich_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_cdr_enricher", "rust_cdr_enrich invoked");
+    fswtch::log_info("mod_cdr_enricher", "rust_cdr_enrich invoked");
     let Some(text) = command_text(cmd) else {
-        fswtch::log_example("mod_cdr_enricher", "missing CDR JSON");
+        fswtch::log_info("mod_cdr_enricher", "missing CDR JSON");
         let status = write_response(stream, "usage: rust_cdr_enrich <json-cdr>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
 
     let Ok(value) = serde_json::from_str::<Value>(&text) else {
-        fswtch::log_example("mod_cdr_enricher", "invalid CDR JSON");
+        fswtch::log_info("mod_cdr_enricher", "invalid CDR JSON");
         let status = write_response(stream, "invalid cdr json\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -46,7 +46,7 @@ unsafe extern "C" fn enrich_api(
     if let Err(error) = fire_cdr_event(&enriched) {
         return error.0;
     }
-    fswtch::log_example(
+    fswtch::log_info(
         "mod_cdr_enricher",
         format!("enriched CDR uuid={} tier={}", enriched.uuid, enriched.tier),
     );
@@ -68,7 +68,7 @@ unsafe extern "C" fn stats_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
-    fswtch::log_example("mod_cdr_enricher", "rust_cdr_enricher_stats invoked");
+    fswtch::log_info("mod_cdr_enricher", "rust_cdr_enricher_stats invoked");
     write_response(
         stream,
         &format!("cdrs_enriched={}\n", CDRS_ENRICHED.load(Ordering::Relaxed)),
@@ -80,7 +80,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
-    fswtch::log_example("mod_cdr_enricher", "loading module");
+    fswtch::log_info("mod_cdr_enricher", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_cdr_enricher") } {
         Ok(module) => module,
