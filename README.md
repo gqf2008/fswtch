@@ -21,8 +21,37 @@ The `fswtch` crate provides a small higher-level layer over the raw FreeSWITCH A
 - `Stream` wraps `switch_stream_handle_t` for byte and string responses.
 - `Status`, `SwitchError`, and `status_to_result` convert common FreeSWITCH status handling into Rust `Result` values.
 - `LogLevel`, `log`, and convenience helpers such as `log_info`, `log_warning`, `log_error`, and `log_debug1` through `log_debug10` route module logs through FreeSWITCH logging.
+- `MediaBugConfig`, `MediaBugFlags`, `MediaBugHandler`, and `attach_media_bug` provide a higher-level media bug API for bidirectional read/write audio stream callbacks and read/write replacement hooks.
 
-The wrapper does not try to hide the full ABI yet. Examples use `fswtch::sys` directly where FreeSWITCH exposes interfaces that still need raw pointer setup, such as dialplan applications, media bugs, endpoint skeletons, chat interfaces, XML config, and custom events. Keep those raw calls narrow, document the callback and ownership assumptions, and prefer adding focused helpers to `fswtch` when the same unsafe pattern appears in more than one module.
+The wrapper does not try to hide the full ABI yet. Examples use `fswtch::sys` directly where FreeSWITCH exposes interfaces that still need raw pointer setup, such as dialplan applications, endpoint skeletons, chat interfaces, XML config, and custom events. Keep those raw calls narrow, document the callback and ownership assumptions, and prefer adding focused helpers to `fswtch` when the same unsafe pattern appears in more than one module.
+
+Media bug handlers are owned by FreeSWITCH until the close callback. A module can implement `MediaBugHandler` to observe read and write frames, mutate replacement frames, or pull frames explicitly through `MediaBugContext`:
+
+```rust
+struct Meter;
+
+impl fswtch::MediaBugHandler for Meter {
+    fn on_read(
+        &mut self,
+        _ctx: &mut fswtch::MediaBugContext<'_>,
+        frame: fswtch::MediaFrame<'_>,
+    ) -> fswtch::MediaBugAction {
+        fswtch::log_debug("mod_meter", format!("read {} bytes", frame.data_len()));
+        fswtch::MediaBugAction::Continue
+    }
+}
+
+let config = fswtch::MediaBugConfig::new(
+    c"mod_meter",
+    c"read-write",
+    fswtch::MediaBugFlags::READ_STREAM
+        | fswtch::MediaBugFlags::WRITE_STREAM
+        | fswtch::MediaBugFlags::NO_PAUSE,
+);
+
+// SAFETY: `session` is the live FreeSWITCH session passed to the application callback.
+unsafe { fswtch::attach_media_bug(session, config, Meter) }?;
+```
 
 ## Build
 
@@ -135,7 +164,7 @@ Operational and integration patterns:
 FreeSWITCH interface skeletons:
 
 - `mod_app_playback_control`: dialplan application interface that answers and plays a supplied target.
-- `mod_media_bug_meter`: media bug application that counts observed read-stream audio frames.
+- `mod_media_bug_meter`: media bug application that counts observed read/write-stream audio frames.
 - `mod_endpoint_skeleton`: endpoint interface registration skeleton.
 - `mod_chatbot_bridge`: chat application interface that emits chatbot bridge events.
 

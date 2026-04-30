@@ -1,15 +1,19 @@
 use std::{
     ffi::c_char,
-    ptr,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{
+    FALSE, MediaBugAction, MediaBugConfig, MediaBugContext, MediaBugFlags, MediaBugHandler,
+    MediaFrame, Module, SUCCESS, Status, Stream, sys,
+};
 
 static BUGS_ATTACHED: AtomicUsize = AtomicUsize::new(0);
 static BUGS_CLOSED: AtomicUsize = AtomicUsize::new(0);
-static FRAMES_SEEN: AtomicUsize = AtomicUsize::new(0);
-static AUDIO_BYTES_SEEN: AtomicUsize = AtomicUsize::new(0);
+static READ_FRAMES_SEEN: AtomicUsize = AtomicUsize::new(0);
+static WRITE_FRAMES_SEEN: AtomicUsize = AtomicUsize::new(0);
+static READ_AUDIO_BYTES_SEEN: AtomicUsize = AtomicUsize::new(0);
+static WRITE_AUDIO_BYTES_SEEN: AtomicUsize = AtomicUsize::new(0);
 
 fswtch::module_exports! {
     module = mod_media_bug_meter,
@@ -18,8 +22,39 @@ fswtch::module_exports! {
 
 #[derive(Debug)]
 struct MeterState {
-    frames: usize,
-    audio_bytes: usize,
+    read_frames: usize,
+    write_frames: usize,
+    read_audio_bytes: usize,
+    write_audio_bytes: usize,
+}
+
+impl MediaBugHandler for MeterState {
+    fn on_read(&mut self, _ctx: &mut MediaBugContext<'_>, frame: MediaFrame<'_>) -> MediaBugAction {
+        let bytes = frame.data_len();
+        self.read_frames += 1;
+        self.read_audio_bytes += bytes;
+        READ_FRAMES_SEEN.fetch_add(1, Ordering::Relaxed);
+        READ_AUDIO_BYTES_SEEN.fetch_add(bytes, Ordering::Relaxed);
+        MediaBugAction::Continue
+    }
+
+    fn on_write(
+        &mut self,
+        _ctx: &mut MediaBugContext<'_>,
+        frame: MediaFrame<'_>,
+    ) -> MediaBugAction {
+        let bytes = frame.data_len();
+        self.write_frames += 1;
+        self.write_audio_bytes += bytes;
+        WRITE_FRAMES_SEEN.fetch_add(1, Ordering::Relaxed);
+        WRITE_AUDIO_BYTES_SEEN.fetch_add(bytes, Ordering::Relaxed);
+        MediaBugAction::Continue
+    }
+
+    fn on_close(&mut self, _ctx: &mut MediaBugContext<'_>) {
+        fswtch::log_info("mod_media_bug_meter", "media bug closing");
+        BUGS_CLOSED.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_application_function_t`.
@@ -30,77 +65,29 @@ unsafe extern "C" fn meter_app(session: *mut sys::switch_core_session_t, _data: 
         return;
     }
 
-    let state = Box::into_raw(Box::new(MeterState {
-        frames: 0,
-        audio_bytes: 0,
-    }));
-    let mut bug = ptr::null_mut();
-    let flags = sys::switch_media_bug_flag_enum_t_SMBF_READ_STREAM
-        | sys::switch_media_bug_flag_enum_t_SMBF_NO_PAUSE;
-
-    // SAFETY: `session` is live for this application invocation; ownership of `state` is given to
-    // the bug callback and reclaimed on close when FreeSWITCH accepts the media bug.
-    let status = unsafe {
-        sys::switch_core_media_bug_add(
-            session,
-            c"rust_media_bug_meter".as_ptr(),
-            c"read-stream".as_ptr(),
-            Some(meter_callback),
-            state.cast(),
-            0,
-            flags,
-            &mut bug,
-        )
+    let config = MediaBugConfig::new(
+        c"rust_media_bug_meter",
+        c"read-write-stream",
+        MediaBugFlags::READ_STREAM | MediaBugFlags::WRITE_STREAM | MediaBugFlags::NO_PAUSE,
+    );
+    let handler = MeterState {
+        read_frames: 0,
+        write_frames: 0,
+        read_audio_bytes: 0,
+        write_audio_bytes: 0,
     };
 
-    if status == SUCCESS {
-        BUGS_ATTACHED.fetch_add(1, Ordering::Relaxed);
-        fswtch::log_info("mod_media_bug_meter", "media bug attached");
-    } else {
-        fswtch::log_info(
+    // SAFETY: FreeSWITCH provides a live session for this application invocation.
+    match unsafe { fswtch::attach_media_bug(session, config, handler) } {
+        Ok(_) => {
+            BUGS_ATTACHED.fetch_add(1, Ordering::Relaxed);
+            fswtch::log_info("mod_media_bug_meter", "media bug attached");
+        }
+        Err(error) => fswtch::log_error(
             "mod_media_bug_meter",
-            format!("failed to attach media bug: {status:?}"),
-        );
-        // SAFETY: FreeSWITCH did not take ownership when add failed.
-        unsafe {
-            drop(Box::from_raw(state));
-        }
+            format!("failed to attach media bug: {error}"),
+        ),
     }
-}
-
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_media_bug_callback_t`.
-unsafe extern "C" fn meter_callback(
-    bug: *mut sys::switch_media_bug_t,
-    user_data: *mut std::ffi::c_void,
-    callback_type: sys::switch_abc_type_t,
-) -> sys::switch_bool_t {
-    if user_data.is_null() {
-        return sys::switch_bool_t_SWITCH_TRUE;
-    }
-
-    if callback_type == sys::switch_abc_type_t_SWITCH_ABC_TYPE_READ {
-        // SAFETY: `user_data` is the `MeterState` pointer passed to `switch_core_media_bug_add`.
-        let state = unsafe { &mut *user_data.cast::<MeterState>() };
-        // SAFETY: `bug` is live for the callback duration.
-        let frame = unsafe { sys::switch_core_media_bug_get_native_read_frame(bug) };
-        if !frame.is_null() {
-            // SAFETY: `frame` is owned by FreeSWITCH and valid for this callback.
-            let bytes = unsafe { (*frame).datalen as usize };
-            state.frames += 1;
-            state.audio_bytes += bytes;
-            FRAMES_SEEN.fetch_add(1, Ordering::Relaxed);
-            AUDIO_BYTES_SEEN.fetch_add(bytes, Ordering::Relaxed);
-        }
-    } else if callback_type == sys::switch_abc_type_t_SWITCH_ABC_TYPE_CLOSE {
-        fswtch::log_info("mod_media_bug_meter", "media bug closing");
-        // SAFETY: Reclaims the box allocated in `meter_app`; close is the terminal callback.
-        unsafe {
-            drop(Box::from_raw(user_data.cast::<MeterState>()));
-        }
-        BUGS_CLOSED.fetch_add(1, Ordering::Relaxed);
-    }
-
-    sys::switch_bool_t_SWITCH_TRUE
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -113,11 +100,13 @@ unsafe extern "C" fn stats_api(
     write_response(
         stream,
         &format!(
-            "attached={} closed={} frames={} audio_bytes={}\n",
+            "attached={} closed={} read_frames={} write_frames={} read_audio_bytes={} write_audio_bytes={}\n",
             BUGS_ATTACHED.load(Ordering::Relaxed),
             BUGS_CLOSED.load(Ordering::Relaxed),
-            FRAMES_SEEN.load(Ordering::Relaxed),
-            AUDIO_BYTES_SEEN.load(Ordering::Relaxed)
+            READ_FRAMES_SEEN.load(Ordering::Relaxed),
+            WRITE_FRAMES_SEEN.load(Ordering::Relaxed),
+            READ_AUDIO_BYTES_SEEN.load(Ordering::Relaxed),
+            WRITE_AUDIO_BYTES_SEEN.load(Ordering::Relaxed)
         ),
     )
 }
@@ -174,7 +163,7 @@ unsafe fn add_application(
         (*raw).interface_name = c"rust_media_bug_meter".as_ptr();
         (*raw).application_function = Some(meter_app);
         (*raw).long_desc =
-            c"Attaches a read-stream media bug and counts observed audio frames".as_ptr();
+            c"Attaches a read/write-stream media bug and counts observed audio frames".as_ptr();
         (*raw).short_desc = c"Rust media bug meter example".as_ptr();
         (*raw).syntax = c"rust_media_bug_meter".as_ptr();
     }
