@@ -16,7 +16,8 @@ This workspace is intentionally split into three crates:
 The `fswtch` crate provides a small higher-level layer over the raw FreeSWITCH ABI. It focuses on the parts that every module needs first:
 
 - `module_exports!` declares the exported FreeSWITCH module table.
-- `Module::create` builds the loader-owned module interface from the raw load callback arguments.
+- `module_load!` generates the FreeSWITCH load callback while giving the body a `ModuleBuilder`.
+- `Module::create` builds the loader-owned module interface from raw load callback arguments for lower-level integrations.
 - `Module::add_api`, `Module::add_application`, `Module::add_chat_application`, and `Module::add_endpoint` register common FreeSWITCH interfaces without hand-writing interface allocation and field assignment.
 - `ModuleBuilder` chains module and interface registration in load callbacks.
 - `api_callback!`, `app_callback!`, and `chat_callback!` generate FreeSWITCH ABI callbacks while giving the callback body typed wrapper values.
@@ -123,23 +124,19 @@ fswtch::module_exports! {
 }
 ```
 
-Inside `switch_module_load`, create a `Module` from FreeSWITCH's raw load arguments, then register one or more APIs:
+Use `module_load!` to create the typed load callback and register one or more APIs:
 
 ```rust
-let module = match unsafe { fswtch::Module::create(module_interface, pool, c"mod_hello") } {
-    Ok(module) => module,
-    Err(error) => return error.0,
-};
-
-if let Err(error) = unsafe {
-    module.add_api(
-        c"rust_hello",
-        c"prints a Rust greeting",
-        c"rust_hello",
-        hello_api,
-    )
-} {
-    return error.0;
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_hello" {
+        fswtch::log_info("mod_hello", "loading module");
+        module.api(
+            c"rust_hello",
+            c"prints a Rust greeting",
+            c"rust_hello",
+            hello_api,
+        )
+    }
 }
 ```
 

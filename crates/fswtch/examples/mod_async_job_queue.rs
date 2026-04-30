@@ -9,8 +9,6 @@ use std::{
     time::Duration,
 };
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
-
 static JOB_QUEUE: LazyLock<JobQueue> = LazyLock::new(JobQueue::start);
 const MAX_JOB_RESULTS: usize = 4096;
 
@@ -156,31 +154,24 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_async_job_queue", "loading module");
-    LazyLock::force(&JOB_QUEUE);
-    match ModuleBuilder::new(module_interface, pool, c"mod_async_job_queue")
-        .and_then(|module| {
-            module.api(
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_async_job_queue" {
+        fswtch::log_info("mod_async_job_queue", "loading module");
+        LazyLock::force(&JOB_QUEUE);
+        module
+            .api(
                 c"rust_job_submit",
                 c"queues background work without blocking FreeSWITCH API execution",
                 c"rust_job_submit <payload>",
                 submit_api,
             )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_job_status",
-                c"checks background job status",
-                c"rust_job_status <id>",
-                status_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+            .and_then(|module| {
+                module.api(
+                    c"rust_job_status",
+                    c"checks background job status",
+                    c"rust_job_status <id>",
+                    status_api,
+                )
+            })
     }
 }

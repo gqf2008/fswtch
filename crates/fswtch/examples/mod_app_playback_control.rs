@@ -1,5 +1,3 @@
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
-
 fswtch::module_exports! {
     module = mod_app_playback_control,
     load = switch_module_load,
@@ -46,31 +44,24 @@ fn info_api(_cmd, _session, stream) {
 }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_app_playback_control", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_app_playback_control")
-        .and_then(|module| {
-            module.application(
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_app_playback_control" {
+        fswtch::log_info("mod_app_playback_control", "loading module");
+        module
+            .application(
                 c"rust_playback_control",
                 c"Answers a channel and plays the supplied file path",
                 c"Rust playback control example",
                 c"rust_playback_control <path-or-tone-stream>",
                 playback_control_app,
             )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_playback_control_info",
-                c"describes the Rust playback control application",
-                c"rust_playback_control_info",
-                info_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+            .and_then(|module| {
+                module.api(
+                    c"rust_playback_control_info",
+                    c"describes the Rust playback control application",
+                    c"rust_playback_control_info",
+                    info_api,
+                )
+            })
     }
 }

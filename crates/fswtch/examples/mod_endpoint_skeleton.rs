@@ -1,6 +1,6 @@
 use std::ptr;
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
+use fswtch::sys;
 
 static mut IO_ROUTINES: sys::switch_io_routines = sys::switch_io_routines {
     outgoing_channel: None,
@@ -37,24 +37,19 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_endpoint_skeleton", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_endpoint_skeleton")
-        .and_then(|module| module.endpoint(c"rust_endpoint_skeleton", &raw mut IO_ROUTINES))
-        .inspect(|_| fswtch::log_info("mod_endpoint_skeleton", "endpoint interface registered"))
-        .and_then(|module| {
-            module.api(
-                c"rust_endpoint_skeleton_info",
-                c"describes the Rust endpoint skeleton",
-                c"rust_endpoint_skeleton_info",
-                info_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_endpoint_skeleton" {
+        fswtch::log_info("mod_endpoint_skeleton", "loading module");
+        module
+            .endpoint(c"rust_endpoint_skeleton", &raw mut IO_ROUTINES)
+            .inspect(|_| fswtch::log_info("mod_endpoint_skeleton", "endpoint interface registered"))
+            .and_then(|module| {
+                module.api(
+                    c"rust_endpoint_skeleton_info",
+                    c"describes the Rust endpoint skeleton",
+                    c"rust_endpoint_skeleton_info",
+                    info_api,
+                )
+            })
     }
 }

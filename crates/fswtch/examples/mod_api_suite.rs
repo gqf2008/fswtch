@@ -1,5 +1,3 @@
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
-
 fswtch::module_exports! {
     module = mod_api_suite,
     load = switch_module_load,
@@ -28,14 +26,10 @@ fn upper_api(cmd, _session, stream) {
 }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_api_suite", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_api_suite")
-        .and_then(|module| module.api(c"rust_ping", c"returns pong", c"rust_ping", ping_api))
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_api_suite" {
+        fswtch::log_info("mod_api_suite", "loading module");
+        module.api(c"rust_ping", c"returns pong", c"rust_ping", ping_api)
         .and_then(|module| {
             module.api(
                 c"rust_echo",
@@ -51,8 +45,6 @@ unsafe extern "C" fn switch_module_load(
                 c"rust_upper <text>",
                 upper_api,
             )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+        })
     }
 }

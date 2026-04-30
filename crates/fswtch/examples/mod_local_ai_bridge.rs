@@ -10,7 +10,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 use serde_json::{Value, json};
 
 static STATE: LazyLock<AiState> = LazyLock::new(AiState::from_env);
@@ -378,56 +377,49 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_local_ai_bridge", "loading module");
-    LazyLock::force(&STATE);
-    match ModuleBuilder::new(module_interface, pool, c"mod_local_ai_bridge")
-        .and_then(|module| {
-            module.api(
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_local_ai_bridge" {
+        fswtch::log_info("mod_local_ai_bridge", "loading module");
+        LazyLock::force(&STATE);
+        module
+            .api(
                 c"rust_local_ai_status",
                 c"prints local ASR/TTS and OpenAI NLP integration status",
                 c"rust_local_ai_status",
                 status_api,
             )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_local_asr",
-                c"runs local ORT speech recognition for a PCM file",
-                c"rust_local_asr <pcm16le-file>",
-                asr_api,
-            )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_local_tts",
-                c"runs local ORT speech synthesis for text",
-                c"rust_local_tts <text>",
-                tts_api,
-            )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_local_nlp",
-                c"queues an OpenAI Responses API NLP request",
-                c"rust_local_nlp <prompt>",
-                nlp_api,
-            )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_local_nlp_sync",
-                c"runs an OpenAI Responses API NLP request synchronously",
-                c"rust_local_nlp_sync <prompt>",
-                nlp_sync_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+            .and_then(|module| {
+                module.api(
+                    c"rust_local_asr",
+                    c"runs local ORT speech recognition for a PCM file",
+                    c"rust_local_asr <pcm16le-file>",
+                    asr_api,
+                )
+            })
+            .and_then(|module| {
+                module.api(
+                    c"rust_local_tts",
+                    c"runs local ORT speech synthesis for text",
+                    c"rust_local_tts <text>",
+                    tts_api,
+                )
+            })
+            .and_then(|module| {
+                module.api(
+                    c"rust_local_nlp",
+                    c"queues an OpenAI Responses API NLP request",
+                    c"rust_local_nlp <prompt>",
+                    nlp_api,
+                )
+            })
+            .and_then(|module| {
+                module.api(
+                    c"rust_local_nlp_sync",
+                    c"runs an OpenAI Responses API NLP request synchronously",
+                    c"rust_local_nlp_sync <prompt>",
+                    nlp_sync_api,
+                )
+            })
     }
 }
 

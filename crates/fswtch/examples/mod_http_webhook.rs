@@ -6,8 +6,6 @@ use std::{
     time::Duration,
 };
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
-
 static WEBHOOKS_QUEUED: AtomicUsize = AtomicUsize::new(0);
 static WEBHOOKS_SENT: AtomicUsize = AtomicUsize::new(0);
 static WEBHOOKS_FAILED: AtomicUsize = AtomicUsize::new(0);
@@ -105,31 +103,24 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_http_webhook", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_http_webhook")
-        .and_then(|module| {
-            module.api(
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_http_webhook" {
+        fswtch::log_info("mod_http_webhook", "loading module");
+        module
+            .api(
                 c"rust_webhook_post",
                 c"queues a plain HTTP webhook POST",
                 c"rust_webhook_post <http-url> <json-body>",
                 post_api,
             )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_webhook_stats",
-                c"prints webhook delivery counters",
-                c"rust_webhook_stats",
-                stats_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+            .and_then(|module| {
+                module.api(
+                    c"rust_webhook_stats",
+                    c"prints webhook delivery counters",
+                    c"rust_webhook_stats",
+                    stats_api,
+                )
+            })
     }
 }
 

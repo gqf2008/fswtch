@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 use serde_json::{Value, json};
 
 static CDRS_ENRICHED: AtomicUsize = AtomicUsize::new(0);
@@ -64,31 +63,24 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_cdr_enricher", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_cdr_enricher")
-        .and_then(|module| {
-            module.api(
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_cdr_enricher" {
+        fswtch::log_info("mod_cdr_enricher", "loading module");
+        module
+            .api(
                 c"rust_cdr_enrich",
                 c"enriches a CDR JSON document and emits a custom event",
                 c"rust_cdr_enrich <json-cdr>",
                 enrich_api,
             )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_cdr_enricher_stats",
-                c"prints CDR enrichment counters",
-                c"rust_cdr_enricher_stats",
-                stats_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+            .and_then(|module| {
+                module.api(
+                    c"rust_cdr_enricher_stats",
+                    c"prints CDR enrichment counters",
+                    c"rust_cdr_enricher_stats",
+                    stats_api,
+                )
+            })
     }
 }
 

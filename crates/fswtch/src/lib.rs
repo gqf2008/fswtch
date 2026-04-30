@@ -76,3 +76,23 @@ macro_rules! chat_callback {
         }
     };
 }
+
+#[macro_export]
+macro_rules! module_load {
+    (fn $name:ident($module:ident) for $module_name:literal $body:block) => {
+        unsafe extern "C" fn $name(
+            module_interface: *mut *mut $crate::sys::switch_loadable_module_interface_t,
+            pool: *mut $crate::sys::switch_memory_pool_t,
+        ) -> $crate::Status {
+            let $module = match $crate::ModuleBuilder::new(module_interface, pool, $module_name) {
+                Ok(module) => module,
+                Err(error) => return error.0,
+            };
+            let result: $crate::Result<$crate::ModuleBuilder> = $body;
+            match result {
+                Ok(_) => $crate::SUCCESS,
+                Err(error) => error.0,
+            }
+        }
+    };
+}

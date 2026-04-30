@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 use serde_json::Value;
 
 static EVENTS_FIRED: AtomicUsize = AtomicUsize::new(0);
@@ -42,31 +41,24 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_event_sink", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_event_sink")
-        .and_then(|module| {
-            module.api(
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_event_sink" {
+        fswtch::log_info("mod_event_sink", "loading module");
+        module
+            .api(
                 c"rust_event_sink_emit",
                 c"fires a custom event from a JSON object",
                 c"rust_event_sink_emit <subclass> <json-object>",
                 emit_api,
             )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_event_sink_stats",
-                c"prints event sink counters",
-                c"rust_event_sink_stats",
-                stats_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+            .and_then(|module| {
+                module.api(
+                    c"rust_event_sink_stats",
+                    c"prints event sink counters",
+                    c"rust_event_sink_stats",
+                    stats_api,
+                )
+            })
     }
 }
 

@@ -1,6 +1,6 @@
 use std::{error::Error, thread, time::Duration};
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
+use fswtch::SUCCESS;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -86,22 +86,15 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_remote_vad", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_remote_vad").and_then(|module| {
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_remote_vad" {
+        fswtch::log_info("mod_remote_vad", "loading module");
         module.api(
             c"rust_vad_start",
             c"starts an async remote websocket VAD worker",
             c"rust_vad_start <call-uuid> <wss://vad.example/session>",
             start_vad_api,
         )
-    }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
     }
 }
 

@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fswtch::{
     MediaBugAction, MediaBugConfig, MediaBugContext, MediaBugFlags, MediaBugHandler, MediaFrame,
-    ModuleBuilder, SUCCESS, Status, sys,
 };
 
 static BUGS_ATTACHED: AtomicUsize = AtomicUsize::new(0);
@@ -104,31 +103,24 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_media_bug_meter", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_media_bug_meter")
-        .and_then(|module| {
-            module.application(
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_media_bug_meter" {
+        fswtch::log_info("mod_media_bug_meter", "loading module");
+        module
+            .application(
                 c"rust_media_bug_meter",
                 c"Attaches a read/write-stream media bug and counts observed audio frames",
                 c"Rust media bug meter example",
                 c"rust_media_bug_meter",
                 meter_app,
             )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_media_bug_meter_stats",
-                c"prints media bug meter counters",
-                c"rust_media_bug_meter_stats",
-                stats_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+            .and_then(|module| {
+                module.api(
+                    c"rust_media_bug_meter_stats",
+                    c"prints media bug meter counters",
+                    c"rust_media_bug_meter_stats",
+                    stats_api,
+                )
+            })
     }
 }

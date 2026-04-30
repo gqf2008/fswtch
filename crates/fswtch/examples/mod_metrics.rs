@@ -3,8 +3,6 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
-
 static METRICS: LazyLock<Mutex<HashMap<String, u64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const MAX_METRICS: usize = 1024;
@@ -58,31 +56,24 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_metrics", "loading module");
-    match ModuleBuilder::new(module_interface, pool, c"mod_metrics")
-        .and_then(|module| {
-            module.api(
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_metrics" {
+        fswtch::log_info("mod_metrics", "loading module");
+        module
+            .api(
                 c"rust_metrics_hit",
                 c"increments a named example counter",
                 c"rust_metrics_hit <name>",
                 hit_api,
             )
-        })
-        .and_then(|module| {
-            module.api(
-                c"rust_metrics_show",
-                c"prints example counters in Prometheus text format",
-                c"rust_metrics_show",
-                show_api,
-            )
-        }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
+            .and_then(|module| {
+                module.api(
+                    c"rust_metrics_show",
+                    c"prints example counters in Prometheus text format",
+                    c"rust_metrics_show",
+                    show_api,
+                )
+            })
     }
 }
 

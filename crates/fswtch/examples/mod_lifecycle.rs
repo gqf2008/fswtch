@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
+use fswtch::{SUCCESS, Status};
 
 static LOADS: AtomicUsize = AtomicUsize::new(0);
 static RUNTIME_TICKS: AtomicUsize = AtomicUsize::new(0);
@@ -27,23 +27,16 @@ fswtch::api_callback! {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
-unsafe extern "C" fn switch_module_load(
-    module_interface: *mut *mut sys::switch_loadable_module_interface_t,
-    pool: *mut sys::switch_memory_pool_t,
-) -> Status {
-    fswtch::log_info("mod_lifecycle", "loading module");
-    LOADS.fetch_add(1, Ordering::Relaxed);
-    match ModuleBuilder::new(module_interface, pool, c"mod_lifecycle").and_then(|module| {
+fswtch::module_load! {
+    fn switch_module_load(module) for c"mod_lifecycle" {
+        fswtch::log_info("mod_lifecycle", "loading module");
+        LOADS.fetch_add(1, Ordering::Relaxed);
         module.api(
             c"rust_lifecycle_stats",
             c"prints module lifecycle counters",
             c"rust_lifecycle_stats",
             stats_api,
         )
-    }) {
-        Ok(_) => SUCCESS,
-        Err(error) => error.0,
     }
 }
 
