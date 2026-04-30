@@ -1,51 +1,57 @@
 # fswtch
 
 [![Crates.io Version](https://img.shields.io/crates/v/fswtch)](https://crates.io/crates/fswtch)
-[![Crates.io Version](https://img.shields.io/crates/v/fswtch-sys)](https://crates.io/crates/fswtch-sys)
+[![fswtch-sys](https://img.shields.io/crates/v/fswtch-sys?label=fswtch-sys)](https://crates.io/crates/fswtch-sys)
 
-Rust bindings for writing FreeSWITCH modules.
+Rust bindings and helper APIs for writing FreeSWITCH modules.
 
-This workspace is split into three crates:
+This workspace is intentionally split into three crates:
 
-- `fswtch-sys`: raw FreeSWITCH ABI bindings. By default it enables `bundled`, runs bindgen, and generates bindings from the packaged FreeSWITCH headers.
-- `fswtch`: higher-level helpers for module exports, module interface creation, API command registration, and stream writes.
-- `fswtch-src`: vendored FreeSWITCH headers used by `fswtch-sys` for default bundled bindgen builds.
+- `fswtch`: safe-ish helpers for module exports, module interface creation, API command registration, stream writes, status conversion, and example logging.
+- `fswtch-sys`: raw FreeSWITCH ABI bindings generated with bindgen.
+- `fswtch-src`: packaged FreeSWITCH headers used by default bundled builds.
 
-## Header Discovery
+The higher-level wrapper is still small. The examples show both the supported helper API and carefully scoped raw ABI usage for FreeSWITCH interfaces that do not have safe wrappers yet.
 
-By default, `fswtch` and `fswtch-sys` generate bindings from the vendored headers:
+## Build
+
+Default builds use the bundled FreeSWITCH headers from `fswtch-src`:
 
 ```sh
 cargo check -p fswtch-sys
-cargo check -p fswtch
+cargo check -p fswtch --examples
+cargo test --workspace
+cargo fmt --all --check
+cargo clippy --workspace --all-targets
 ```
 
-This default `bundled` feature is for generating Rust bindings from the vendored headers. It does not compile or statically link FreeSWITCH itself.
+The default `bundled` feature only generates Rust bindings from packaged headers. It does not compile or statically link FreeSWITCH.
 
-To generate bindings from a configured FreeSWITCH installation instead, disable default features and enable `bindgen`:
+To generate bindings from a configured local FreeSWITCH install:
 
 ```sh
-FREESWITCH_INCLUDE_DIR=/usr/include/freeswitch cargo check -p fswtch-sys --no-default-features --features bindgen
+FREESWITCH_INCLUDE_DIR=/usr/include/freeswitch \
+  cargo check -p fswtch-sys --no-default-features --features bindgen
 ```
 
-If FreeSWITCH is installed with `pkg-config`, `fswtch-sys` will also try the `freeswitch` package for link metadata. You can override linking with:
+If link metadata is not available through `pkg-config`, set the library directory explicitly:
 
 ```sh
 FREESWITCH_LIB_DIR=/usr/lib/freeswitch cargo build
 ```
 
-The vendored `freeswitch/` tree is useful source context, but it does not include generated config headers until FreeSWITCH has been configured.
+Set `FREESWITCH_NO_PKG_CONFIG=1` to disable `pkg-config` probing.
 
 ## Docker Smoke Test
 
-The repository includes a Docker image that builds FreeSWITCH, builds the Rust example modules, installs them into the FreeSWITCH module directory, starts FreeSWITCH, and verifies the module APIs through `fs_cli`.
+The repository includes a full smoke image that builds FreeSWITCH, builds every Rust example as a `cdylib`, installs the modules, starts FreeSWITCH, and verifies APIs through `fs_cli`.
 
 ```sh
 docker build -t fswtch-freeswitch-smoke .
 docker run --rm fswtch-freeswitch-smoke
 ```
 
-If you use Podman:
+Podman works too:
 
 ```sh
 podman build -t fswtch-freeswitch-smoke .
@@ -58,6 +64,121 @@ Successful output ends with:
 all fswtch example module checks passed
 ```
 
+The smoke script enables `FSWTCH_AI_ALLOW_MOCK=1` so the local AI example can run without model files or OpenAI credentials.
+
+## Module Shape
+
+A minimal module exports a FreeSWITCH load callback:
+
+```rust
+fswtch::module_exports! {
+    module = mod_hello,
+    load = switch_module_load,
+}
+```
+
+Inside `switch_module_load`, create a `Module` from FreeSWITCH's raw load arguments, then register one or more APIs:
+
+```rust
+let module = match unsafe { fswtch::Module::create(module_interface, pool, c"mod_hello") } {
+    Ok(module) => module,
+    Err(error) => return error.0,
+};
+
+if let Err(error) = unsafe {
+    module.add_api(
+        c"rust_hello",
+        c"prints a Rust greeting",
+        c"rust_hello",
+        hello_api,
+    )
+} {
+    return error.0;
+}
+```
+
+Examples use `fswtch::log_example` and `fswtch::log_example_error`, which route through FreeSWITCH logging.
+
+## Examples
+
+All examples live in `crates/fswtch/examples` and are compiled as FreeSWITCH modules.
+
+Basic module and API patterns:
+
+- `mod_hello`: minimal API command.
+- `mod_api_suite`: multiple API commands in one module.
+- `mod_stream_tools`: stream responses and command argument parsing.
+- `mod_lifecycle`: load, runtime, and shutdown callbacks.
+
+Operational and integration patterns:
+
+- `mod_async_job_queue`: background worker queue with bounded result history.
+- `mod_event_sink`: JSON-to-custom-event bridge.
+- `mod_http_webhook`: queued plain HTTP webhook delivery.
+- `mod_registration_check`: async registration validation and custom event emission.
+- `mod_rate_limiter`: token-bucket style API rate limiting with bounded cardinality.
+- `mod_metrics`: Prometheus-style metrics output with bounded cardinality.
+- `mod_config_xml`: FreeSWITCH XML config loading and reload.
+- `mod_cdr_enricher`: CDR JSON enrichment and custom event emission.
+
+FreeSWITCH interface skeletons:
+
+- `mod_app_playback_control`: dialplan application interface that answers and plays a supplied target.
+- `mod_media_bug_meter`: media bug application that counts observed read-stream audio frames.
+- `mod_endpoint_skeleton`: endpoint interface registration skeleton.
+- `mod_chatbot_bridge`: chat application interface that emits chatbot bridge events.
+
+AI and media integration:
+
+- `mod_remote_vad`: async websocket VAD worker with custom event reporting.
+- `mod_local_ai_bridge`: local ASR/TTS integration boundary plus OpenAI Responses API NLP calls.
+
+## Local AI Example
+
+`mod_local_ai_bridge` exposes:
+
+- `rust_local_ai_status`
+- `rust_local_asr <pcm16le-file>`
+- `rust_local_tts <text>`
+- `rust_local_nlp <prompt>`
+- `rust_local_nlp_sync <prompt>`
+
+Environment variables:
+
+- `FSWTCH_ASR_ONNX`: local ASR ONNX model path.
+- `FSWTCH_TTS_ONNX`: local TTS ONNX model path.
+- `OPENAI_API_KEY`: enables OpenAI NLP calls.
+- `OPENAI_MODEL`: defaults to `gpt-5.1`.
+- `OPENAI_BASE_URL`: defaults to `https://api.openai.com/v1`.
+- `FSWTCH_AI_ALLOW_MOCK=1`: allows smoke-test fallback behavior when models or API credentials are absent.
+
+For production, do not set `FSWTCH_AI_ALLOW_MOCK`; provide real model paths and API credentials. The example isolates the ORT boundary, but real ASR/TTS inference still needs the tensor contracts for the chosen ONNX models.
+
+## Production Notes
+
+The examples are production-oriented examples, not drop-in production services. Before deploying a module, review:
+
+- Session lifetime and locking for any work that touches a live `switch_core_session_t` outside the original callback.
+- Backpressure and queue limits for background work.
+- Timeout and retry policy for network integrations.
+- Secret handling for API keys and webhook credentials.
+- Cardinality limits for metrics, rate limiters, and per-call state.
+- Cleanup and ownership rules for FreeSWITCH events, media bugs, XML roots, and allocated user data.
+- Real model initialization and tensor validation for ORT-backed ASR/TTS.
+
+Unsafe blocks are kept small and local to FFI operations. Public unsafe APIs in the wrapper should document a `# Safety` contract.
+
+## Repository Layout
+
+- `crates/fswtch`: wrapper API and compile-checked Rust module examples.
+- `crates/fswtch-sys`: raw generated FreeSWITCH bindings and bindgen build script.
+- `crates/fswtch-src`: packaged FreeSWITCH headers.
+- `docker/fswtch`: smoke-test FreeSWITCH config and verification script.
+- `Dockerfile`: full FreeSWITCH smoke-test image.
+- `freeswitch/`: vendored upstream FreeSWITCH source context.
+
+The vendored FreeSWITCH trees are third-party inputs. Avoid reformatting or refactoring them unless intentionally updating vendored FreeSWITCH content.
+
 ## Publishing
 
 Publish crates in dependency order:
@@ -68,25 +189,4 @@ cargo publish -p fswtch-sys
 cargo publish -p fswtch
 ```
 
-For dry-runs before the first upload of a new version, `fswtch-sys` and `fswtch` will not fully resolve until their registry dependencies already exist. Start by dry-running and publishing `fswtch-src`.
-
-## Module Skeleton
-
-See [crates/fswtch/examples/mod_hello.rs](crates/fswtch/examples/mod_hello.rs) for the current Rust module shape:
-
-```rust
-fswtch::module_exports! {
-    module = mod_hello,
-    load = switch_module_load,
-}
-```
-
-Inside `switch_module_load`, create a `Module` from the raw FreeSWITCH load arguments and register APIs with `Module::add_api`.
-
-Additional compile-checked examples:
-
-- [mod_api_suite.rs](crates/fswtch/examples/mod_api_suite.rs): registers several API commands from one module.
-- [mod_lifecycle.rs](crates/fswtch/examples/mod_lifecycle.rs): exports load, runtime, and shutdown callbacks.
-- [mod_registration_check.rs](crates/fswtch/examples/mod_registration_check.rs): queues an asynchronous registration check, parses a pretend JSON response, and fires a custom FreeSWITCH event.
-- [mod_remote_vad.rs](crates/fswtch/examples/mod_remote_vad.rs): connects to a remote websocket VAD service, streams party audio frames during a call, parses JSON responses, and emits custom events.
-- [mod_stream_tools.rs](crates/fswtch/examples/mod_stream_tools.rs): writes structured responses to FreeSWITCH streams and parses command arguments.
+Before publishing, run the focused Rust checks above and the Docker smoke test when example behavior changed.
