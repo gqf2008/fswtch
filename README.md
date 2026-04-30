@@ -97,13 +97,6 @@ docker build -t fswtch-freeswitch-smoke .
 docker run --rm fswtch-freeswitch-smoke
 ```
 
-Podman works too:
-
-```sh
-podman build -t fswtch-freeswitch-smoke .
-podman run --rm fswtch-freeswitch-smoke
-```
-
 Successful output ends with:
 
 ```text
@@ -217,18 +210,5 @@ Unsafe blocks are kept small and local to FFI operations. Public unsafe APIs in 
 - `crates/fswtch-src`: packaged FreeSWITCH headers.
 - `docker/fswtch`: smoke-test FreeSWITCH config and verification script.
 - `Dockerfile`: full FreeSWITCH smoke-test image.
-- `freeswitch/`: vendored upstream FreeSWITCH source context.
 
 The vendored FreeSWITCH trees are third-party inputs. Avoid reformatting or refactoring them unless intentionally updating vendored FreeSWITCH content.
-
-## Publishing
-
-Publish crates in dependency order:
-
-```sh
-cargo publish -p fswtch-src
-cargo publish -p fswtch-sys
-cargo publish -p fswtch
-```
-
-Before publishing, run the focused Rust checks above and the Docker smoke test when example behavior changed.

@@ -51,6 +51,8 @@ RUN set -eux; \
 WORKDIR /usr/src/switch-sys
 COPY . .
 
+RUN git clone https://github.com/signalwire/freeswitch
+
 RUN set -eux; \
     cd freeswitch; \
     printf '%s\n' \
