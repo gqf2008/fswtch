@@ -69,22 +69,16 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_registration_check", "loading module");
-    // SAFETY: The loader passes the module slot and pool, and the module name is static.
-    let module = match unsafe { Module::create(module_interface, pool, c"mod_registration_check") }
-    {
+    let module = match Module::create(module_interface, pool, c"mod_registration_check") {
         Ok(module) => module,
         Err(error) => return error.0,
     };
-
-    // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-    if let Err(error) = unsafe {
-        module.add_api(
-            c"rust_check_registration",
-            c"asynchronously validates a registration and fires a custom event",
-            c"rust_check_registration <user@domain> <https://server/check>",
-            check_registration_api,
-        )
-    } {
+    if let Err(error) = module.add_api(
+        c"rust_check_registration",
+        c"asynchronously validates a registration and fires a custom event",
+        c"rust_check_registration <user@domain> <https://server/check>",
+        check_registration_api,
+    ) {
         return error.0;
     }
 
@@ -231,7 +225,7 @@ fn command_text(cmd: *const c_char) -> Option<String> {
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+    let Some(mut stream) = Stream::from_raw(stream) else {
         return SUCCESS;
     };
     if let Err(error) = stream.write_str(text) {

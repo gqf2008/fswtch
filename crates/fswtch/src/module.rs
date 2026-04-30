@@ -15,12 +15,7 @@ pub struct Module {
 
 impl Module {
     /// Creates the FreeSWITCH module interface for a load callback.
-    ///
-    /// # Safety
-    ///
-    /// `slot` and `pool` must be the values passed to the module load callback by FreeSWITCH.
-    /// `name` must remain valid for the lifetime of the loaded module.
-    pub unsafe fn create(
+    pub fn create(
         slot: *mut *mut sys::switch_loadable_module_interface_t,
         pool: *mut sys::switch_memory_pool_t,
         name: &'static CStr,
@@ -45,12 +40,7 @@ impl Module {
     }
 
     /// Registers a FreeSWITCH API command on this module.
-    ///
-    /// # Safety
-    ///
-    /// The provided `function` must obey FreeSWITCH's `switch_api_function_t` ABI. The C strings
-    /// must remain valid for the lifetime of the loaded module.
-    pub unsafe fn add_api(
+    pub fn add_api(
         self,
         name: &'static CStr,
         description: &'static CStr,
@@ -83,6 +73,96 @@ impl Module {
 
         Ok(ApiInterface { raw: api })
     }
+
+    pub fn add_application(
+        self,
+        name: &'static CStr,
+        long_description: &'static CStr,
+        short_description: &'static CStr,
+        syntax: &'static CStr,
+        function: unsafe extern "C" fn(*mut sys::switch_core_session_t, *const c_char),
+    ) -> Result<ApplicationInterface> {
+        // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
+        let raw = unsafe {
+            sys::switch_loadable_module_create_interface(
+                self.raw.as_ptr(),
+                sys::switch_module_interface_name_t::SWITCH_APPLICATION_INTERFACE,
+            )
+        };
+        let application = NonNull::new(raw.cast::<sys::switch_application_interface_t>())
+            .ok_or(SwitchError(GENERR))?;
+
+        // SAFETY: `application` is a valid interface allocation returned by FreeSWITCH, and all
+        // assigned C string/function pointers have static lifetimes.
+        unsafe {
+            let application_ref = application.as_ptr();
+            (*application_ref).interface_name = name.as_ptr();
+            (*application_ref).application_function = Some(function);
+            (*application_ref).long_desc = long_description.as_ptr();
+            (*application_ref).short_desc = short_description.as_ptr();
+            (*application_ref).syntax = syntax.as_ptr();
+        }
+
+        Ok(ApplicationInterface { raw: application })
+    }
+
+    pub fn add_chat_application(
+        self,
+        name: &'static CStr,
+        long_description: &'static CStr,
+        short_description: &'static CStr,
+        syntax: &'static CStr,
+        function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> Status,
+    ) -> Result<ChatApplicationInterface> {
+        // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
+        let raw = unsafe {
+            sys::switch_loadable_module_create_interface(
+                self.raw.as_ptr(),
+                sys::switch_module_interface_name_t::SWITCH_CHAT_APPLICATION_INTERFACE,
+            )
+        };
+        let application = NonNull::new(raw.cast::<sys::switch_chat_application_interface_t>())
+            .ok_or(SwitchError(GENERR))?;
+
+        // SAFETY: `application` is a valid interface allocation returned by FreeSWITCH, and all
+        // assigned C string/function pointers have static lifetimes.
+        unsafe {
+            let application_ref = application.as_ptr();
+            (*application_ref).interface_name = name.as_ptr();
+            (*application_ref).chat_application_function = Some(function);
+            (*application_ref).long_desc = long_description.as_ptr();
+            (*application_ref).short_desc = short_description.as_ptr();
+            (*application_ref).syntax = syntax.as_ptr();
+        }
+
+        Ok(ChatApplicationInterface { raw: application })
+    }
+
+    pub fn add_endpoint(
+        self,
+        name: &'static CStr,
+        io_routines: *mut sys::switch_io_routines_t,
+    ) -> Result<EndpointInterface> {
+        // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
+        let raw = unsafe {
+            sys::switch_loadable_module_create_interface(
+                self.raw.as_ptr(),
+                sys::switch_module_interface_name_t::SWITCH_ENDPOINT_INTERFACE,
+            )
+        };
+        let endpoint = NonNull::new(raw.cast::<sys::switch_endpoint_interface_t>())
+            .ok_or(SwitchError(GENERR))?;
+
+        // SAFETY: `endpoint` is a valid interface allocation returned by FreeSWITCH. `name` has a
+        // static lifetime, and the caller supplies module-owned I/O routine storage.
+        unsafe {
+            let endpoint_ref = endpoint.as_ptr();
+            (*endpoint_ref).interface_name = name.as_ptr();
+            (*endpoint_ref).io_routines = io_routines;
+        }
+
+        Ok(EndpointInterface { raw: endpoint })
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -92,6 +172,39 @@ pub struct ApiInterface {
 
 impl ApiInterface {
     pub fn as_ptr(&self) -> *mut sys::switch_api_interface_t {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct ApplicationInterface {
+    raw: NonNull<sys::switch_application_interface_t>,
+}
+
+impl ApplicationInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_application_interface_t {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct ChatApplicationInterface {
+    raw: NonNull<sys::switch_chat_application_interface_t>,
+}
+
+impl ChatApplicationInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_chat_application_interface_t {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct EndpointInterface {
+    raw: NonNull<sys::switch_endpoint_interface_t>,
+}
+
+impl EndpointInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_endpoint_interface_t {
         self.raw.as_ptr()
     }
 }

@@ -62,31 +62,24 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_event_sink", "loading module");
-    // SAFETY: The loader passes the module slot and pool, and the module name is static.
-    let module = match unsafe { Module::create(module_interface, pool, c"mod_event_sink") } {
+    let module = match Module::create(module_interface, pool, c"mod_event_sink") {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
     for result in [
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe {
-            module.add_api(
-                c"rust_event_sink_emit",
-                c"fires a custom event from a JSON object",
-                c"rust_event_sink_emit <subclass> <json-object>",
-                emit_api,
-            )
-        },
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe {
-            module.add_api(
-                c"rust_event_sink_stats",
-                c"prints event sink counters",
-                c"rust_event_sink_stats",
-                stats_api,
-            )
-        },
+        module.add_api(
+            c"rust_event_sink_emit",
+            c"fires a custom event from a JSON object",
+            c"rust_event_sink_emit <subclass> <json-object>",
+            emit_api,
+        ),
+        module.add_api(
+            c"rust_event_sink_stats",
+            c"prints event sink counters",
+            c"rust_event_sink_stats",
+            stats_api,
+        ),
     ] {
         if let Err(error) = result {
             return error.0;
@@ -211,7 +204,7 @@ fn command_text(cmd: *const c_char) -> Option<String> {
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+    let Some(mut stream) = Stream::from_raw(stream) else {
         return FALSE;
     };
 

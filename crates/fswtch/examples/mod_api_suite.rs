@@ -45,33 +45,25 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_api_suite", "loading module");
-    // SAFETY: The loader passes the module slot and pool, and the module name is static.
-    let module = match unsafe { Module::create(module_interface, pool, c"mod_api_suite") } {
+    let module = match Module::create(module_interface, pool, c"mod_api_suite") {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
     for result in [
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe { module.add_api(c"rust_ping", c"returns pong", c"rust_ping", ping_api) },
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe {
-            module.add_api(
-                c"rust_echo",
-                c"echoes the command argument",
-                c"rust_echo <text>",
-                echo_api,
-            )
-        },
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe {
-            module.add_api(
-                c"rust_upper",
-                c"uppercases the command argument",
-                c"rust_upper <text>",
-                upper_api,
-            )
-        },
+        module.add_api(c"rust_ping", c"returns pong", c"rust_ping", ping_api),
+        module.add_api(
+            c"rust_echo",
+            c"echoes the command argument",
+            c"rust_echo <text>",
+            echo_api,
+        ),
+        module.add_api(
+            c"rust_upper",
+            c"uppercases the command argument",
+            c"rust_upper <text>",
+            upper_api,
+        ),
     ] {
         if let Err(error) = result {
             return error.0;
@@ -97,7 +89,7 @@ fn command_text(cmd: *const c_char) -> Option<String> {
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    if let Some(mut stream) = unsafe { Stream::from_raw(stream) }
+    if let Some(mut stream) = Stream::from_raw(stream)
         && let Err(error) = stream.write_str(text)
     {
         return error.0;

@@ -78,32 +78,24 @@ unsafe extern "C" fn switch_module_load(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
     }
-
-    // SAFETY: The loader passes the module slot and pool, and the module name is static.
-    let module = match unsafe { Module::create(module_interface, pool, c"mod_config_xml") } {
+    let module = match Module::create(module_interface, pool, c"mod_config_xml") {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
     for result in [
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe {
-            module.add_api(
-                c"rust_config_xml_show",
-                c"prints settings loaded from fswtch_examples.conf",
-                c"rust_config_xml_show",
-                show_api,
-            )
-        },
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe {
-            module.add_api(
-                c"rust_config_xml_reload",
-                c"reloads settings from fswtch_examples.conf",
-                c"rust_config_xml_reload",
-                reload_api,
-            )
-        },
+        module.add_api(
+            c"rust_config_xml_show",
+            c"prints settings loaded from fswtch_examples.conf",
+            c"rust_config_xml_show",
+            show_api,
+        ),
+        module.add_api(
+            c"rust_config_xml_reload",
+            c"reloads settings from fswtch_examples.conf",
+            c"rust_config_xml_reload",
+            reload_api,
+        ),
     ] {
         if let Err(error) = result {
             return error.0;
@@ -192,7 +184,7 @@ fn xml_attr(node: sys::switch_xml_t, name: &'static CStr) -> Option<String> {
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+    let Some(mut stream) = Stream::from_raw(stream) else {
         return FALSE;
     };
 

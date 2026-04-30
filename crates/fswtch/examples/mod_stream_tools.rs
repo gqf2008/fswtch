@@ -15,7 +15,7 @@ unsafe extern "C" fn table_api(
 ) -> Status {
     fswtch::log_info("mod_stream_tools", "rust_table invoked");
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+    let Some(mut stream) = Stream::from_raw(stream) else {
         return FALSE;
     };
 
@@ -41,7 +41,7 @@ unsafe extern "C" fn words_api(
 ) -> Status {
     fswtch::log_info("mod_stream_tools", "rust_words invoked");
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+    let Some(mut stream) = Stream::from_raw(stream) else {
         return FALSE;
     };
 
@@ -66,31 +66,24 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_stream_tools", "loading module");
-    // SAFETY: The loader passes the module slot and pool, and the module name is static.
-    let module = match unsafe { Module::create(module_interface, pool, c"mod_stream_tools") } {
+    let module = match Module::create(module_interface, pool, c"mod_stream_tools") {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
     for result in [
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe {
-            module.add_api(
-                c"rust_table",
-                c"prints a small CSV response",
-                c"rust_table",
-                table_api,
-            )
-        },
-        // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-        unsafe {
-            module.add_api(
-                c"rust_words",
-                c"counts words in the command argument",
-                c"rust_words <text>",
-                words_api,
-            )
-        },
+        module.add_api(
+            c"rust_table",
+            c"prints a small CSV response",
+            c"rust_table",
+            table_api,
+        ),
+        module.add_api(
+            c"rust_words",
+            c"counts words in the command argument",
+            c"rust_words <text>",
+            words_api,
+        ),
     ] {
         if let Err(error) = result {
             return error.0;

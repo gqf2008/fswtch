@@ -7,12 +7,7 @@ pub struct Stream {
 }
 
 impl Stream {
-    /// Wraps a FreeSWITCH stream handle.
-    ///
-    /// # Safety
-    ///
-    /// `raw` must be a valid stream handle for the current FreeSWITCH callback invocation.
-    pub unsafe fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Option<Self> {
+    pub fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 

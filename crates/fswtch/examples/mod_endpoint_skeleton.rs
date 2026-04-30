@@ -47,61 +47,31 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_endpoint_skeleton", "loading module");
-    // SAFETY: The loader passes the module slot and pool, and the module name is static.
-    let module = match unsafe { Module::create(module_interface, pool, c"mod_endpoint_skeleton") } {
+    let module = match Module::create(module_interface, pool, c"mod_endpoint_skeleton") {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
-    // SAFETY: The module interface is live, and assigned C strings/static pointers are valid.
-    if unsafe { add_endpoint(module.as_ptr()) }.is_none() {
-        return fswtch::GENERR;
+    if let Err(error) = module.add_endpoint(c"rust_endpoint_skeleton", &raw mut IO_ROUTINES) {
+        return error.0;
     }
+    fswtch::log_info("mod_endpoint_skeleton", "endpoint interface registered");
 
-    // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-    if let Err(error) = unsafe {
-        module.add_api(
-            c"rust_endpoint_skeleton_info",
-            c"describes the Rust endpoint skeleton",
-            c"rust_endpoint_skeleton_info",
-            info_api,
-        )
-    } {
+    if let Err(error) = module.add_api(
+        c"rust_endpoint_skeleton_info",
+        c"describes the Rust endpoint skeleton",
+        c"rust_endpoint_skeleton_info",
+        info_api,
+    ) {
         return error.0;
     }
 
     SUCCESS
 }
 
-unsafe fn add_endpoint(
-    module: *mut sys::switch_loadable_module_interface_t,
-) -> Option<*mut sys::switch_endpoint_interface_t> {
-    // SAFETY: `module` is a live module interface created by FreeSWITCH.
-    let raw = unsafe {
-        sys::switch_loadable_module_create_interface(
-            module,
-            sys::switch_module_interface_name_t::SWITCH_ENDPOINT_INTERFACE,
-        )
-    }
-    .cast::<sys::switch_endpoint_interface_t>();
-    if raw.is_null() {
-        return None;
-    }
-
-    // SAFETY: `raw` points to a FreeSWITCH endpoint interface allocation. The I/O routine table is
-    // static and intentionally empty because this is a registration skeleton, not a call driver.
-    unsafe {
-        (*raw).interface_name = c"rust_endpoint_skeleton".as_ptr();
-        (*raw).io_routines = &raw mut IO_ROUTINES;
-    }
-    fswtch::log_info("mod_endpoint_skeleton", "endpoint interface registered");
-
-    Some(raw)
-}
-
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+    let Some(mut stream) = Stream::from_raw(stream) else {
         return FALSE;
     };
 

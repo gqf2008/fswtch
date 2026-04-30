@@ -91,57 +91,31 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_chatbot_bridge", "loading module");
-    // SAFETY: The loader passes the module slot and pool, and the module name is static.
-    let module = match unsafe { Module::create(module_interface, pool, c"mod_chatbot_bridge") } {
+    let module = match Module::create(module_interface, pool, c"mod_chatbot_bridge") {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
-    // SAFETY: The module interface is live, and assigned C strings/function pointer are static.
-    if unsafe { add_chat_application(module.as_ptr()) }.is_none() {
-        return fswtch::GENERR;
+    if let Err(error) = module.add_chat_application(
+        c"rust_chatbot_bridge",
+        c"Transforms inbound chat messages into custom chatbot events",
+        c"Rust chatbot bridge example",
+        c"rust_chatbot_bridge <message>",
+        chatbot_app,
+    ) {
+        return error.0;
     }
 
-    // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-    if let Err(error) = unsafe {
-        module.add_api(
-            c"rust_chatbot_bridge_stats",
-            c"prints chatbot bridge counters",
-            c"rust_chatbot_bridge_stats",
-            stats_api,
-        )
-    } {
+    if let Err(error) = module.add_api(
+        c"rust_chatbot_bridge_stats",
+        c"prints chatbot bridge counters",
+        c"rust_chatbot_bridge_stats",
+        stats_api,
+    ) {
         return error.0;
     }
 
     SUCCESS
-}
-
-unsafe fn add_chat_application(
-    module: *mut sys::switch_loadable_module_interface_t,
-) -> Option<*mut sys::switch_chat_application_interface_t> {
-    // SAFETY: `module` is a live module interface created by FreeSWITCH.
-    let raw = unsafe {
-        sys::switch_loadable_module_create_interface(
-            module,
-            sys::switch_module_interface_name_t::SWITCH_CHAT_APPLICATION_INTERFACE,
-        )
-    }
-    .cast::<sys::switch_chat_application_interface_t>();
-    if raw.is_null() {
-        return None;
-    }
-
-    // SAFETY: `raw` points to a FreeSWITCH chat application interface allocation.
-    unsafe {
-        (*raw).interface_name = c"rust_chatbot_bridge".as_ptr();
-        (*raw).chat_application_function = Some(chatbot_app);
-        (*raw).long_desc = c"Transforms inbound chat messages into custom chatbot events".as_ptr();
-        (*raw).short_desc = c"Rust chatbot bridge example".as_ptr();
-        (*raw).syntax = c"rust_chatbot_bridge <message>".as_ptr();
-    }
-
-    Some(raw)
 }
 
 fn event_header(event: *mut sys::switch_event_t, name: &'static CStr) -> Option<String> {
@@ -196,7 +170,7 @@ fn command_text(cmd: *const c_char) -> Option<String> {
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+    let Some(mut stream) = Stream::from_raw(stream) else {
         return FALSE;
     };
 

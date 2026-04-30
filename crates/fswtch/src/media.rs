@@ -149,7 +149,7 @@ pub trait MediaBugHandler: 'static {
 /// `session` must be a valid live FreeSWITCH session that may accept a media bug. The `function`
 /// and `target` strings in `config` must remain valid for the loaded module lifetime. Callback
 /// methods must not retain frame or context references after they return.
-pub unsafe fn attach_media_bug<H>(
+pub fn attach_media_bug<H>(
     session: *mut sys::switch_core_session_t,
     config: MediaBugConfig,
     handler: H,

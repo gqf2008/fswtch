@@ -78,7 +78,7 @@ unsafe extern "C" fn meter_app(session: *mut sys::switch_core_session_t, _data: 
     };
 
     // SAFETY: FreeSWITCH provides a live session for this application invocation.
-    match unsafe { fswtch::attach_media_bug(session, config, handler) } {
+    match fswtch::attach_media_bug(session, config, handler) {
         Ok(_) => {
             BUGS_ATTACHED.fetch_add(1, Ordering::Relaxed);
             fswtch::log_info("mod_media_bug_meter", "media bug attached");
@@ -117,63 +117,36 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_media_bug_meter", "loading module");
-    // SAFETY: The loader passes the module slot and pool, and the module name is static.
-    let module = match unsafe { Module::create(module_interface, pool, c"mod_media_bug_meter") } {
+    let module = match Module::create(module_interface, pool, c"mod_media_bug_meter") {
         Ok(module) => module,
         Err(error) => return error.0,
     };
 
-    // SAFETY: The module interface is live, and assigned C strings/function pointer are static.
-    if unsafe { add_application(module.as_ptr()) }.is_none() {
-        return fswtch::GENERR;
+    if let Err(error) = module.add_application(
+        c"rust_media_bug_meter",
+        c"Attaches a read/write-stream media bug and counts observed audio frames",
+        c"Rust media bug meter example",
+        c"rust_media_bug_meter",
+        meter_app,
+    ) {
+        return error.0;
     }
 
-    // SAFETY: The callback and C strings remain valid for the loaded module lifetime.
-    if let Err(error) = unsafe {
-        module.add_api(
-            c"rust_media_bug_meter_stats",
-            c"prints media bug meter counters",
-            c"rust_media_bug_meter_stats",
-            stats_api,
-        )
-    } {
+    if let Err(error) = module.add_api(
+        c"rust_media_bug_meter_stats",
+        c"prints media bug meter counters",
+        c"rust_media_bug_meter_stats",
+        stats_api,
+    ) {
         return error.0;
     }
 
     SUCCESS
 }
 
-unsafe fn add_application(
-    module: *mut sys::switch_loadable_module_interface_t,
-) -> Option<*mut sys::switch_application_interface_t> {
-    // SAFETY: `module` is a live module interface created by FreeSWITCH.
-    let raw = unsafe {
-        sys::switch_loadable_module_create_interface(
-            module,
-            sys::switch_module_interface_name_t::SWITCH_APPLICATION_INTERFACE,
-        )
-    }
-    .cast::<sys::switch_application_interface_t>();
-    if raw.is_null() {
-        return None;
-    }
-
-    // SAFETY: `raw` points to a FreeSWITCH application interface allocation.
-    unsafe {
-        (*raw).interface_name = c"rust_media_bug_meter".as_ptr();
-        (*raw).application_function = Some(meter_app);
-        (*raw).long_desc =
-            c"Attaches a read/write-stream media bug and counts observed audio frames".as_ptr();
-        (*raw).short_desc = c"Rust media bug meter example".as_ptr();
-        (*raw).syntax = c"rust_media_bug_meter".as_ptr();
-    }
-
-    Some(raw)
-}
-
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+    let Some(mut stream) = Stream::from_raw(stream) else {
         return FALSE;
     };
 
