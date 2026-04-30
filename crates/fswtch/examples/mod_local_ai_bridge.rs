@@ -1,7 +1,5 @@
 use std::{
-    env,
-    ffi::c_char,
-    fs,
+    env, fs,
     io::Write,
     path::PathBuf,
     sync::{
@@ -12,7 +10,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 use serde_json::{Value, json};
 
 static STATE: LazyLock<AiState> = LazyLock::new(AiState::from_env);
@@ -220,184 +218,163 @@ struct TtsResult {
     backend: &'static str,
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn status_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_local_ai_bridge", "rust_local_ai_status invoked");
-    let asr = STATE
-        .asr
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let tts = STATE
-        .tts
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+fswtch::api_callback! {
+    fn status_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_local_ai_bridge", "rust_local_ai_status invoked");
+        let asr = STATE
+            .asr
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let tts = STATE
+            .tts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    fswtch::write_stream_response(
-        stream,
-        &format!(
-            "asr_backend={} tts_backend={} nlp_backend={} asr_runs={} tts_runs={} nlp_runs={}\n",
-            backend_name(asr.is_ready(), STATE.allow_mock, "ort"),
-            backend_name(tts.is_ready(), STATE.allow_mock, "ort"),
-            if STATE.openai.is_ready() {
-                "openai"
-            } else if STATE.allow_mock {
-                "mock"
-            } else {
-                "unavailable"
-            },
-            ASR_RUNS.load(Ordering::Relaxed),
-            TTS_RUNS.load(Ordering::Relaxed),
-            NLP_RUNS.load(Ordering::Relaxed)
-        ),
-    )
+        stream.write(
+            &format!(
+                "asr_backend={} tts_backend={} nlp_backend={} asr_runs={} tts_runs={} nlp_runs={}\n",
+                backend_name(asr.is_ready(), STATE.allow_mock, "ort"),
+                backend_name(tts.is_ready(), STATE.allow_mock, "ort"),
+                if STATE.openai.is_ready() {
+                    "openai"
+                } else if STATE.allow_mock {
+                    "mock"
+                } else {
+                    "unavailable"
+                },
+                ASR_RUNS.load(Ordering::Relaxed),
+                TTS_RUNS.load(Ordering::Relaxed),
+                NLP_RUNS.load(Ordering::Relaxed)
+            ),
+        )
+    }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn asr_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_local_ai_bridge", "rust_local_asr invoked");
-    let Some(path) = fswtch::command_text(cmd) else {
-        let status =
-            fswtch::write_stream_response(stream, "usage: rust_local_asr <pcm16le-file>\n");
-        return fswtch::false_on_success(status);
-    };
-    let audio = fs::read(&path).unwrap_or_else(|error| {
-        fswtch::log_info(
-            "mod_local_ai_bridge",
-            format!("failed to read ASR input {path}: {error}"),
-        );
-        Vec::new()
-    });
-    let mut asr = STATE
-        .asr
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if !asr.is_ready() && !STATE.allow_mock {
-        fswtch::log_error(
-            "mod_local_ai_bridge",
-            "ASR backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
-        );
-        return fswtch::write_stream_response(
-            stream,
-            "asr backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1\n",
-        );
-    }
-    let result = asr.transcribe(&audio);
-
-    fswtch::write_stream_response(
-        stream,
-        &format!(
-            "backend={} confidence={:.2} text={}\n",
-            result.backend, result.confidence, result.text
-        ),
-    )
-}
-
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn tts_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_local_ai_bridge", "rust_local_tts invoked");
-    let Some(text) = fswtch::command_text(cmd) else {
-        let status = fswtch::write_stream_response(stream, "usage: rust_local_tts <text>\n");
-        return fswtch::false_on_success(status);
-    };
-
-    let mut tts = STATE
-        .tts
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if !tts.is_ready() && !STATE.allow_mock {
-        fswtch::log_error(
-            "mod_local_ai_bridge",
-            "TTS backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
-        );
-        return fswtch::write_stream_response(
-            stream,
-            "tts backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1\n",
-        );
-    }
-
-    match tts.synthesize(&text) {
-        Ok(result) => {
+fswtch::api_callback! {
+    fn asr_api(cmd, _session, stream) {
+        fswtch::log_info("mod_local_ai_bridge", "rust_local_asr invoked");
+        let Some(path) = cmd else {
+            let status = stream.write("usage: rust_local_asr <pcm16le-file>\n");
+            return fswtch::false_on_success(status);
+        };
+        let audio = fs::read(&path).unwrap_or_else(|error| {
             fswtch::log_info(
                 "mod_local_ai_bridge",
-                format!("TTS wrote {}", result.output_path.display()),
+                format!("failed to read ASR input {path}: {error}"),
             );
-            fswtch::write_stream_response(
-                stream,
-                &format!(
-                    "backend={} sample_rate={} samples={} output={}\n",
-                    result.backend,
-                    result.sample_rate,
-                    result.samples,
-                    result.output_path.display()
-                ),
-            )
-        }
-        Err(error) => {
-            fswtch::log_info("mod_local_ai_bridge", format!("TTS failed: {error}"));
-            fswtch::write_stream_response(stream, &format!("tts failed: {error}\n"))
-        }
-    }
-}
-
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn nlp_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp invoked");
-    let Some(prompt) = fswtch::command_text(cmd) else {
-        let status = fswtch::write_stream_response(stream, "usage: rust_local_nlp <prompt>\n");
-        return fswtch::false_on_success(status);
-    };
-
-    let worker = thread::Builder::new()
-        .name("fswtch-local-ai-nlp".to_owned())
-        .spawn(move || {
-            fswtch::log_info("mod_local_ai_bridge", "NLP worker started");
-            if let Err(error) = STATE.openai.respond(&prompt, STATE.allow_mock) {
-                fswtch::log_error(
-                    "mod_local_ai_bridge",
-                    format!("OpenAI NLP request failed: {error}"),
-                );
-            } else {
-                fswtch::log_info("mod_local_ai_bridge", "NLP worker completed");
-            }
+            Vec::new()
         });
-    if worker.is_err() {
-        return fswtch::GENERR;
-    }
+        let mut asr = STATE
+            .asr
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !asr.is_ready() && !STATE.allow_mock {
+            fswtch::log_error(
+                "mod_local_ai_bridge",
+                "ASR backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
+            );
+            return stream.write(
+                "asr backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1\n",
+            );
+        }
+        let result = asr.transcribe(&audio);
 
-    fswtch::write_stream_response(stream, "nlp request queued\n")
+        stream.write(
+            &format!(
+                "backend={} confidence={:.2} text={}\n",
+                result.backend, result.confidence, result.text
+            ),
+        )
+    }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn nlp_sync_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp_sync invoked");
-    let Some(prompt) = fswtch::command_text(cmd) else {
-        let status = fswtch::write_stream_response(stream, "usage: rust_local_nlp_sync <prompt>\n");
-        return fswtch::false_on_success(status);
-    };
+fswtch::api_callback! {
+    fn tts_api(cmd, _session, stream) {
+        fswtch::log_info("mod_local_ai_bridge", "rust_local_tts invoked");
+        let Some(text) = cmd else {
+            let status = stream.write("usage: rust_local_tts <text>\n");
+            return fswtch::false_on_success(status);
+        };
 
-    match STATE.openai.respond(&prompt, STATE.allow_mock) {
-        Ok(text) => fswtch::write_stream_response(stream, &format!("{text}\n")),
-        Err(error) => fswtch::write_stream_response(stream, &format!("nlp failed: {error}\n")),
+        let mut tts = STATE
+            .tts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !tts.is_ready() && !STATE.allow_mock {
+            fswtch::log_error(
+                "mod_local_ai_bridge",
+                "TTS backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
+            );
+            return stream.write(
+                "tts backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1\n",
+            );
+        }
+
+        match tts.synthesize(&text) {
+            Ok(result) => {
+                fswtch::log_info(
+                    "mod_local_ai_bridge",
+                    format!("TTS wrote {}", result.output_path.display()),
+                );
+                stream.write(
+                    &format!(
+                        "backend={} sample_rate={} samples={} output={}\n",
+                        result.backend,
+                        result.sample_rate,
+                        result.samples,
+                        result.output_path.display()
+                    ),
+                )
+            }
+            Err(error) => {
+                fswtch::log_info("mod_local_ai_bridge", format!("TTS failed: {error}"));
+                stream.write(&format!("tts failed: {error}\n"))
+            }
+        }
+    }
+}
+
+fswtch::api_callback! {
+    fn nlp_api(cmd, _session, stream) {
+        fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp invoked");
+        let Some(prompt) = cmd else {
+            let status = stream.write("usage: rust_local_nlp <prompt>\n");
+            return fswtch::false_on_success(status);
+        };
+
+        let worker = thread::Builder::new()
+            .name("fswtch-local-ai-nlp".to_owned())
+            .spawn(move || {
+                fswtch::log_info("mod_local_ai_bridge", "NLP worker started");
+                if let Err(error) = STATE.openai.respond(&prompt, STATE.allow_mock) {
+                    fswtch::log_error(
+                        "mod_local_ai_bridge",
+                        format!("OpenAI NLP request failed: {error}"),
+                    );
+                } else {
+                    fswtch::log_info("mod_local_ai_bridge", "NLP worker completed");
+                }
+            });
+        if worker.is_err() {
+            return fswtch::GENERR;
+        }
+
+        stream.write("nlp request queued\n")
+    }
+}
+
+fswtch::api_callback! {
+    fn nlp_sync_api(cmd, _session, stream) {
+        fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp_sync invoked");
+        let Some(prompt) = cmd else {
+            let status = stream.write("usage: rust_local_nlp_sync <prompt>\n");
+            return fswtch::false_on_success(status);
+        };
+
+        match STATE.openai.respond(&prompt, STATE.allow_mock) {
+            Ok(text) => stream.write(&format!("{text}\n")),
+            Err(error) => stream.write(&format!("nlp failed: {error}\n")),
+        }
     }
 }
 
@@ -408,49 +385,50 @@ unsafe extern "C" fn switch_module_load(
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "loading module");
     LazyLock::force(&STATE);
-    let module = match Module::create(module_interface, pool, c"mod_local_ai_bridge") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    for result in [
-        module.add_api(
-            c"rust_local_ai_status",
-            c"prints local ASR/TTS and OpenAI NLP integration status",
-            c"rust_local_ai_status",
-            status_api,
-        ),
-        module.add_api(
-            c"rust_local_asr",
-            c"runs local ORT speech recognition for a PCM file",
-            c"rust_local_asr <pcm16le-file>",
-            asr_api,
-        ),
-        module.add_api(
-            c"rust_local_tts",
-            c"runs local ORT speech synthesis for text",
-            c"rust_local_tts <text>",
-            tts_api,
-        ),
-        module.add_api(
-            c"rust_local_nlp",
-            c"queues an OpenAI Responses API NLP request",
-            c"rust_local_nlp <prompt>",
-            nlp_api,
-        ),
-        module.add_api(
-            c"rust_local_nlp_sync",
-            c"runs an OpenAI Responses API NLP request synchronously",
-            c"rust_local_nlp_sync <prompt>",
-            nlp_sync_api,
-        ),
-    ] {
-        if let Err(error) = result {
-            return error.0;
-        }
+    match ModuleBuilder::new(module_interface, pool, c"mod_local_ai_bridge")
+        .and_then(|module| {
+            module.api(
+                c"rust_local_ai_status",
+                c"prints local ASR/TTS and OpenAI NLP integration status",
+                c"rust_local_ai_status",
+                status_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_local_asr",
+                c"runs local ORT speech recognition for a PCM file",
+                c"rust_local_asr <pcm16le-file>",
+                asr_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_local_tts",
+                c"runs local ORT speech synthesis for text",
+                c"rust_local_tts <text>",
+                tts_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_local_nlp",
+                c"queues an OpenAI Responses API NLP request",
+                c"rust_local_nlp <prompt>",
+                nlp_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_local_nlp_sync",
+                c"runs an OpenAI Responses API NLP request synchronously",
+                c"rust_local_nlp_sync <prompt>",
+                nlp_sync_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }
 
 fn extract_response_text(response: &Value) -> Option<String> {

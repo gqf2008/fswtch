@@ -165,6 +165,81 @@ impl Module {
     }
 }
 
+pub struct ModuleBuilder {
+    module: Module,
+}
+
+impl ModuleBuilder {
+    pub fn new(
+        slot: *mut *mut sys::switch_loadable_module_interface_t,
+        pool: *mut sys::switch_memory_pool_t,
+        name: &'static CStr,
+    ) -> Result<Self> {
+        Ok(Self {
+            module: Module::create(slot, pool, name)?,
+        })
+    }
+
+    pub fn api(
+        self,
+        name: &'static CStr,
+        description: &'static CStr,
+        syntax: &'static CStr,
+        function: unsafe extern "C" fn(
+            *const c_char,
+            *mut sys::switch_core_session_t,
+            *mut sys::switch_stream_handle_t,
+        ) -> Status,
+    ) -> Result<Self> {
+        self.module.add_api(name, description, syntax, function)?;
+        Ok(self)
+    }
+
+    pub fn application(
+        self,
+        name: &'static CStr,
+        long_description: &'static CStr,
+        short_description: &'static CStr,
+        syntax: &'static CStr,
+        function: unsafe extern "C" fn(*mut sys::switch_core_session_t, *const c_char),
+    ) -> Result<Self> {
+        self.module
+            .add_application(name, long_description, short_description, syntax, function)?;
+        Ok(self)
+    }
+
+    pub fn chat_application(
+        self,
+        name: &'static CStr,
+        long_description: &'static CStr,
+        short_description: &'static CStr,
+        syntax: &'static CStr,
+        function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> Status,
+    ) -> Result<Self> {
+        self.module.add_chat_application(
+            name,
+            long_description,
+            short_description,
+            syntax,
+            function,
+        )?;
+        Ok(self)
+    }
+
+    pub fn endpoint(
+        self,
+        name: &'static CStr,
+        io_routines: *mut sys::switch_io_routines_t,
+    ) -> Result<Self> {
+        self.module.add_endpoint(name, io_routines)?;
+        Ok(self)
+    }
+
+    pub fn finish(self) -> Module {
+        self.module
+    }
+}
+
 #[derive(Copy, Clone)]
 pub struct ApiInterface {
     raw: NonNull<sys::switch_api_interface_t>,

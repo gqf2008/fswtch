@@ -1,10 +1,6 @@
-use std::{
-    ffi::{CString, c_char},
-    ptr,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 use serde_json::Value;
 
 static EVENTS_FIRED: AtomicUsize = AtomicUsize::new(0);
@@ -14,46 +10,36 @@ fswtch::module_exports! {
     load = switch_module_load,
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn emit_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_event_sink", "rust_event_sink_emit invoked");
-    let Some(request) = EventRequest::parse(cmd) else {
-        fswtch::log_info("mod_event_sink", "invalid event sink command");
-        let status = fswtch::write_stream_response(
-            stream,
-            "usage: rust_event_sink_emit <subclass> <json-object>\n",
-        );
-        return fswtch::false_on_success(status);
-    };
+fswtch::api_callback! {
+    fn emit_api(cmd, _session, stream) {
+        fswtch::log_info("mod_event_sink", "rust_event_sink_emit invoked");
+        let Some(request) = cmd.as_deref().and_then(EventRequest::parse) else {
+            fswtch::log_info("mod_event_sink", "invalid event sink command");
+            let status = stream.write("usage: rust_event_sink_emit <subclass> <json-object>\n");
+            return fswtch::false_on_success(status);
+        };
 
-    match fire_event(&request) {
-        Ok(()) => {
-            let count = EVENTS_FIRED.fetch_add(1, Ordering::Relaxed) + 1;
-            fswtch::log_info(
-                "mod_event_sink",
-                format!("fired event subclass={} count={count}", request.subclass),
-            );
-            fswtch::write_stream_response(stream, &format!("event fired count={count}\n"))
+        match fire_event(&request) {
+            Ok(()) => {
+                let count = EVENTS_FIRED.fetch_add(1, Ordering::Relaxed) + 1;
+                fswtch::log_info(
+                    "mod_event_sink",
+                    format!("fired event subclass={} count={count}", request.subclass),
+                );
+                stream.write(&format!("event fired count={count}\n"))
+            }
+            Err(error) => error.0,
         }
-        Err(error) => error.0,
     }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn stats_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_event_sink", "rust_event_sink_stats invoked");
-    fswtch::write_stream_response(
-        stream,
-        &format!("events_fired={}\n", EVENTS_FIRED.load(Ordering::Relaxed)),
-    )
+fswtch::api_callback! {
+    fn stats_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_event_sink", "rust_event_sink_stats invoked");
+        stream.write(
+            &format!("events_fired={}\n", EVENTS_FIRED.load(Ordering::Relaxed)),
+        )
+    }
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -62,31 +48,26 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_event_sink", "loading module");
-    let module = match Module::create(module_interface, pool, c"mod_event_sink") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    for result in [
-        module.add_api(
-            c"rust_event_sink_emit",
-            c"fires a custom event from a JSON object",
-            c"rust_event_sink_emit <subclass> <json-object>",
-            emit_api,
-        ),
-        module.add_api(
-            c"rust_event_sink_stats",
-            c"prints event sink counters",
-            c"rust_event_sink_stats",
-            stats_api,
-        ),
-    ] {
-        if let Err(error) = result {
-            return error.0;
-        }
+    match ModuleBuilder::new(module_interface, pool, c"mod_event_sink")
+        .and_then(|module| {
+            module.api(
+                c"rust_event_sink_emit",
+                c"fires a custom event from a JSON object",
+                c"rust_event_sink_emit <subclass> <json-object>",
+                emit_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_event_sink_stats",
+                c"prints event sink counters",
+                c"rust_event_sink_stats",
+                stats_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }
 
 #[derive(Debug)]
@@ -96,8 +77,7 @@ struct EventRequest {
 }
 
 impl EventRequest {
-    fn parse(cmd: *const c_char) -> Option<Self> {
-        let text = fswtch::command_text(cmd)?;
+    fn parse(text: &str) -> Option<Self> {
         let (subclass, json) = text.split_once(char::is_whitespace)?;
         let Value::Object(object) = serde_json::from_str(json.trim()).ok()? else {
             return None;
@@ -122,56 +102,14 @@ impl EventRequest {
 }
 
 fn fire_event(request: &EventRequest) -> fswtch::Result<()> {
-    let subclass =
-        CString::new(request.subclass.as_str()).map_err(|_| fswtch::SwitchError(fswtch::GENERR))?;
-    let mut event = ptr::null_mut();
-    // SAFETY: FreeSWITCH initializes `event` for the custom subclass when the call succeeds.
-    let status = unsafe {
-        sys::switch_event_create_subclass_detailed(
-            c"mod_event_sink.rs".as_ptr(),
-            c"fire_event".as_ptr(),
-            line!() as _,
-            &mut event,
-            sys::switch_event_types_t::SWITCH_EVENT_CUSTOM,
-            subclass.as_ptr(),
-        )
-    };
-    fswtch::status_to_result(status)?;
+    let subclass = fswtch::cstring(&request.subclass)?;
+    let mut event = fswtch::Event::custom(&subclass)?;
 
     for (name, value) in &request.headers {
-        add_event_header(event, name, value)?;
+        event.add_header_name(name, value)?;
     }
 
-    // SAFETY: `event` was created above and ownership is transferred to FreeSWITCH on success.
-    let status = unsafe {
-        sys::switch_event_fire_detailed(
-            c"mod_event_sink.rs".as_ptr(),
-            c"fire_event".as_ptr(),
-            line!() as _,
-            &mut event,
-            ptr::null_mut(),
-        )
-    };
-    fswtch::status_to_result(status)
-}
-
-fn add_event_header(
-    event: *mut sys::switch_event_t,
-    name: &str,
-    value: &str,
-) -> fswtch::Result<()> {
-    let name = CString::new(name).map_err(|_| fswtch::SwitchError(fswtch::GENERR))?;
-    let value = CString::new(value).map_err(|_| fswtch::SwitchError(fswtch::GENERR))?;
-    // SAFETY: `event` is live and the header/value C strings are valid for this call.
-    let status = unsafe {
-        sys::switch_event_add_header_string(
-            event,
-            sys::switch_stack_t::SWITCH_STACK_BOTTOM,
-            name.as_ptr(),
-            value.as_ptr(),
-        )
-    };
-    fswtch::status_to_result(status)
+    event.fire()
 }
 
 fn header_case(name: &str) -> String {

@@ -1,11 +1,10 @@
 use std::{
     collections::HashMap,
-    ffi::c_char,
     sync::{LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 
 static LIMITERS: LazyLock<Mutex<HashMap<String, Bucket>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -30,8 +29,7 @@ struct LimitRequest {
 }
 
 impl LimitRequest {
-    fn parse(cmd: *const c_char) -> Option<Self> {
-        let text = fswtch::command_text(cmd)?;
+    fn parse(text: &str) -> Option<Self> {
         let mut parts = text.split_whitespace();
         let key = parts.next()?.to_owned();
         let limit = parts
@@ -50,74 +48,64 @@ impl LimitRequest {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn allow_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_rate_limiter", "rust_rate_limit invoked");
-    let Some(request) = LimitRequest::parse(cmd) else {
-        let status = fswtch::write_stream_response(
-            stream,
-            "usage: rust_rate_limit <key> [limit] [window-secs]\n",
+fswtch::api_callback! {
+    fn allow_api(cmd, _session, stream) {
+        fswtch::log_info("mod_rate_limiter", "rust_rate_limit invoked");
+        let Some(request) = cmd.as_deref().and_then(LimitRequest::parse) else {
+            let status = stream.write("usage: rust_rate_limit <key> [limit] [window-secs]\n");
+            return fswtch::false_on_success(status);
+        };
+
+        let now = Instant::now();
+        let mut limiters = LIMITERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !limiters.contains_key(&request.key) && limiters.len() >= MAX_BUCKETS {
+            fswtch::log_error("mod_rate_limiter", "rate limiter bucket limit reached");
+            return stream.write("rate limiter bucket limit reached\n");
+        }
+        let bucket = limiters
+            .entry(request.key.clone())
+            .or_insert_with(|| Bucket {
+                remaining: request.limit,
+                reset_at: now + request.window,
+            });
+
+        if now >= bucket.reset_at {
+            bucket.remaining = request.limit;
+            bucket.reset_at = now + request.window;
+        }
+
+        let allowed = bucket.remaining > 0;
+        if allowed {
+            bucket.remaining -= 1;
+        }
+        fswtch::log_info(
+            "mod_rate_limiter",
+            format!(
+                "key={} allowed={} remaining={}",
+                request.key, allowed, bucket.remaining
+            ),
         );
-        return fswtch::false_on_success(status);
-    };
 
-    let now = Instant::now();
-    let mut limiters = LIMITERS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if !limiters.contains_key(&request.key) && limiters.len() >= MAX_BUCKETS {
-        fswtch::log_error("mod_rate_limiter", "rate limiter bucket limit reached");
-        return fswtch::write_stream_response(stream, "rate limiter bucket limit reached\n");
+        stream.write(
+            &format!(
+                "key={} allowed={} remaining={}\n",
+                request.key, allowed, bucket.remaining
+            ),
+        )
     }
-    let bucket = limiters
-        .entry(request.key.clone())
-        .or_insert_with(|| Bucket {
-            remaining: request.limit,
-            reset_at: now + request.window,
-        });
-
-    if now >= bucket.reset_at {
-        bucket.remaining = request.limit;
-        bucket.reset_at = now + request.window;
-    }
-
-    let allowed = bucket.remaining > 0;
-    if allowed {
-        bucket.remaining -= 1;
-    }
-    fswtch::log_info(
-        "mod_rate_limiter",
-        format!(
-            "key={} allowed={} remaining={}",
-            request.key, allowed, bucket.remaining
-        ),
-    );
-
-    fswtch::write_stream_response(
-        stream,
-        &format!(
-            "key={} allowed={} remaining={}\n",
-            request.key, allowed, bucket.remaining
-        ),
-    )
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn reset_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_rate_limiter", "rust_rate_limit_reset invoked");
-    LIMITERS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clear();
-    fswtch::write_stream_response(stream, "rate limiters reset\n")
+fswtch::api_callback! {
+    fn reset_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_rate_limiter", "rust_rate_limit_reset invoked");
+        LIMITERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
+        stream.write("rate limiters reset\n")
+    }
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -126,29 +114,24 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_rate_limiter", "loading module");
-    let module = match Module::create(module_interface, pool, c"mod_rate_limiter") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    for result in [
-        module.add_api(
-            c"rust_rate_limit",
-            c"checks a token-bucket rate limit",
-            c"rust_rate_limit <key> [limit] [window-secs]",
-            allow_api,
-        ),
-        module.add_api(
-            c"rust_rate_limit_reset",
-            c"clears all rate limiter buckets",
-            c"rust_rate_limit_reset",
-            reset_api,
-        ),
-    ] {
-        if let Err(error) = result {
-            return error.0;
-        }
+    match ModuleBuilder::new(module_interface, pool, c"mod_rate_limiter")
+        .and_then(|module| {
+            module.api(
+                c"rust_rate_limit",
+                c"checks a token-bucket rate limit",
+                c"rust_rate_limit <key> [limit] [window-secs]",
+                allow_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_rate_limit_reset",
+                c"clears all rate limiter buckets",
+                c"rust_rate_limit_reset",
+                reset_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }

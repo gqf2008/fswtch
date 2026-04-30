@@ -1,5 +1,4 @@
 use std::{
-    ffi::c_char,
     io::{Read, Write},
     net::TcpStream,
     sync::atomic::{AtomicUsize, Ordering},
@@ -7,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 
 static WEBHOOKS_QUEUED: AtomicUsize = AtomicUsize::new(0);
 static WEBHOOKS_SENT: AtomicUsize = AtomicUsize::new(0);
@@ -32,8 +31,7 @@ struct HttpUrl {
 }
 
 impl WebhookRequest {
-    fn parse(cmd: *const c_char) -> Option<Self> {
-        let text = fswtch::command_text(cmd)?;
+    fn parse(text: &str) -> Option<Self> {
         let (url, body) = text.split_once(char::is_whitespace)?;
         Some(Self {
             url: HttpUrl::parse(url)?,
@@ -60,61 +58,51 @@ impl HttpUrl {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn post_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_http_webhook", "rust_webhook_post invoked");
-    let Some(request) = WebhookRequest::parse(cmd) else {
-        fswtch::log_info("mod_http_webhook", "invalid webhook command");
-        let status = fswtch::write_stream_response(
-            stream,
-            "usage: rust_webhook_post <http-url> <json-body>\n",
-        );
-        return fswtch::false_on_success(status);
-    };
+fswtch::api_callback! {
+    fn post_api(cmd, _session, stream) {
+        fswtch::log_info("mod_http_webhook", "rust_webhook_post invoked");
+        let Some(request) = cmd.as_deref().and_then(WebhookRequest::parse) else {
+            fswtch::log_info("mod_http_webhook", "invalid webhook command");
+            let status = stream.write("usage: rust_webhook_post <http-url> <json-body>\n");
+            return fswtch::false_on_success(status);
+        };
 
-    WEBHOOKS_QUEUED.fetch_add(1, Ordering::Relaxed);
-    let worker = thread::Builder::new()
-        .name("fswtch-http-webhook".to_owned())
-        .spawn(move || match post_webhook(&request) {
-            Ok(()) => {
-                fswtch::log_info("mod_http_webhook", "webhook delivered");
-                WEBHOOKS_SENT.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(error) => {
-                WEBHOOKS_FAILED.fetch_add(1, Ordering::Relaxed);
-                fswtch::log_error(
-                    "mod_http_webhook",
-                    format!("webhook delivery failed: {error}"),
-                );
-            }
-        });
-    if worker.is_err() {
-        return fswtch::GENERR;
+        WEBHOOKS_QUEUED.fetch_add(1, Ordering::Relaxed);
+        let worker = thread::Builder::new()
+            .name("fswtch-http-webhook".to_owned())
+            .spawn(move || match post_webhook(&request) {
+                Ok(()) => {
+                    fswtch::log_info("mod_http_webhook", "webhook delivered");
+                    WEBHOOKS_SENT.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(error) => {
+                    WEBHOOKS_FAILED.fetch_add(1, Ordering::Relaxed);
+                    fswtch::log_error(
+                        "mod_http_webhook",
+                        format!("webhook delivery failed: {error}"),
+                    );
+                }
+            });
+        if worker.is_err() {
+            return fswtch::GENERR;
+        }
+
+        stream.write("webhook queued\n")
     }
-
-    fswtch::write_stream_response(stream, "webhook queued\n")
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn stats_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_http_webhook", "rust_webhook_stats invoked");
-    fswtch::write_stream_response(
-        stream,
-        &format!(
-            "queued={} sent={} failed={}\n",
-            WEBHOOKS_QUEUED.load(Ordering::Relaxed),
-            WEBHOOKS_SENT.load(Ordering::Relaxed),
-            WEBHOOKS_FAILED.load(Ordering::Relaxed)
-        ),
-    )
+fswtch::api_callback! {
+    fn stats_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_http_webhook", "rust_webhook_stats invoked");
+        stream.write(
+            &format!(
+                "queued={} sent={} failed={}\n",
+                WEBHOOKS_QUEUED.load(Ordering::Relaxed),
+                WEBHOOKS_SENT.load(Ordering::Relaxed),
+                WEBHOOKS_FAILED.load(Ordering::Relaxed)
+            ),
+        )
+    }
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -123,31 +111,26 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_http_webhook", "loading module");
-    let module = match Module::create(module_interface, pool, c"mod_http_webhook") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    for result in [
-        module.add_api(
-            c"rust_webhook_post",
-            c"queues a plain HTTP webhook POST",
-            c"rust_webhook_post <http-url> <json-body>",
-            post_api,
-        ),
-        module.add_api(
-            c"rust_webhook_stats",
-            c"prints webhook delivery counters",
-            c"rust_webhook_stats",
-            stats_api,
-        ),
-    ] {
-        if let Err(error) = result {
-            return error.0;
-        }
+    match ModuleBuilder::new(module_interface, pool, c"mod_http_webhook")
+        .and_then(|module| {
+            module.api(
+                c"rust_webhook_post",
+                c"queues a plain HTTP webhook POST",
+                c"rust_webhook_post <http-url> <json-body>",
+                post_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_webhook_stats",
+                c"prints webhook delivery counters",
+                c"rust_webhook_stats",
+                stats_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }
 
 fn post_webhook(request: &WebhookRequest) -> std::io::Result<()> {

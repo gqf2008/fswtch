@@ -1,9 +1,6 @@
-use std::{
-    ffi::c_char,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 
 static LOADS: AtomicUsize = AtomicUsize::new(0);
 static RUNTIME_TICKS: AtomicUsize = AtomicUsize::new(0);
@@ -16,22 +13,18 @@ fswtch::module_exports! {
     runtime = Some(switch_module_runtime),
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn stats_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_lifecycle", "rust_lifecycle_stats invoked");
-    fswtch::write_stream_response(
-        stream,
-        &format!(
-            "loads={} runtime_ticks={} shutdowns={}\n",
-            LOADS.load(Ordering::Relaxed),
-            RUNTIME_TICKS.load(Ordering::Relaxed),
-            SHUTDOWNS.load(Ordering::Relaxed)
-        ),
-    )
+fswtch::api_callback! {
+    fn stats_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_lifecycle", "rust_lifecycle_stats invoked");
+        stream.write(
+            &format!(
+                "loads={} runtime_ticks={} shutdowns={}\n",
+                LOADS.load(Ordering::Relaxed),
+                RUNTIME_TICKS.load(Ordering::Relaxed),
+                SHUTDOWNS.load(Ordering::Relaxed)
+            ),
+        )
+    }
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -41,20 +34,17 @@ unsafe extern "C" fn switch_module_load(
 ) -> Status {
     fswtch::log_info("mod_lifecycle", "loading module");
     LOADS.fetch_add(1, Ordering::Relaxed);
-    let module = match Module::create(module_interface, pool, c"mod_lifecycle") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-    if let Err(error) = module.add_api(
-        c"rust_lifecycle_stats",
-        c"prints module lifecycle counters",
-        c"rust_lifecycle_stats",
-        stats_api,
-    ) {
-        return error.0;
+    match ModuleBuilder::new(module_interface, pool, c"mod_lifecycle").and_then(|module| {
+        module.api(
+            c"rust_lifecycle_stats",
+            c"prints module lifecycle counters",
+            c"rust_lifecycle_stats",
+            stats_api,
+        )
+    }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }
 
 // SAFETY: FreeSWITCH invokes runtime callbacks using the module function-table ABI.

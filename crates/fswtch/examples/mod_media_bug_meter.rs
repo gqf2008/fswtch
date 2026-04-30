@@ -1,11 +1,8 @@
-use std::{
-    ffi::c_char,
-    sync::atomic::{AtomicUsize, Ordering},
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use fswtch::{
     MediaBugAction, MediaBugConfig, MediaBugContext, MediaBugFlags, MediaBugHandler, MediaFrame,
-    Module, SUCCESS, Status, sys,
+    ModuleBuilder, SUCCESS, Status, sys,
 };
 
 static BUGS_ATTACHED: AtomicUsize = AtomicUsize::new(0);
@@ -57,58 +54,54 @@ impl MediaBugHandler for MeterState {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_application_function_t`.
-unsafe extern "C" fn meter_app(session: *mut sys::switch_core_session_t, _data: *const c_char) {
-    fswtch::log_info("mod_media_bug_meter", "dialplan application invoked");
-    if session.is_null() {
-        fswtch::log_info("mod_media_bug_meter", "missing session");
-        return;
-    }
+fswtch::app_callback! {
+    fn meter_app(session, _data) {
+        fswtch::log_info("mod_media_bug_meter", "dialplan application invoked");
+        let Some(session) = session else {
+            fswtch::log_info("mod_media_bug_meter", "missing session");
+            return;
+        };
 
-    let config = MediaBugConfig::new(
-        c"rust_media_bug_meter",
-        c"read-write-stream",
-        MediaBugFlags::READ_STREAM | MediaBugFlags::WRITE_STREAM | MediaBugFlags::NO_PAUSE,
-    );
-    let handler = MeterState {
-        read_frames: 0,
-        write_frames: 0,
-        read_audio_bytes: 0,
-        write_audio_bytes: 0,
-    };
+        let config = MediaBugConfig::new(
+            c"rust_media_bug_meter",
+            c"read-write-stream",
+            MediaBugFlags::READ_STREAM | MediaBugFlags::WRITE_STREAM | MediaBugFlags::NO_PAUSE,
+        );
+        let handler = MeterState {
+            read_frames: 0,
+            write_frames: 0,
+            read_audio_bytes: 0,
+            write_audio_bytes: 0,
+        };
 
-    // SAFETY: FreeSWITCH provides a live session for this application invocation.
-    match fswtch::attach_media_bug(session, config, handler) {
-        Ok(_) => {
-            BUGS_ATTACHED.fetch_add(1, Ordering::Relaxed);
-            fswtch::log_info("mod_media_bug_meter", "media bug attached");
+        match fswtch::attach_media_bug(session.as_ptr(), config, handler) {
+            Ok(_) => {
+                BUGS_ATTACHED.fetch_add(1, Ordering::Relaxed);
+                fswtch::log_info("mod_media_bug_meter", "media bug attached");
+            }
+            Err(error) => fswtch::log_error(
+                "mod_media_bug_meter",
+                format!("failed to attach media bug: {error}"),
+            ),
         }
-        Err(error) => fswtch::log_error(
-            "mod_media_bug_meter",
-            format!("failed to attach media bug: {error}"),
-        ),
     }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn stats_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_media_bug_meter", "rust_media_bug_meter_stats invoked");
-    fswtch::write_stream_response(
-        stream,
-        &format!(
-            "attached={} closed={} read_frames={} write_frames={} read_audio_bytes={} write_audio_bytes={}\n",
-            BUGS_ATTACHED.load(Ordering::Relaxed),
-            BUGS_CLOSED.load(Ordering::Relaxed),
-            READ_FRAMES_SEEN.load(Ordering::Relaxed),
-            WRITE_FRAMES_SEEN.load(Ordering::Relaxed),
-            READ_AUDIO_BYTES_SEEN.load(Ordering::Relaxed),
-            WRITE_AUDIO_BYTES_SEEN.load(Ordering::Relaxed)
-        ),
-    )
+fswtch::api_callback! {
+    fn stats_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_media_bug_meter", "rust_media_bug_meter_stats invoked");
+        stream.write(
+            &format!(
+                "attached={} closed={} read_frames={} write_frames={} read_audio_bytes={} write_audio_bytes={}\n",
+                BUGS_ATTACHED.load(Ordering::Relaxed),
+                BUGS_CLOSED.load(Ordering::Relaxed),
+                READ_FRAMES_SEEN.load(Ordering::Relaxed),
+                WRITE_FRAMES_SEEN.load(Ordering::Relaxed),
+                READ_AUDIO_BYTES_SEEN.load(Ordering::Relaxed),
+                WRITE_AUDIO_BYTES_SEEN.load(Ordering::Relaxed)
+            ),
+        )
+    }
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -117,29 +110,25 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_media_bug_meter", "loading module");
-    let module = match Module::create(module_interface, pool, c"mod_media_bug_meter") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    if let Err(error) = module.add_application(
-        c"rust_media_bug_meter",
-        c"Attaches a read/write-stream media bug and counts observed audio frames",
-        c"Rust media bug meter example",
-        c"rust_media_bug_meter",
-        meter_app,
-    ) {
-        return error.0;
+    match ModuleBuilder::new(module_interface, pool, c"mod_media_bug_meter")
+        .and_then(|module| {
+            module.application(
+                c"rust_media_bug_meter",
+                c"Attaches a read/write-stream media bug and counts observed audio frames",
+                c"Rust media bug meter example",
+                c"rust_media_bug_meter",
+                meter_app,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_media_bug_meter_stats",
+                c"prints media bug meter counters",
+                c"rust_media_bug_meter_stats",
+                stats_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    if let Err(error) = module.add_api(
-        c"rust_media_bug_meter_stats",
-        c"prints media bug meter counters",
-        c"rust_media_bug_meter_stats",
-        stats_api,
-    ) {
-        return error.0;
-    }
-
-    SUCCESS
 }

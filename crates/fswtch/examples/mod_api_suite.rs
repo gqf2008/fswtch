@@ -1,42 +1,31 @@
-use std::ffi::c_char;
-
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 
 fswtch::module_exports! {
     module = mod_api_suite,
     load = switch_module_load,
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn ping_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
+fswtch::api_callback! {
+fn ping_api(_cmd, _session, stream) {
     fswtch::log_info("mod_api_suite", "rust_ping invoked");
-    fswtch::write_stream_response(stream, "pong\n")
+    stream.write("pong\n")
+}
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn echo_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
+fswtch::api_callback! {
+fn echo_api(cmd, _session, stream) {
     fswtch::log_info("mod_api_suite", "rust_echo invoked");
-    let text = fswtch::command_text(cmd).unwrap_or_default();
-    fswtch::write_stream_response(stream, &format!("{text}\n"))
+    let text = cmd.unwrap_or_default();
+    stream.write(&format!("{text}\n"))
+}
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn upper_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
+fswtch::api_callback! {
+fn upper_api(cmd, _session, stream) {
     fswtch::log_info("mod_api_suite", "rust_upper invoked");
-    let text = fswtch::command_text(cmd).unwrap_or_default();
-    fswtch::write_stream_response(stream, &format!("{}\n", text.to_uppercase()))
+    let text = cmd.unwrap_or_default();
+    stream.write(&format!("{}\n", text.to_uppercase()))
+}
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -45,30 +34,25 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_api_suite", "loading module");
-    let module = match Module::create(module_interface, pool, c"mod_api_suite") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    for result in [
-        module.add_api(c"rust_ping", c"returns pong", c"rust_ping", ping_api),
-        module.add_api(
-            c"rust_echo",
-            c"echoes the command argument",
-            c"rust_echo <text>",
-            echo_api,
-        ),
-        module.add_api(
-            c"rust_upper",
-            c"uppercases the command argument",
-            c"rust_upper <text>",
-            upper_api,
-        ),
-    ] {
-        if let Err(error) = result {
-            return error.0;
-        }
+    match ModuleBuilder::new(module_interface, pool, c"mod_api_suite")
+        .and_then(|module| module.api(c"rust_ping", c"returns pong", c"rust_ping", ping_api))
+        .and_then(|module| {
+            module.api(
+                c"rust_echo",
+                c"echoes the command argument",
+                c"rust_echo <text>",
+                echo_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_upper",
+                c"uppercases the command argument",
+                c"rust_upper <text>",
+                upper_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }

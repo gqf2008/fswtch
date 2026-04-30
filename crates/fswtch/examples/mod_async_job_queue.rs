@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    ffi::c_char,
     sync::{
         LazyLock, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -10,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 
 static JOB_QUEUE: LazyLock<JobQueue> = LazyLock::new(JobQueue::start);
 const MAX_JOB_RESULTS: usize = 4096;
@@ -114,53 +113,46 @@ fn prune_oldest_result(results: &mut HashMap<u64, JobResult>) {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn submit_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_async_job_queue", "rust_job_submit invoked");
-    let Some(payload) = fswtch::command_text(cmd) else {
-        fswtch::log_info("mod_async_job_queue", "missing job payload");
-        let status = fswtch::write_stream_response(stream, "usage: rust_job_submit <payload>\n");
-        return fswtch::false_on_success(status);
-    };
+fswtch::api_callback! {
+    fn submit_api(cmd, _session, stream) {
+        fswtch::log_info("mod_async_job_queue", "rust_job_submit invoked");
+        let Some(payload) = cmd else {
+            fswtch::log_info("mod_async_job_queue", "missing job payload");
+            let status = stream.write("usage: rust_job_submit <payload>\n");
+            return fswtch::false_on_success(status);
+        };
 
-    match JOB_QUEUE.submit(payload) {
-        Ok(id) => fswtch::write_stream_response(stream, &format!("job queued id={id}\n")),
-        Err(error) => {
-            fswtch::log_error("mod_async_job_queue", error);
-            fswtch::write_stream_response(stream, &format!("job queue unavailable: {error}\n"))
+        match JOB_QUEUE.submit(payload) {
+            Ok(id) => stream.write(&format!("job queued id={id}\n")),
+            Err(error) => {
+                fswtch::log_error("mod_async_job_queue", error);
+                stream.write(&format!("job queue unavailable: {error}\n"))
+            }
         }
     }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn status_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_async_job_queue", "rust_job_status invoked");
-    let Some(id) = fswtch::command_text(cmd).and_then(|text| text.parse::<u64>().ok()) else {
-        let status = fswtch::write_stream_response(stream, "usage: rust_job_status <id>\n");
-        return fswtch::false_on_success(status);
-    };
+fswtch::api_callback! {
+    fn status_api(cmd, _session, stream) {
+        fswtch::log_info("mod_async_job_queue", "rust_job_status invoked");
+        let Some(id) = cmd.and_then(|text| text.parse::<u64>().ok()) else {
+            let status = stream.write("usage: rust_job_status <id>\n");
+            return fswtch::false_on_success(status);
+        };
 
-    let results = JOB_QUEUE
-        .results
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    match results.get(&id) {
-        Some(result) => fswtch::write_stream_response(
-            stream,
-            &format!(
-                "id={id} status={} detail={}\n",
-                result.status, result.detail
+        let results = JOB_QUEUE
+            .results
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match results.get(&id) {
+            Some(result) => stream.write(
+                &format!(
+                    "id={id} status={} detail={}\n",
+                    result.status, result.detail
+                ),
             ),
-        ),
-        None => fswtch::write_stream_response(stream, &format!("id={id} status=missing\n")),
+            None => stream.write(&format!("id={id} status=missing\n")),
+        }
     }
 }
 
@@ -171,29 +163,24 @@ unsafe extern "C" fn switch_module_load(
 ) -> Status {
     fswtch::log_info("mod_async_job_queue", "loading module");
     LazyLock::force(&JOB_QUEUE);
-    let module = match Module::create(module_interface, pool, c"mod_async_job_queue") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    for result in [
-        module.add_api(
-            c"rust_job_submit",
-            c"queues background work without blocking FreeSWITCH API execution",
-            c"rust_job_submit <payload>",
-            submit_api,
-        ),
-        module.add_api(
-            c"rust_job_status",
-            c"checks background job status",
-            c"rust_job_status <id>",
-            status_api,
-        ),
-    ] {
-        if let Err(error) = result {
-            return error.0;
-        }
+    match ModuleBuilder::new(module_interface, pool, c"mod_async_job_queue")
+        .and_then(|module| {
+            module.api(
+                c"rust_job_submit",
+                c"queues background work without blocking FreeSWITCH API execution",
+                c"rust_job_submit <payload>",
+                submit_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_job_status",
+                c"checks background job status",
+                c"rust_job_status <id>",
+                status_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }

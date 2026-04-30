@@ -18,9 +18,13 @@ The `fswtch` crate provides a small higher-level layer over the raw FreeSWITCH A
 - `module_exports!` declares the exported FreeSWITCH module table.
 - `Module::create` builds the loader-owned module interface from the raw load callback arguments.
 - `Module::add_api`, `Module::add_application`, `Module::add_chat_application`, and `Module::add_endpoint` register common FreeSWITCH interfaces without hand-writing interface allocation and field assignment.
+- `ModuleBuilder` chains module and interface registration in load callbacks.
+- `api_callback!`, `app_callback!`, and `chat_callback!` generate FreeSWITCH ABI callbacks while giving the callback body typed wrapper values.
 - `Session` wraps common application callback operations such as answering, sleeping, and file playback.
 - `Stream` wraps `switch_stream_handle_t` for byte and string responses.
 - `command_text` converts nullable FreeSWITCH callback command pointers into trimmed Rust strings.
+- `Event` and `EventRef` wrap custom event creation, headers, firing, cleanup, and inbound event header reads.
+- `cstring` converts Rust strings into `CString` values with the crate's `SwitchError` type.
 - `Status`, `SwitchError`, and `status_to_result` convert common FreeSWITCH status handling into Rust `Result` values.
 - `LogLevel`, `log`, and convenience helpers such as `log_info`, `log_warning`, `log_error`, and `log_debug1` through `log_debug10` route module logs through FreeSWITCH logging.
 - `MediaBugConfig`, `MediaBugFlags`, `MediaBugHandler`, and `attach_media_bug` provide a higher-level media bug API for bidirectional read/write audio stream callbacks and read/write replacement hooks.

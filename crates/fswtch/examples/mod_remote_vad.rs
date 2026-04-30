@@ -1,11 +1,6 @@
-use std::{
-    error::Error,
-    ffi::{CStr, CString, c_char},
-    ptr, thread,
-    time::Duration,
-};
+use std::{error::Error, thread, time::Duration};
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -20,80 +15,75 @@ fswtch::module_exports! {
     load = switch_module_load,
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn start_vad_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_remote_vad", "rust_vad_start invoked");
-    let Some(config) = VadConfig::parse(cmd) else {
-        fswtch::log_info("mod_remote_vad", "invalid command syntax");
-        let status = fswtch::write_stream_response(
-            stream,
-            "usage: rust_vad_start <call-uuid> <wss://vad.example/session>\n",
-        );
-        return fswtch::false_on_success(status);
-    };
+fswtch::api_callback! {
+    fn start_vad_api(cmd, _session, stream) {
+        fswtch::log_info("mod_remote_vad", "rust_vad_start invoked");
+        let Some(config) = cmd.as_deref().and_then(VadConfig::parse) else {
+            fswtch::log_info("mod_remote_vad", "invalid command syntax");
+            let status =
+                stream.write("usage: rust_vad_start <call-uuid> <wss://vad.example/session>\n");
+            return fswtch::false_on_success(status);
+        };
 
-    let status = fswtch::write_stream_response(stream, "remote VAD worker started\n");
-    if status != SUCCESS {
-        return status;
-    }
+        let status = stream.write("remote VAD worker started\n");
+        if status != SUCCESS {
+            return status;
+        }
 
-    let worker = thread::Builder::new()
-        .name("fswtch-remote-vad".to_owned())
-        .spawn(move || {
-            fswtch::log_info(
-                "mod_remote_vad",
-                format!("worker starting for {}", config.call_uuid),
-            );
-            let runtime = match tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(error) => {
-                    if let Err(event_error) = fire_vad_event(
-                        &config,
-                        VadEventKind::Error,
-                        &format!("failed to start async runtime: {error}"),
-                        None,
-                    ) {
+        let worker = thread::Builder::new()
+            .name("fswtch-remote-vad".to_owned())
+            .spawn(move || {
+                fswtch::log_info(
+                    "mod_remote_vad",
+                    format!("worker starting for {}", config.call_uuid),
+                );
+                let runtime = match tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        if let Err(event_error) = fire_vad_event(
+                            &config,
+                            VadEventKind::Error,
+                            &format!("failed to start async runtime: {error}"),
+                            None,
+                        ) {
+                            fswtch::log_error(
+                                "mod_remote_vad",
+                                format!("failed to fire VAD runtime error event: {event_error}"),
+                            );
+                        }
+                        return;
+                    }
+                };
+
+                runtime.block_on(async move {
+                    if let Err(error) = run_remote_vad_worker(config.clone()).await
+                        && let Err(event_error) = fire_vad_event(
+                            &config,
+                            VadEventKind::Error,
+                            &format!("remote VAD worker failed: {error}"),
+                            None,
+                        )
+                    {
                         fswtch::log_error(
                             "mod_remote_vad",
-                            format!("failed to fire VAD runtime error event: {event_error}"),
+                            format!("failed to fire VAD worker error event: {event_error}"),
                         );
                     }
-                    return;
-                }
-            };
-
-            runtime.block_on(async move {
-                if let Err(error) = run_remote_vad_worker(config.clone()).await
-                    && let Err(event_error) = fire_vad_event(
-                        &config,
-                        VadEventKind::Error,
-                        &format!("remote VAD worker failed: {error}"),
-                        None,
-                    )
-                {
-                    fswtch::log_error(
-                        "mod_remote_vad",
-                        format!("failed to fire VAD worker error event: {event_error}"),
-                    );
-                }
+                });
             });
-        });
-    if let Err(error) = worker {
-        fswtch::log_error(
-            "mod_remote_vad",
-            format!("failed to start remote VAD worker: {error}"),
-        );
-        return fswtch::GENERR;
-    }
+        if let Err(error) = worker {
+            fswtch::log_error(
+                "mod_remote_vad",
+                format!("failed to start remote VAD worker: {error}"),
+            );
+            return fswtch::GENERR;
+        }
 
-    SUCCESS
+        SUCCESS
+    }
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -102,20 +92,17 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_remote_vad", "loading module");
-    let module = match Module::create(module_interface, pool, c"mod_remote_vad") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-    if let Err(error) = module.add_api(
-        c"rust_vad_start",
-        c"starts an async remote websocket VAD worker",
-        c"rust_vad_start <call-uuid> <wss://vad.example/session>",
-        start_vad_api,
-    ) {
-        return error.0;
+    match ModuleBuilder::new(module_interface, pool, c"mod_remote_vad").and_then(|module| {
+        module.api(
+            c"rust_vad_start",
+            c"starts an async remote websocket VAD worker",
+            c"rust_vad_start <call-uuid> <wss://vad.example/session>",
+            start_vad_api,
+        )
+    }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }
 
 #[derive(Debug, Clone)]
@@ -125,8 +112,7 @@ struct VadConfig {
 }
 
 impl VadConfig {
-    fn parse(cmd: *const c_char) -> Option<Self> {
-        let text = fswtch::command_text(cmd)?;
+    fn parse(text: &str) -> Option<Self> {
         let mut fields = text.split_whitespace();
         let call_uuid = fields.next()?.to_owned();
         let websocket_url = fields.next()?.to_owned();
@@ -333,64 +319,18 @@ fn fire_vad_event(
     message: &str,
     result: Option<&VadResult>,
 ) -> fswtch::Result<()> {
-    let mut event = ptr::null_mut();
-    // SAFETY: FreeSWITCH initializes `event` for the custom subclass when the call succeeds.
-    let status = unsafe {
-        sys::switch_event_create_subclass_detailed(
-            c"mod_remote_vad.rs".as_ptr(),
-            c"fire_vad_event".as_ptr(),
-            line!() as _,
-            &mut event,
-            sys::switch_event_types_t::SWITCH_EVENT_CUSTOM,
-            c"fswtch::remote_vad".as_ptr(),
-        )
-    };
-    fswtch::status_to_result(status)?;
-
-    add_event_header(event, c"VAD-Event", kind.as_str())?;
-    add_event_header(event, c"VAD-Call-UUID", &config.call_uuid)?;
-    add_event_header(event, c"VAD-Websocket-URL", &config.websocket_url)?;
-    add_event_header(event, c"VAD-Message", message)?;
+    let mut event = fswtch::Event::custom(c"fswtch::remote_vad")?;
+    event.add_header(c"VAD-Event", kind.as_str())?;
+    event.add_header(c"VAD-Call-UUID", &config.call_uuid)?;
+    event.add_header(c"VAD-Websocket-URL", &config.websocket_url)?;
+    event.add_header(c"VAD-Message", message)?;
 
     if let Some(result) = result {
-        add_event_header(event, c"VAD-Sequence", &result.sequence.to_string())?;
-        add_event_header(
-            event,
-            c"VAD-Speech",
-            if result.speech { "true" } else { "false" },
-        )?;
-        add_event_header(event, c"VAD-Confidence", &result.confidence)?;
-        add_event_header(event, c"VAD-Label", &result.label)?;
+        event.add_header(c"VAD-Sequence", &result.sequence.to_string())?;
+        event.add_header(c"VAD-Speech", if result.speech { "true" } else { "false" })?;
+        event.add_header(c"VAD-Confidence", &result.confidence)?;
+        event.add_header(c"VAD-Label", &result.label)?;
     }
 
-    // SAFETY: `event` was created above and ownership is transferred to FreeSWITCH on success.
-    let status = unsafe {
-        sys::switch_event_fire_detailed(
-            c"mod_remote_vad.rs".as_ptr(),
-            c"fire_vad_event".as_ptr(),
-            line!() as _,
-            &mut event,
-            ptr::null_mut(),
-        )
-    };
-    fswtch::status_to_result(status)
-}
-
-fn add_event_header(
-    event: *mut sys::switch_event_t,
-    name: &'static CStr,
-    value: &str,
-) -> fswtch::Result<()> {
-    let value = CString::new(value).map_err(|_| fswtch::SwitchError(fswtch::GENERR))?;
-    // SAFETY: `event` is a live FreeSWITCH event and the header/value C strings are valid for
-    // the duration of this call.
-    let status = unsafe {
-        sys::switch_event_add_header_string(
-            event,
-            sys::switch_stack_t::SWITCH_STACK_BOTTOM,
-            name.as_ptr(),
-            value.as_ptr(),
-        )
-    };
-    fswtch::status_to_result(status)
+    event.fire()
 }

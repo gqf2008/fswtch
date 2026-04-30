@@ -1,10 +1,9 @@
 use std::{
     collections::HashMap,
-    ffi::c_char,
     sync::{LazyLock, Mutex},
 };
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 
 static METRICS: LazyLock<Mutex<HashMap<String, u64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -15,54 +14,48 @@ fswtch::module_exports! {
     load = switch_module_load,
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn hit_api(
-    cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_metrics", "rust_metrics_hit invoked");
-    let Some(name) = fswtch::command_text(cmd) else {
-        let status = fswtch::write_stream_response(stream, "usage: rust_metrics_hit <name>\n");
-        return fswtch::false_on_success(status);
-    };
+fswtch::api_callback! {
+    fn hit_api(cmd, _session, stream) {
+        fswtch::log_info("mod_metrics", "rust_metrics_hit invoked");
+        let Some(name) = cmd else {
+            let status = stream.write("usage: rust_metrics_hit <name>\n");
+            return fswtch::false_on_success(status);
+        };
 
-    let mut metrics = METRICS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let key = metric_key(&name);
-    if !metrics.contains_key(&key) && metrics.len() >= MAX_METRICS {
-        fswtch::log_error("mod_metrics", "metric cardinality limit reached");
-        return fswtch::write_stream_response(stream, "metric cardinality limit reached\n");
+        let mut metrics = METRICS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = metric_key(&name);
+        if !metrics.contains_key(&key) && metrics.len() >= MAX_METRICS {
+            fswtch::log_error("mod_metrics", "metric cardinality limit reached");
+            return stream.write("metric cardinality limit reached\n");
+        }
+        let count = metrics.entry(key.clone()).or_default();
+        *count += 1;
+        fswtch::log_info(
+            "mod_metrics",
+            format!("incremented metric={key} count={count}"),
+        );
+        stream.write(&format!("metric={key} count={count}\n"))
     }
-    let count = metrics.entry(key.clone()).or_default();
-    *count += 1;
-    fswtch::log_info(
-        "mod_metrics",
-        format!("incremented metric={key} count={count}"),
-    );
-    fswtch::write_stream_response(stream, &format!("metric={key} count={count}\n"))
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn show_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_metrics", "rust_metrics_show invoked");
-    let metrics = METRICS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut lines = String::from(
-        "# HELP fswtch_example_events_total Example module event counter\n# TYPE fswtch_example_events_total counter\n",
-    );
-    for (name, count) in metrics.iter() {
-        lines.push_str(&format!(
-            "fswtch_example_events_total{{name=\"{name}\"}} {count}\n"
-        ));
+fswtch::api_callback! {
+    fn show_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_metrics", "rust_metrics_show invoked");
+        let metrics = METRICS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut lines = String::from(
+            "# HELP fswtch_example_events_total Example module event counter\n# TYPE fswtch_example_events_total counter\n",
+        );
+        for (name, count) in metrics.iter() {
+            lines.push_str(&format!(
+                "fswtch_example_events_total{{name=\"{name}\"}} {count}\n"
+            ));
+        }
+        stream.write(&lines)
     }
-    fswtch::write_stream_response(stream, &lines)
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -71,31 +64,26 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_metrics", "loading module");
-    let module = match Module::create(module_interface, pool, c"mod_metrics") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    for result in [
-        module.add_api(
-            c"rust_metrics_hit",
-            c"increments a named example counter",
-            c"rust_metrics_hit <name>",
-            hit_api,
-        ),
-        module.add_api(
-            c"rust_metrics_show",
-            c"prints example counters in Prometheus text format",
-            c"rust_metrics_show",
-            show_api,
-        ),
-    ] {
-        if let Err(error) = result {
-            return error.0;
-        }
+    match ModuleBuilder::new(module_interface, pool, c"mod_metrics")
+        .and_then(|module| {
+            module.api(
+                c"rust_metrics_hit",
+                c"increments a named example counter",
+                c"rust_metrics_hit <name>",
+                hit_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_metrics_show",
+                c"prints example counters in Prometheus text format",
+                c"rust_metrics_show",
+                show_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }
 
 fn metric_key(name: &str) -> String {

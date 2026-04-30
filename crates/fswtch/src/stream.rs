@@ -43,3 +43,22 @@ pub fn write_stream_response(raw: *mut sys::switch_stream_handle_t, text: &str) 
         Err(error) => error.0,
     }
 }
+
+#[derive(Copy, Clone)]
+pub struct ApiStream {
+    raw: *mut sys::switch_stream_handle_t,
+}
+
+impl ApiStream {
+    pub fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Self {
+        Self { raw }
+    }
+
+    pub fn as_ptr(self) -> *mut sys::switch_stream_handle_t {
+        self.raw
+    }
+
+    pub fn write(self, text: &str) -> Status {
+        write_stream_response(self.raw, text)
+    }
+}

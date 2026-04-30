@@ -1,10 +1,10 @@
 use std::{
-    ffi::{CStr, c_char},
+    ffi::CStr,
     ptr,
     sync::{LazyLock, Mutex},
 };
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 
 static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
 
@@ -30,41 +30,34 @@ impl Default for Config {
     }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn show_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_config_xml", "rust_config_xml_show invoked");
-    let config = CONFIG
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    fswtch::write_stream_response(
-        stream,
-        &format!(
-            "enabled={} greeting={} max_sessions={}\n",
-            config.enabled, config.greeting, config.max_sessions
-        ),
-    )
+fswtch::api_callback! {
+    fn show_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_config_xml", "rust_config_xml_show invoked");
+        let config = CONFIG
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        stream.write(
+            &format!(
+                "enabled={} greeting={} max_sessions={}\n",
+                config.enabled, config.greeting, config.max_sessions
+            ),
+        )
+    }
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn reload_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info("mod_config_xml", "rust_config_xml_reload invoked");
-    match load_config() {
-        Ok(config) => {
-            *CONFIG
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
-            fswtch::write_stream_response(stream, "config reloaded\n")
-        }
-        Err(error) => {
-            fswtch::write_stream_response(stream, &format!("config reload failed: {error}\n"))
+fswtch::api_callback! {
+    fn reload_api(_cmd, _session, stream) {
+        fswtch::log_info("mod_config_xml", "rust_config_xml_reload invoked");
+        match load_config() {
+            Ok(config) => {
+                *CONFIG
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
+                stream.write("config reloaded\n")
+            }
+            Err(error) => {
+                stream.write(&format!("config reload failed: {error}\n"))
+            }
         }
     }
 }
@@ -80,31 +73,26 @@ unsafe extern "C" fn switch_module_load(
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
     }
-    let module = match Module::create(module_interface, pool, c"mod_config_xml") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    for result in [
-        module.add_api(
-            c"rust_config_xml_show",
-            c"prints settings loaded from fswtch_examples.conf",
-            c"rust_config_xml_show",
-            show_api,
-        ),
-        module.add_api(
-            c"rust_config_xml_reload",
-            c"reloads settings from fswtch_examples.conf",
-            c"rust_config_xml_reload",
-            reload_api,
-        ),
-    ] {
-        if let Err(error) = result {
-            return error.0;
-        }
+    match ModuleBuilder::new(module_interface, pool, c"mod_config_xml")
+        .and_then(|module| {
+            module.api(
+                c"rust_config_xml_show",
+                c"prints settings loaded from fswtch_examples.conf",
+                c"rust_config_xml_show",
+                show_api,
+            )
+        })
+        .and_then(|module| {
+            module.api(
+                c"rust_config_xml_reload",
+                c"reloads settings from fswtch_examples.conf",
+                c"rust_config_xml_reload",
+                reload_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-
-    SUCCESS
 }
 
 fn load_config() -> Result<Config, &'static str> {

@@ -1,6 +1,6 @@
-use std::{ffi::c_char, ptr};
+use std::ptr;
 
-use fswtch::{Module, SUCCESS, Status, sys};
+use fswtch::{ModuleBuilder, SUCCESS, Status, sys};
 
 static mut IO_ROUTINES: sys::switch_io_routines = sys::switch_io_routines {
     outgoing_channel: None,
@@ -25,20 +25,16 @@ fswtch::module_exports! {
     load = switch_module_load,
 }
 
-// SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
-unsafe extern "C" fn info_api(
-    _cmd: *const c_char,
-    _session: *mut sys::switch_core_session_t,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Status {
-    fswtch::log_info(
-        "mod_endpoint_skeleton",
-        "rust_endpoint_skeleton_info invoked",
-    );
-    fswtch::write_stream_response(
-        stream,
-        "endpoint rust_endpoint_skeleton registered with placeholder I/O routines\n",
-    )
+fswtch::api_callback! {
+    fn info_api(_cmd, _session, stream) {
+        fswtch::log_info(
+            "mod_endpoint_skeleton",
+            "rust_endpoint_skeleton_info invoked",
+        );
+        stream.write(
+            "endpoint rust_endpoint_skeleton registered with placeholder I/O routines\n",
+        )
+    }
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -47,24 +43,18 @@ unsafe extern "C" fn switch_module_load(
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
     fswtch::log_info("mod_endpoint_skeleton", "loading module");
-    let module = match Module::create(module_interface, pool, c"mod_endpoint_skeleton") {
-        Ok(module) => module,
-        Err(error) => return error.0,
-    };
-
-    if let Err(error) = module.add_endpoint(c"rust_endpoint_skeleton", &raw mut IO_ROUTINES) {
-        return error.0;
+    match ModuleBuilder::new(module_interface, pool, c"mod_endpoint_skeleton")
+        .and_then(|module| module.endpoint(c"rust_endpoint_skeleton", &raw mut IO_ROUTINES))
+        .inspect(|_| fswtch::log_info("mod_endpoint_skeleton", "endpoint interface registered"))
+        .and_then(|module| {
+            module.api(
+                c"rust_endpoint_skeleton_info",
+                c"describes the Rust endpoint skeleton",
+                c"rust_endpoint_skeleton_info",
+                info_api,
+            )
+        }) {
+        Ok(_) => SUCCESS,
+        Err(error) => error.0,
     }
-    fswtch::log_info("mod_endpoint_skeleton", "endpoint interface registered");
-
-    if let Err(error) = module.add_api(
-        c"rust_endpoint_skeleton_info",
-        c"describes the Rust endpoint skeleton",
-        c"rust_endpoint_skeleton_info",
-        info_api,
-    ) {
-        return error.0;
-    }
-
-    SUCCESS
 }
