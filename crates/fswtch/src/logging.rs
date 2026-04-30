@@ -2,6 +2,13 @@ use std::{ffi::CString, fmt};
 
 use crate::sys;
 
+macro_rules! call_ffi {
+    ($call:expr) => {{
+        // SAFETY: The caller documents the FreeSWITCH ABI preconditions at each call site.
+        unsafe { $call }
+    }};
+}
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LogLevel {
     Disable,
@@ -55,6 +62,7 @@ impl LogLevel {
     }
 }
 
+#[inline]
 pub fn log(module: &str, level: LogLevel, message: impl fmt::Display) {
     log_at(level.as_raw(), module, message);
 }
@@ -147,16 +155,24 @@ fn log_at(level: sys::switch_log_level_t, module: &str, message: impl fmt::Displ
     };
 
     // SAFETY: All C strings are valid for the duration of the varargs logging call.
-    unsafe {
-        sys::switch_log_printf(
-            sys::switch_text_channel_t_SWITCH_CHANNEL_ID_LOG,
-            c"fswtch-rs".as_ptr(),
-            c"log".as_ptr(),
-            line!() as _,
-            std::ptr::null(),
-            level,
-            c"%s\n".as_ptr(),
-            text.as_ptr(),
-        );
-    }
+    unsafe { log_printf(level, text.as_ptr()) };
+}
+
+/// # Safety
+///
+/// `text` must point to a live null-terminated C string for this varargs call.
+// SAFETY: The caller must pass a live null-terminated message pointer.
+unsafe fn log_printf(level: sys::switch_log_level_t, text: *const std::ffi::c_char) {
+    let log = sys::switch_log_printf;
+    let channel = sys::switch_text_channel_t_SWITCH_CHANNEL_ID_LOG;
+    call_ffi!(log(
+        channel,
+        c"fswtch-rs".as_ptr(),
+        c"log".as_ptr(),
+        line!() as _,
+        std::ptr::null(),
+        level,
+        c"%s\n".as_ptr(),
+        text,
+    ));
 }

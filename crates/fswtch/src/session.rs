@@ -17,6 +17,7 @@ impl Session {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 
+    #[inline]
     pub fn as_ptr(self) -> *mut sys::switch_core_session_t {
         self.raw.as_ptr()
     }

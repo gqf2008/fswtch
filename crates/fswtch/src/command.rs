@@ -8,6 +8,7 @@ use crate::{GENERR, Result, SwitchError};
 ///
 /// When non-null, `cmd` must point to a valid null-terminated C string for the duration of this
 /// call.
+// SAFETY: The caller must supply either null or a valid, live, null-terminated C string pointer.
 pub unsafe fn command_text(cmd: *const c_char) -> Option<String> {
     if cmd.is_null() {
         return None;

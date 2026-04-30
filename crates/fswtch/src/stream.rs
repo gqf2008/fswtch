@@ -45,6 +45,7 @@ impl Stream {
 ///
 /// `raw` must point to a live FreeSWITCH stream handle and remain valid for the duration of this
 /// call.
+// SAFETY: The caller must provide a live FreeSWITCH stream handle for the full call duration.
 pub unsafe fn write_stream_response(raw: *mut sys::switch_stream_handle_t, text: &str) -> Status {
     // SAFETY: Forwarded from `write_stream_response`'s caller.
     let Some(mut stream) = (unsafe { Stream::from_raw(raw) }) else {

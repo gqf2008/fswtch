@@ -27,14 +27,13 @@ impl Module {
         }
         let name = name.into_static_cstr()?;
 
-        // SAFETY: The caller guarantees `pool` and `name` are valid for FreeSWITCH's loader.
-        let raw =
-            unsafe { sys::switch_loadable_module_create_module_interface(pool, name.as_ptr()) };
-        let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
-        // SAFETY: `slot` was checked for null above and points to FreeSWITCH's output slot.
-        unsafe {
+        // SAFETY: The caller guarantees `pool` and `slot` are FreeSWITCH loader-owned pointers.
+        let raw = unsafe {
+            let raw = sys::switch_loadable_module_create_module_interface(pool, name.as_ptr());
+            let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
             *slot = raw.as_ptr();
-        }
+            raw
+        };
         Ok(Self { raw })
     }
 
@@ -57,15 +56,10 @@ impl Module {
         let name = name.into_static_cstr()?;
         let description = description.into_static_cstr()?;
         let syntax = syntax.into_static_cstr()?;
-        // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
-        let raw = unsafe {
-            sys::switch_loadable_module_create_interface(
-                self.raw.as_ptr(),
-                sys::switch_module_interface_name_t::SWITCH_API_INTERFACE,
-            )
-        };
-        let api =
-            NonNull::new(raw.cast::<sys::switch_api_interface_t>()).ok_or(SwitchError(GENERR))?;
+        let api = create_interface::<sys::switch_api_interface_t>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_API_INTERFACE,
+        )?;
 
         // SAFETY: `api` is a valid API interface allocation returned by FreeSWITCH, and all
         // assigned C string/function pointers have static lifetimes.
@@ -82,35 +76,24 @@ impl Module {
 
     pub fn add_application(
         self,
-        name: impl StaticCStr,
-        long_description: impl StaticCStr,
-        short_description: impl StaticCStr,
-        syntax: impl StaticCStr,
+        info: ApplicationInfo,
         function: unsafe extern "C" fn(*mut sys::switch_core_session_t, *const c_char),
     ) -> Result<ApplicationInterface> {
-        let name = name.into_static_cstr()?;
-        let long_description = long_description.into_static_cstr()?;
-        let short_description = short_description.into_static_cstr()?;
-        let syntax = syntax.into_static_cstr()?;
-        // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
-        let raw = unsafe {
-            sys::switch_loadable_module_create_interface(
-                self.raw.as_ptr(),
-                sys::switch_module_interface_name_t::SWITCH_APPLICATION_INTERFACE,
-            )
-        };
-        let application = NonNull::new(raw.cast::<sys::switch_application_interface_t>())
-            .ok_or(SwitchError(GENERR))?;
+        let strings = info.into_cstrings()?;
+        let application = create_interface::<sys::switch_application_interface_t>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_APPLICATION_INTERFACE,
+        )?;
 
         // SAFETY: `application` is a valid interface allocation returned by FreeSWITCH, and all
         // assigned C string/function pointers have static lifetimes.
         unsafe {
             let application_ref = application.as_ptr();
-            (*application_ref).interface_name = name.as_ptr();
+            (*application_ref).interface_name = strings.name.as_ptr();
             (*application_ref).application_function = Some(function);
-            (*application_ref).long_desc = long_description.as_ptr();
-            (*application_ref).short_desc = short_description.as_ptr();
-            (*application_ref).syntax = syntax.as_ptr();
+            (*application_ref).long_desc = strings.long_description.as_ptr();
+            (*application_ref).short_desc = strings.short_description.as_ptr();
+            (*application_ref).syntax = strings.syntax.as_ptr();
         }
 
         Ok(ApplicationInterface { raw: application })
@@ -118,35 +101,24 @@ impl Module {
 
     pub fn add_chat_application(
         self,
-        name: impl StaticCStr,
-        long_description: impl StaticCStr,
-        short_description: impl StaticCStr,
-        syntax: impl StaticCStr,
+        info: ApplicationInfo,
         function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> Status,
     ) -> Result<ChatApplicationInterface> {
-        let name = name.into_static_cstr()?;
-        let long_description = long_description.into_static_cstr()?;
-        let short_description = short_description.into_static_cstr()?;
-        let syntax = syntax.into_static_cstr()?;
-        // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
-        let raw = unsafe {
-            sys::switch_loadable_module_create_interface(
-                self.raw.as_ptr(),
-                sys::switch_module_interface_name_t::SWITCH_CHAT_APPLICATION_INTERFACE,
-            )
-        };
-        let application = NonNull::new(raw.cast::<sys::switch_chat_application_interface_t>())
-            .ok_or(SwitchError(GENERR))?;
+        let strings = info.into_cstrings()?;
+        let application = create_interface::<sys::switch_chat_application_interface_t>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_CHAT_APPLICATION_INTERFACE,
+        )?;
 
         // SAFETY: `application` is a valid interface allocation returned by FreeSWITCH, and all
         // assigned C string/function pointers have static lifetimes.
         unsafe {
             let application_ref = application.as_ptr();
-            (*application_ref).interface_name = name.as_ptr();
+            (*application_ref).interface_name = strings.name.as_ptr();
             (*application_ref).chat_application_function = Some(function);
-            (*application_ref).long_desc = long_description.as_ptr();
-            (*application_ref).short_desc = short_description.as_ptr();
-            (*application_ref).syntax = syntax.as_ptr();
+            (*application_ref).long_desc = strings.long_description.as_ptr();
+            (*application_ref).short_desc = strings.short_description.as_ptr();
+            (*application_ref).syntax = strings.syntax.as_ptr();
         }
 
         Ok(ChatApplicationInterface { raw: application })
@@ -158,15 +130,10 @@ impl Module {
         io_routines: *mut sys::switch_io_routines_t,
     ) -> Result<EndpointInterface> {
         let name = name.into_static_cstr()?;
-        // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
-        let raw = unsafe {
-            sys::switch_loadable_module_create_interface(
-                self.raw.as_ptr(),
-                sys::switch_module_interface_name_t::SWITCH_ENDPOINT_INTERFACE,
-            )
-        };
-        let endpoint = NonNull::new(raw.cast::<sys::switch_endpoint_interface_t>())
-            .ok_or(SwitchError(GENERR))?;
+        let endpoint = create_interface::<sys::switch_endpoint_interface_t>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_ENDPOINT_INTERFACE,
+        )?;
 
         // SAFETY: `endpoint` is a valid interface allocation returned by FreeSWITCH. `name` has a
         // static lifetime, and the caller supplies module-owned I/O routine storage.
@@ -178,6 +145,55 @@ impl Module {
 
         Ok(EndpointInterface { raw: endpoint })
     }
+}
+
+fn create_interface<T>(
+    module: NonNull<sys::switch_loadable_module_interface_t>,
+    kind: sys::switch_module_interface_name_t,
+) -> Result<NonNull<T>> {
+    // SAFETY: `module` is a live module interface created by FreeSWITCH for this module.
+    let raw = unsafe { sys::switch_loadable_module_create_interface(module.as_ptr(), kind) };
+    NonNull::new(raw.cast::<T>()).ok_or(SwitchError(GENERR))
+}
+
+#[derive(Copy, Clone)]
+pub struct ApplicationInfo {
+    pub name: &'static str,
+    pub long_description: &'static str,
+    pub short_description: &'static str,
+    pub syntax: &'static str,
+}
+
+impl ApplicationInfo {
+    pub const fn new(
+        name: &'static str,
+        long_description: &'static str,
+        short_description: &'static str,
+        syntax: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            long_description,
+            short_description,
+            syntax,
+        }
+    }
+
+    fn into_cstrings(self) -> Result<ApplicationInfoCStrings> {
+        Ok(ApplicationInfoCStrings {
+            name: self.name.into_static_cstr()?,
+            long_description: self.long_description.into_static_cstr()?,
+            short_description: self.short_description.into_static_cstr()?,
+            syntax: self.syntax.into_static_cstr()?,
+        })
+    }
+}
+
+struct ApplicationInfoCStrings {
+    name: &'static std::ffi::CStr,
+    long_description: &'static std::ffi::CStr,
+    short_description: &'static std::ffi::CStr,
+    syntax: &'static std::ffi::CStr,
 }
 
 pub struct ModuleBuilder {
@@ -219,32 +235,19 @@ impl ModuleBuilder {
 
     pub fn application(
         self,
-        name: impl StaticCStr,
-        long_description: impl StaticCStr,
-        short_description: impl StaticCStr,
-        syntax: impl StaticCStr,
+        info: ApplicationInfo,
         function: unsafe extern "C" fn(*mut sys::switch_core_session_t, *const c_char),
     ) -> Result<Self> {
-        self.module
-            .add_application(name, long_description, short_description, syntax, function)?;
+        self.module.add_application(info, function)?;
         Ok(self)
     }
 
     pub fn chat_application(
         self,
-        name: impl StaticCStr,
-        long_description: impl StaticCStr,
-        short_description: impl StaticCStr,
-        syntax: impl StaticCStr,
+        info: ApplicationInfo,
         function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> Status,
     ) -> Result<Self> {
-        self.module.add_chat_application(
-            name,
-            long_description,
-            short_description,
-            syntax,
-            function,
-        )?;
+        self.module.add_chat_application(info, function)?;
         Ok(self)
     }
 

@@ -16,6 +16,13 @@ fswtch::module_exports! {
     load = switch_module_load,
 }
 
+const METER_APP: fswtch::ApplicationInfo = fswtch::ApplicationInfo::new(
+    "rust_media_bug_meter",
+    "Attaches a read/write-stream media bug and counts observed audio frames",
+    "Rust media bug meter example",
+    "rust_media_bug_meter",
+);
+
 #[derive(Debug)]
 struct MeterState {
     read_frames: usize,
@@ -116,13 +123,7 @@ fswtch::module_load! {
     fn switch_module_load(module) for "mod_media_bug_meter" {
         fswtch::log_info("mod_media_bug_meter", "loading module");
         module
-            .application(
-                "rust_media_bug_meter",
-                "Attaches a read/write-stream media bug and counts observed audio frames",
-                "Rust media bug meter example",
-                "rust_media_bug_meter",
-                meter_app,
-            )
+            .application(METER_APP, meter_app)
             .and_then(|module| {
                 module.api(
                     "rust_media_bug_meter_stats",

@@ -25,8 +25,8 @@ pub use media::{
     MediaFrame, MediaFrameMut, attach_media_bug,
 };
 pub use module::{
-    ApiInterface, ApplicationInterface, ChatApplicationInterface, EndpointInterface, Module,
-    ModuleBuilder,
+    ApiInterface, ApplicationInfo, ApplicationInterface, ChatApplicationInterface,
+    EndpointInterface, Module, ModuleBuilder,
 };
 pub use session::Session;
 pub use status::{

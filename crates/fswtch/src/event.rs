@@ -2,6 +2,13 @@ use std::{ffi::CStr, ptr::NonNull};
 
 use crate::{Result, cstring, status_to_result, sys};
 
+macro_rules! call_ffi {
+    ($call:expr) => {{
+        // SAFETY: The caller documents the FreeSWITCH ABI preconditions at each call site.
+        unsafe { $call }
+    }};
+}
+
 pub struct Event {
     raw: Option<NonNull<sys::switch_event_t>>,
 }
@@ -11,16 +18,7 @@ impl Event {
         let subclass = cstring(subclass)?;
         let mut raw = std::ptr::null_mut();
         // SAFETY: FreeSWITCH initializes `raw` for the custom subclass when the call succeeds.
-        let status = unsafe {
-            sys::switch_event_create_subclass_detailed(
-                c"fswtch-rs".as_ptr(),
-                c"Event::custom".as_ptr(),
-                line!() as _,
-                &mut raw,
-                sys::switch_event_types_t::SWITCH_EVENT_CUSTOM,
-                subclass.as_ptr(),
-            )
-        };
+        let status = unsafe { create_custom_event(&mut raw, subclass.as_c_str()) };
         status_to_result(status)?;
         Ok(Self {
             raw: NonNull::new(raw),
@@ -59,15 +57,7 @@ impl Event {
         };
         let mut raw = raw.as_ptr();
         // SAFETY: Ownership of `raw` transfers to FreeSWITCH on successful fire.
-        let status = unsafe {
-            sys::switch_event_fire_detailed(
-                c"fswtch-rs".as_ptr(),
-                c"Event::fire".as_ptr(),
-                line!() as _,
-                &mut raw,
-                std::ptr::null_mut(),
-            )
-        };
+        let status = unsafe { fire_event(&mut raw) };
         if status == crate::SUCCESS {
             Ok(())
         } else {
@@ -75,6 +65,41 @@ impl Event {
             Err(crate::SwitchError(status))
         }
     }
+}
+
+/// # Safety
+///
+/// `raw` must be writable output storage and `subclass` must be a live C string.
+// SAFETY: The caller must provide writable event output storage and a live subclass string.
+unsafe fn create_custom_event(
+    raw: &mut *mut sys::switch_event_t,
+    subclass: &CStr,
+) -> sys::switch_status_t {
+    let create = sys::switch_event_create_subclass_detailed;
+    let event = sys::switch_event_types_t::SWITCH_EVENT_CUSTOM;
+    call_ffi!(create(
+        c"fswtch-rs".as_ptr(),
+        c"Event::custom".as_ptr(),
+        line!() as _,
+        raw,
+        event,
+        subclass.as_ptr(),
+    ))
+}
+
+/// # Safety
+///
+/// `raw` must point to an owned event pointer. FreeSWITCH takes ownership on success.
+// SAFETY: The caller must provide an owned event pointer for FreeSWITCH to fire.
+unsafe fn fire_event(raw: &mut *mut sys::switch_event_t) -> sys::switch_status_t {
+    let fire = sys::switch_event_fire_detailed;
+    call_ffi!(fire(
+        c"fswtch-rs".as_ptr(),
+        c"Event::fire".as_ptr(),
+        line!() as _,
+        raw,
+        std::ptr::null_mut(),
+    ))
 }
 
 impl Drop for Event {

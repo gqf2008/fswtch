@@ -9,6 +9,13 @@ fswtch::module_exports! {
     load = switch_module_load,
 }
 
+const CHATBOT_APP: fswtch::ApplicationInfo = fswtch::ApplicationInfo::new(
+    "rust_chatbot_bridge",
+    "Transforms inbound chat messages into custom chatbot events",
+    "Rust chatbot bridge example",
+    "rust_chatbot_bridge <message>",
+);
+
 fswtch::chat_callback! {
     fn chatbot_app(event, data) {
         fswtch::log_info("mod_chatbot_bridge", "chat application invoked");
@@ -61,13 +68,7 @@ fswtch::module_load! {
     fn switch_module_load(module) for "mod_chatbot_bridge" {
         fswtch::log_info("mod_chatbot_bridge", "loading module");
         module
-            .chat_application(
-                    "rust_chatbot_bridge",
-                    "Transforms inbound chat messages into custom chatbot events",
-                    "Rust chatbot bridge example",
-                    "rust_chatbot_bridge <message>",
-                    chatbot_app,
-            )
+            .chat_application(CHATBOT_APP, chatbot_app)
             .and_then(|module| {
                 module.api(
                     "rust_chatbot_bridge_stats",
