@@ -1,4 +1,4 @@
-use std::{ffi::CStr, ptr::NonNull};
+use std::{ffi::CStr, marker::PhantomData, ptr::NonNull};
 
 use crate::{cstring, sys};
 
@@ -22,7 +22,7 @@ impl XmlConfig {
         })
     }
 
-    pub fn settings(&self) -> Option<XmlNode> {
+    pub fn settings(&self) -> Option<XmlNode<'_>> {
         self.settings.map(XmlNode::new)
     }
 }
@@ -37,13 +37,17 @@ impl Drop for XmlConfig {
 }
 
 #[derive(Copy, Clone)]
-pub struct XmlNode {
+pub struct XmlNode<'a> {
     raw: NonNull<sys::switch_xml>,
+    _owner: PhantomData<&'a XmlConfig>,
 }
 
-impl XmlNode {
+impl<'a> XmlNode<'a> {
     fn new(raw: NonNull<sys::switch_xml>) -> Self {
-        Self { raw }
+        Self {
+            raw,
+            _owner: PhantomData,
+        }
     }
 
     pub fn child(self, name: impl AsRef<str>) -> Option<Self> {

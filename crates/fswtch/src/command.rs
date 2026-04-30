@@ -2,12 +2,18 @@ use std::ffi::{CStr, CString, c_char};
 
 use crate::{GENERR, Result, SwitchError};
 
-pub fn command_text(cmd: *const c_char) -> Option<String> {
+/// Converts a nullable FreeSWITCH command pointer into a trimmed Rust string.
+///
+/// # Safety
+///
+/// When non-null, `cmd` must point to a valid null-terminated C string for the duration of this
+/// call.
+pub unsafe fn command_text(cmd: *const c_char) -> Option<String> {
     if cmd.is_null() {
         return None;
     }
 
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
+    // SAFETY: Forwarded from `command_text`'s caller.
     unsafe { CStr::from_ptr(cmd) }
         .to_str()
         .ok()

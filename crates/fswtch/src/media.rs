@@ -6,7 +6,7 @@ use std::{
     slice,
 };
 
-use crate::{Result, StaticCStr, SwitchError, log_error, status_to_result, sys};
+use crate::{Result, Session, StaticCStr, SwitchError, log_error, status_to_result, sys};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MediaBugAction {
@@ -148,16 +148,7 @@ pub trait MediaBugHandler: 'static {
 
 /// Attaches a FreeSWITCH media bug and owns `handler` until FreeSWITCH closes the bug.
 ///
-/// # Safety
-///
-/// `session` must be a valid live FreeSWITCH session that may accept a media bug. The `function`
-/// and `target` strings in `config` must remain valid for the loaded module lifetime. Callback
-/// methods must not retain frame or context references after they return.
-pub fn attach_media_bug<H>(
-    session: *mut sys::switch_core_session_t,
-    config: MediaBugConfig,
-    handler: H,
-) -> Result<MediaBug>
+pub fn attach_media_bug<H>(session: Session, config: MediaBugConfig, handler: H) -> Result<MediaBug>
 where
     H: MediaBugHandler,
 {
@@ -168,7 +159,7 @@ where
     // FreeSWITCH accepts the bug, or immediately below if registration fails.
     let status = unsafe {
         sys::switch_core_media_bug_add(
-            session,
+            session.as_ptr(),
             config.function.as_ptr(),
             config.target.as_ptr(),
             Some(media_bug_trampoline::<H>),
@@ -187,7 +178,14 @@ where
         return Err(SwitchError(status));
     }
 
-    let raw = NonNull::new(bug).ok_or(SwitchError(crate::GENERR))?;
+    let Some(raw) = NonNull::new(bug) else {
+        // SAFETY: FreeSWITCH did not return a bug handle, so there is no close callback that can
+        // reclaim the state.
+        unsafe {
+            drop(Box::from_raw(state));
+        }
+        return Err(SwitchError(crate::GENERR));
+    };
     Ok(MediaBug { raw })
 }
 

@@ -8,7 +8,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn from_raw(raw: *mut sys::switch_core_session_t) -> Option<Self> {
+    /// Wraps a FreeSWITCH session pointer for the duration of a callback.
+    ///
+    /// # Safety
+    ///
+    /// `raw` must point to a live FreeSWITCH session and remain valid while this wrapper is used.
+    pub unsafe fn from_raw(raw: *mut sys::switch_core_session_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 

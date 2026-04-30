@@ -95,7 +95,12 @@ pub struct EventRef {
 }
 
 impl EventRef {
-    pub fn from_raw(raw: *mut sys::switch_event_t) -> Self {
+    /// Wraps a FreeSWITCH event pointer for the duration of a callback.
+    ///
+    /// # Safety
+    ///
+    /// `raw` must point to a live FreeSWITCH event and remain valid while this wrapper is used.
+    pub unsafe fn from_raw(raw: *mut sys::switch_event_t) -> Self {
         Self {
             raw: NonNull::new(raw),
         }

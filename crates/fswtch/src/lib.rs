@@ -43,9 +43,9 @@ macro_rules! api_callback {
             $session: *mut $crate::sys::switch_core_session_t,
             $stream: *mut $crate::sys::switch_stream_handle_t,
         ) -> $crate::Status {
-            let $cmd = $crate::command_text($cmd);
-            let $session = $crate::Session::from_raw($session);
-            let $stream = $crate::ApiStream::from_raw($stream);
+            let $cmd = unsafe { $crate::command_text($cmd) };
+            let $session = unsafe { $crate::Session::from_raw($session) };
+            let $stream = unsafe { $crate::ApiStream::from_raw($stream) };
             $body
         }
     };
@@ -58,8 +58,8 @@ macro_rules! app_callback {
             $session: *mut $crate::sys::switch_core_session_t,
             $data: *const ::std::ffi::c_char,
         ) {
-            let $session = $crate::Session::from_raw($session);
-            let $data = $crate::command_text($data);
+            let $session = unsafe { $crate::Session::from_raw($session) };
+            let $data = unsafe { $crate::command_text($data) };
             $body
         }
     };
@@ -72,8 +72,8 @@ macro_rules! chat_callback {
             $event: *mut $crate::sys::switch_event_t,
             $data: *const ::std::ffi::c_char,
         ) -> $crate::Status {
-            let $event = $crate::EventRef::from_raw($event);
-            let $data = $crate::command_text($data);
+            let $event = unsafe { $crate::EventRef::from_raw($event) };
+            let $data = unsafe { $crate::command_text($data) };
             $body
         }
     };
@@ -86,10 +86,11 @@ macro_rules! module_load {
             module_interface: *mut *mut $crate::sys::switch_loadable_module_interface_t,
             pool: *mut $crate::sys::switch_memory_pool_t,
         ) -> $crate::Status {
-            let $module = match $crate::ModuleBuilder::new(module_interface, pool, $module_name) {
-                Ok(module) => module,
-                Err(error) => return error.0,
-            };
+            let $module =
+                match unsafe { $crate::ModuleBuilder::new(module_interface, pool, $module_name) } {
+                    Ok(module) => module,
+                    Err(error) => return error.0,
+                };
             let result: $crate::Result<$crate::ModuleBuilder> = $body;
             match result {
                 Ok(_) => $crate::SUCCESS,

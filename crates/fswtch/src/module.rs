@@ -12,7 +12,12 @@ pub struct Module {
 
 impl Module {
     /// Creates the FreeSWITCH module interface for a load callback.
-    pub fn create(
+    ///
+    /// # Safety
+    ///
+    /// `slot` and `pool` must be the live loader-owned pointers passed by FreeSWITCH to this
+    /// module's load callback. `slot` must be writable for one module interface pointer.
+    pub unsafe fn create(
         slot: *mut *mut sys::switch_loadable_module_interface_t,
         pool: *mut sys::switch_memory_pool_t,
         name: impl StaticCStr,
@@ -180,13 +185,20 @@ pub struct ModuleBuilder {
 }
 
 impl ModuleBuilder {
-    pub fn new(
+    /// Creates a module registration builder from FreeSWITCH load callback pointers.
+    ///
+    /// # Safety
+    ///
+    /// `slot` and `pool` must be the live loader-owned pointers passed by FreeSWITCH to this
+    /// module's load callback. `slot` must be writable for one module interface pointer.
+    pub unsafe fn new(
         slot: *mut *mut sys::switch_loadable_module_interface_t,
         pool: *mut sys::switch_memory_pool_t,
         name: impl StaticCStr,
     ) -> Result<Self> {
         Ok(Self {
-            module: Module::create(slot, pool, name)?,
+            // SAFETY: Forwarded from `ModuleBuilder::new`'s caller.
+            module: unsafe { Module::create(slot, pool, name)? },
         })
     }
 

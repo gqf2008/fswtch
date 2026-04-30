@@ -7,7 +7,13 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Option<Self> {
+    /// Wraps a FreeSWITCH stream pointer for the duration of an API callback.
+    ///
+    /// # Safety
+    ///
+    /// `raw` must point to a live FreeSWITCH stream handle and remain valid while this wrapper is
+    /// used.
+    pub unsafe fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 
@@ -33,8 +39,15 @@ impl Stream {
     }
 }
 
-pub fn write_stream_response(raw: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    let Some(mut stream) = Stream::from_raw(raw) else {
+/// Writes a string response to a raw FreeSWITCH stream handle.
+///
+/// # Safety
+///
+/// `raw` must point to a live FreeSWITCH stream handle and remain valid for the duration of this
+/// call.
+pub unsafe fn write_stream_response(raw: *mut sys::switch_stream_handle_t, text: &str) -> Status {
+    // SAFETY: Forwarded from `write_stream_response`'s caller.
+    let Some(mut stream) = (unsafe { Stream::from_raw(raw) }) else {
         return FALSE;
     };
 
@@ -50,7 +63,13 @@ pub struct ApiStream {
 }
 
 impl ApiStream {
-    pub fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Self {
+    /// Wraps a FreeSWITCH stream pointer for the duration of an API callback.
+    ///
+    /// # Safety
+    ///
+    /// `raw` must point to a live FreeSWITCH stream handle and remain valid while this wrapper is
+    /// used.
+    pub unsafe fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Self {
         Self { raw }
     }
 
@@ -59,6 +78,7 @@ impl ApiStream {
     }
 
     pub fn write(self, text: &str) -> Status {
-        write_stream_response(self.raw, text)
+        // SAFETY: `ApiStream` is constructed from a live callback stream by `ApiStream::from_raw`.
+        unsafe { write_stream_response(self.raw, text) }
     }
 }
