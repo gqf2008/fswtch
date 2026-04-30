@@ -1,4 +1,4 @@
-use std::ffi::{CStr, c_char};
+use std::ffi::c_char;
 
 use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
 
@@ -45,7 +45,7 @@ unsafe extern "C" fn words_api(
         return FALSE;
     };
 
-    let Some(text) = command_text(cmd) else {
+    let Some(text) = fswtch::command_text(cmd) else {
         return match stream.write_str("0 words\n") {
             Ok(()) => SUCCESS,
             Err(error) => error.0,
@@ -91,18 +91,4 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }

@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::{CStr, c_char},
+    ffi::c_char,
     sync::{LazyLock, Mutex},
     time::{Duration, Instant},
 };
@@ -31,7 +31,7 @@ struct LimitRequest {
 
 impl LimitRequest {
     fn parse(cmd: *const c_char) -> Option<Self> {
-        let text = command_text(cmd)?;
+        let text = fswtch::command_text(cmd)?;
         let mut parts = text.split_whitespace();
         let key = parts.next()?.to_owned();
         let limit = parts
@@ -151,20 +151,6 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

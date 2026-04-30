@@ -30,7 +30,7 @@ unsafe extern "C" fn enrich_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_cdr_enricher", "rust_cdr_enrich invoked");
-    let Some(text) = command_text(cmd) else {
+    let Some(text) = fswtch::command_text(cmd) else {
         fswtch::log_info("mod_cdr_enricher", "missing CDR JSON");
         let status = write_response(stream, "usage: rust_cdr_enrich <json-cdr>\n");
         return if status == SUCCESS { FALSE } else { status };
@@ -206,20 +206,6 @@ fn add_event_header(
         )
     };
     fswtch::status_to_result(status)
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

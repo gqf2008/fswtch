@@ -126,7 +126,7 @@ struct VadConfig {
 
 impl VadConfig {
     fn parse(cmd: *const c_char) -> Option<Self> {
-        let text = command_text(cmd)?;
+        let text = fswtch::command_text(cmd)?;
         let mut fields = text.split_whitespace();
         let call_uuid = fields.next()?.to_owned();
         let websocket_url = fields.next()?.to_owned();
@@ -393,20 +393,6 @@ fn add_event_header(
         )
     };
     fswtch::status_to_result(status)
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

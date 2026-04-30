@@ -16,7 +16,7 @@ fswtch::module_exports! {
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_chat_application_function_t`.
 unsafe extern "C" fn chatbot_app(event: *mut sys::switch_event_t, data: *const c_char) -> Status {
     fswtch::log_info("mod_chatbot_bridge", "chat application invoked");
-    let text = command_text(data).unwrap_or_else(|| "empty chat payload".to_owned());
+    let text = fswtch::command_text(data).unwrap_or_else(|| "empty chat payload".to_owned());
     let from = event_header(event, c"from").unwrap_or_else(|| "unknown".to_owned());
     let to = event_header(event, c"to").unwrap_or_else(|| "unknown".to_owned());
 
@@ -152,20 +152,6 @@ fn add_event_header(
         )
     };
     fswtch::status_to_result(status)
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

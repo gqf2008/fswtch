@@ -1,6 +1,6 @@
 use std::{
     env,
-    ffi::{CStr, c_char},
+    ffi::c_char,
     fs,
     io::Write,
     path::PathBuf,
@@ -263,7 +263,7 @@ unsafe extern "C" fn asr_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "rust_local_asr invoked");
-    let Some(path) = command_text(cmd) else {
+    let Some(path) = fswtch::command_text(cmd) else {
         let status = write_response(stream, "usage: rust_local_asr <pcm16le-file>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -306,7 +306,7 @@ unsafe extern "C" fn tts_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "rust_local_tts invoked");
-    let Some(text) = command_text(cmd) else {
+    let Some(text) = fswtch::command_text(cmd) else {
         let status = write_response(stream, "usage: rust_local_tts <text>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -357,7 +357,7 @@ unsafe extern "C" fn nlp_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp invoked");
-    let Some(prompt) = command_text(cmd) else {
+    let Some(prompt) = fswtch::command_text(cmd) else {
         let status = write_response(stream, "usage: rust_local_nlp <prompt>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -389,7 +389,7 @@ unsafe extern "C" fn nlp_sync_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp_sync invoked");
-    let Some(prompt) = command_text(cmd) else {
+    let Some(prompt) = fswtch::command_text(cmd) else {
         let status = write_response(stream, "usage: rust_local_nlp_sync <prompt>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -501,20 +501,6 @@ fn unix_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

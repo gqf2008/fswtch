@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::{CStr, c_char},
+    ffi::c_char,
     sync::{LazyLock, Mutex},
 };
 
@@ -22,7 +22,7 @@ unsafe extern "C" fn hit_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_metrics", "rust_metrics_hit invoked");
-    let Some(name) = command_text(cmd) else {
+    let Some(name) = fswtch::command_text(cmd) else {
         let status = write_response(stream, "usage: rust_metrics_hit <name>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -108,20 +108,6 @@ fn metric_key(name: &str) -> String {
             }
         })
         .collect()
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

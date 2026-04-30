@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, CString, c_char},
+    ffi::{CString, c_char},
     ptr,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -97,7 +97,7 @@ struct EventRequest {
 
 impl EventRequest {
     fn parse(cmd: *const c_char) -> Option<Self> {
-        let text = command_text(cmd)?;
+        let text = fswtch::command_text(cmd)?;
         let (subclass, json) = text.split_once(char::is_whitespace)?;
         let Value::Object(object) = serde_json::from_str(json.trim()).ok()? else {
             return None;
@@ -186,20 +186,6 @@ fn header_case(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("-")
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

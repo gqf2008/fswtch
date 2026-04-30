@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    ffi::{CStr, c_char},
+    ffi::c_char,
     sync::{
         LazyLock, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -121,7 +121,7 @@ unsafe extern "C" fn submit_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_async_job_queue", "rust_job_submit invoked");
-    let Some(payload) = command_text(cmd) else {
+    let Some(payload) = fswtch::command_text(cmd) else {
         fswtch::log_info("mod_async_job_queue", "missing job payload");
         let status = write_response(stream, "usage: rust_job_submit <payload>\n");
         return if status == SUCCESS { FALSE } else { status };
@@ -143,7 +143,7 @@ unsafe extern "C" fn status_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_async_job_queue", "rust_job_status invoked");
-    let Some(id) = command_text(cmd).and_then(|text| text.parse::<u64>().ok()) else {
+    let Some(id) = fswtch::command_text(cmd).and_then(|text| text.parse::<u64>().ok()) else {
         let status = write_response(stream, "usage: rust_job_status <id>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -196,20 +196,6 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

@@ -1,4 +1,4 @@
-use std::ffi::{CStr, c_char};
+use std::ffi::c_char;
 
 use fswtch::{Module, SUCCESS, Status, Stream, sys};
 
@@ -24,7 +24,7 @@ unsafe extern "C" fn echo_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_api_suite", "rust_echo invoked");
-    let text = command_text(cmd).unwrap_or_default();
+    let text = fswtch::command_text(cmd).unwrap_or_default();
     write_response(stream, &format!("{text}\n"))
 }
 
@@ -35,7 +35,7 @@ unsafe extern "C" fn upper_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_api_suite", "rust_upper invoked");
-    let text = command_text(cmd).unwrap_or_default();
+    let text = fswtch::command_text(cmd).unwrap_or_default();
     write_response(stream, &format!("{}\n", text.to_uppercase()))
 }
 
@@ -71,20 +71,6 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {

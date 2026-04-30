@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CStr, c_char},
+    ffi::c_char,
     io::{Read, Write},
     net::TcpStream,
     sync::atomic::{AtomicUsize, Ordering},
@@ -33,7 +33,7 @@ struct HttpUrl {
 
 impl WebhookRequest {
     fn parse(cmd: *const c_char) -> Option<Self> {
-        let text = command_text(cmd)?;
+        let text = fswtch::command_text(cmd)?;
         let (url, body) = text.split_once(char::is_whitespace)?;
         Some(Self {
             url: HttpUrl::parse(url)?,
@@ -168,20 +168,6 @@ fn post_webhook(request: &WebhookRequest) -> std::io::Result<()> {
     } else {
         Err(std::io::Error::other("non-success webhook response"))
     }
-}
-
-fn command_text(cmd: *const c_char) -> Option<String> {
-    if cmd.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH passes a null-terminated command string when one is present.
-    unsafe { CStr::from_ptr(cmd) }
-        .to_str()
-        .ok()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
