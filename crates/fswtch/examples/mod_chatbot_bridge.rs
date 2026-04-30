@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 static MESSAGES_BRIDGED: AtomicUsize = AtomicUsize::new(0);
 
@@ -76,7 +76,7 @@ unsafe extern "C" fn stats_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_chatbot_bridge", "rust_chatbot_bridge_stats invoked");
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!(
             "chatbot_bridge_registered=true messages_bridged={}\n",
@@ -152,16 +152,4 @@ fn add_event_header(
         )
     };
     fswtch::status_to_result(status)
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

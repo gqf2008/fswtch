@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use fswtch::{Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 static LOADS: AtomicUsize = AtomicUsize::new(0);
 static RUNTIME_TICKS: AtomicUsize = AtomicUsize::new(0);
@@ -23,20 +23,15 @@ unsafe extern "C" fn stats_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_lifecycle", "rust_lifecycle_stats invoked");
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return SUCCESS;
-    };
-    if let Err(error) = stream.write_str(&format!(
-        "loads={} runtime_ticks={} shutdowns={}\n",
-        LOADS.load(Ordering::Relaxed),
-        RUNTIME_TICKS.load(Ordering::Relaxed),
-        SHUTDOWNS.load(Ordering::Relaxed)
-    )) {
-        return error.0;
-    }
-
-    SUCCESS
+    fswtch::write_stream_response(
+        stream,
+        &format!(
+            "loads={} runtime_ticks={} shutdowns={}\n",
+            LOADS.load(Ordering::Relaxed),
+            RUNTIME_TICKS.load(Ordering::Relaxed),
+            SHUTDOWNS.load(Ordering::Relaxed)
+        ),
+    )
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.

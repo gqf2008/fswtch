@@ -12,7 +12,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 use serde_json::{Value, json};
 
 static STATE: LazyLock<AiState> = LazyLock::new(AiState::from_env);
@@ -236,7 +236,7 @@ unsafe extern "C" fn status_api(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!(
             "asr_backend={} tts_backend={} nlp_backend={} asr_runs={} tts_runs={} nlp_runs={}\n",
@@ -264,8 +264,9 @@ unsafe extern "C" fn asr_api(
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "rust_local_asr invoked");
     let Some(path) = fswtch::command_text(cmd) else {
-        let status = write_response(stream, "usage: rust_local_asr <pcm16le-file>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status =
+            fswtch::write_stream_response(stream, "usage: rust_local_asr <pcm16le-file>\n");
+        return fswtch::false_on_success(status);
     };
     let audio = fs::read(&path).unwrap_or_else(|error| {
         fswtch::log_info(
@@ -283,14 +284,14 @@ unsafe extern "C" fn asr_api(
             "mod_local_ai_bridge",
             "ASR backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
         );
-        return write_response(
+        return fswtch::write_stream_response(
             stream,
             "asr backend unavailable; set FSWTCH_ASR_ONNX or FSWTCH_AI_ALLOW_MOCK=1\n",
         );
     }
     let result = asr.transcribe(&audio);
 
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!(
             "backend={} confidence={:.2} text={}\n",
@@ -307,8 +308,8 @@ unsafe extern "C" fn tts_api(
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "rust_local_tts invoked");
     let Some(text) = fswtch::command_text(cmd) else {
-        let status = write_response(stream, "usage: rust_local_tts <text>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(stream, "usage: rust_local_tts <text>\n");
+        return fswtch::false_on_success(status);
     };
 
     let mut tts = STATE
@@ -320,7 +321,7 @@ unsafe extern "C" fn tts_api(
             "mod_local_ai_bridge",
             "TTS backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1",
         );
-        return write_response(
+        return fswtch::write_stream_response(
             stream,
             "tts backend unavailable; set FSWTCH_TTS_ONNX or FSWTCH_AI_ALLOW_MOCK=1\n",
         );
@@ -332,7 +333,7 @@ unsafe extern "C" fn tts_api(
                 "mod_local_ai_bridge",
                 format!("TTS wrote {}", result.output_path.display()),
             );
-            write_response(
+            fswtch::write_stream_response(
                 stream,
                 &format!(
                     "backend={} sample_rate={} samples={} output={}\n",
@@ -345,7 +346,7 @@ unsafe extern "C" fn tts_api(
         }
         Err(error) => {
             fswtch::log_info("mod_local_ai_bridge", format!("TTS failed: {error}"));
-            write_response(stream, &format!("tts failed: {error}\n"))
+            fswtch::write_stream_response(stream, &format!("tts failed: {error}\n"))
         }
     }
 }
@@ -358,8 +359,8 @@ unsafe extern "C" fn nlp_api(
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp invoked");
     let Some(prompt) = fswtch::command_text(cmd) else {
-        let status = write_response(stream, "usage: rust_local_nlp <prompt>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(stream, "usage: rust_local_nlp <prompt>\n");
+        return fswtch::false_on_success(status);
     };
 
     let worker = thread::Builder::new()
@@ -379,7 +380,7 @@ unsafe extern "C" fn nlp_api(
         return fswtch::GENERR;
     }
 
-    write_response(stream, "nlp request queued\n")
+    fswtch::write_stream_response(stream, "nlp request queued\n")
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -390,13 +391,13 @@ unsafe extern "C" fn nlp_sync_api(
 ) -> Status {
     fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp_sync invoked");
     let Some(prompt) = fswtch::command_text(cmd) else {
-        let status = write_response(stream, "usage: rust_local_nlp_sync <prompt>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(stream, "usage: rust_local_nlp_sync <prompt>\n");
+        return fswtch::false_on_success(status);
     };
 
     match STATE.openai.respond(&prompt, STATE.allow_mock) {
-        Ok(text) => write_response(stream, &format!("{text}\n")),
-        Err(error) => write_response(stream, &format!("nlp failed: {error}\n")),
+        Ok(text) => fswtch::write_stream_response(stream, &format!("{text}\n")),
+        Err(error) => fswtch::write_stream_response(stream, &format!("nlp failed: {error}\n")),
     }
 }
 
@@ -501,16 +502,4 @@ fn unix_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -29,14 +29,14 @@ unsafe extern "C" fn start_vad_api(
     fswtch::log_info("mod_remote_vad", "rust_vad_start invoked");
     let Some(config) = VadConfig::parse(cmd) else {
         fswtch::log_info("mod_remote_vad", "invalid command syntax");
-        let status = write_response(
+        let status = fswtch::write_stream_response(
             stream,
             "usage: rust_vad_start <call-uuid> <wss://vad.example/session>\n",
         );
-        return if status == SUCCESS { FALSE } else { status };
+        return fswtch::false_on_success(status);
     };
 
-    let status = write_response(stream, "remote VAD worker started\n");
+    let status = fswtch::write_stream_response(stream, "remote VAD worker started\n");
     if status != SUCCESS {
         return status;
     }
@@ -393,16 +393,4 @@ fn add_event_header(
         )
     };
     fswtch::status_to_result(status)
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return SUCCESS;
-    };
-    if let Err(error) = stream.write_str(text) {
-        return error.0;
-    }
-
-    SUCCESS
 }

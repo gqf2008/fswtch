@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 use serde_json::{Value, json};
 
 static CDRS_ENRICHED: AtomicUsize = AtomicUsize::new(0);
@@ -32,14 +32,14 @@ unsafe extern "C" fn enrich_api(
     fswtch::log_info("mod_cdr_enricher", "rust_cdr_enrich invoked");
     let Some(text) = fswtch::command_text(cmd) else {
         fswtch::log_info("mod_cdr_enricher", "missing CDR JSON");
-        let status = write_response(stream, "usage: rust_cdr_enrich <json-cdr>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(stream, "usage: rust_cdr_enrich <json-cdr>\n");
+        return fswtch::false_on_success(status);
     };
 
     let Ok(value) = serde_json::from_str::<Value>(&text) else {
         fswtch::log_info("mod_cdr_enricher", "invalid CDR JSON");
-        let status = write_response(stream, "invalid cdr json\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(stream, "invalid cdr json\n");
+        return fswtch::false_on_success(status);
     };
 
     let enriched = enrich_cdr(&value);
@@ -59,7 +59,7 @@ unsafe extern "C" fn enrich_api(
         "risk_score": enriched.risk,
         "billable_seconds": enriched.billable_seconds,
     });
-    write_response(stream, &format!("{response}\n"))
+    fswtch::write_stream_response(stream, &format!("{response}\n"))
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -69,7 +69,7 @@ unsafe extern "C" fn stats_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_cdr_enricher", "rust_cdr_enricher_stats invoked");
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!("cdrs_enriched={}\n", CDRS_ENRICHED.load(Ordering::Relaxed)),
     )
@@ -206,16 +206,4 @@ fn add_event_header(
         )
     };
     fswtch::status_to_result(status)
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

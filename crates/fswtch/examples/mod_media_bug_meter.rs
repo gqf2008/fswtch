@@ -4,8 +4,8 @@ use std::{
 };
 
 use fswtch::{
-    FALSE, MediaBugAction, MediaBugConfig, MediaBugContext, MediaBugFlags, MediaBugHandler,
-    MediaFrame, Module, SUCCESS, Status, Stream, sys,
+    MediaBugAction, MediaBugConfig, MediaBugContext, MediaBugFlags, MediaBugHandler, MediaFrame,
+    Module, SUCCESS, Status, sys,
 };
 
 static BUGS_ATTACHED: AtomicUsize = AtomicUsize::new(0);
@@ -97,7 +97,7 @@ unsafe extern "C" fn stats_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_media_bug_meter", "rust_media_bug_meter_stats invoked");
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!(
             "attached={} closed={} read_frames={} write_frames={} read_audio_bytes={} write_audio_bytes={}\n",
@@ -142,16 +142,4 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

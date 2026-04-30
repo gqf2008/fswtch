@@ -4,7 +4,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 use serde_json::Value;
 
 static EVENTS_FIRED: AtomicUsize = AtomicUsize::new(0);
@@ -23,11 +23,11 @@ unsafe extern "C" fn emit_api(
     fswtch::log_info("mod_event_sink", "rust_event_sink_emit invoked");
     let Some(request) = EventRequest::parse(cmd) else {
         fswtch::log_info("mod_event_sink", "invalid event sink command");
-        let status = write_response(
+        let status = fswtch::write_stream_response(
             stream,
             "usage: rust_event_sink_emit <subclass> <json-object>\n",
         );
-        return if status == SUCCESS { FALSE } else { status };
+        return fswtch::false_on_success(status);
     };
 
     match fire_event(&request) {
@@ -37,7 +37,7 @@ unsafe extern "C" fn emit_api(
                 "mod_event_sink",
                 format!("fired event subclass={} count={count}", request.subclass),
             );
-            write_response(stream, &format!("event fired count={count}\n"))
+            fswtch::write_stream_response(stream, &format!("event fired count={count}\n"))
         }
         Err(error) => error.0,
     }
@@ -50,7 +50,7 @@ unsafe extern "C" fn stats_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_event_sink", "rust_event_sink_stats invoked");
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!("events_fired={}\n", EVENTS_FIRED.load(Ordering::Relaxed)),
     )
@@ -186,16 +186,4 @@ fn header_case(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("-")
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

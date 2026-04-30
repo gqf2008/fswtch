@@ -4,7 +4,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 static METRICS: LazyLock<Mutex<HashMap<String, u64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -23,8 +23,8 @@ unsafe extern "C" fn hit_api(
 ) -> Status {
     fswtch::log_info("mod_metrics", "rust_metrics_hit invoked");
     let Some(name) = fswtch::command_text(cmd) else {
-        let status = write_response(stream, "usage: rust_metrics_hit <name>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(stream, "usage: rust_metrics_hit <name>\n");
+        return fswtch::false_on_success(status);
     };
 
     let mut metrics = METRICS
@@ -33,7 +33,7 @@ unsafe extern "C" fn hit_api(
     let key = metric_key(&name);
     if !metrics.contains_key(&key) && metrics.len() >= MAX_METRICS {
         fswtch::log_error("mod_metrics", "metric cardinality limit reached");
-        return write_response(stream, "metric cardinality limit reached\n");
+        return fswtch::write_stream_response(stream, "metric cardinality limit reached\n");
     }
     let count = metrics.entry(key.clone()).or_default();
     *count += 1;
@@ -41,7 +41,7 @@ unsafe extern "C" fn hit_api(
         "mod_metrics",
         format!("incremented metric={key} count={count}"),
     );
-    write_response(stream, &format!("metric={key} count={count}\n"))
+    fswtch::write_stream_response(stream, &format!("metric={key} count={count}\n"))
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -62,7 +62,7 @@ unsafe extern "C" fn show_api(
             "fswtch_example_events_total{{name=\"{name}\"}} {count}\n"
         ));
     }
-    write_response(stream, &lines)
+    fswtch::write_stream_response(stream, &lines)
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -108,16 +108,4 @@ fn metric_key(name: &str) -> String {
             }
         })
         .collect()
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

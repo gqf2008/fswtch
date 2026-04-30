@@ -1,6 +1,6 @@
 use std::ptr::NonNull;
 
-use crate::{GENERR, Result, SwitchError, status_to_result, sys};
+use crate::{FALSE, GENERR, Result, SUCCESS, Status, SwitchError, status_to_result, sys};
 
 pub struct Stream {
     raw: NonNull<sys::switch_stream_handle_t>,
@@ -30,5 +30,16 @@ impl Stream {
 
     pub fn write_str(&mut self, text: &str) -> Result<()> {
         self.write_bytes(text.as_bytes())
+    }
+}
+
+pub fn write_stream_response(raw: *mut sys::switch_stream_handle_t, text: &str) -> Status {
+    let Some(mut stream) = Stream::from_raw(raw) else {
+        return FALSE;
+    };
+
+    match stream.write_str(text) {
+        Ok(()) => SUCCESS,
+        Err(error) => error.0,
     }
 }

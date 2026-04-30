@@ -1,6 +1,6 @@
 use std::ffi::c_char;
 
-use fswtch::{Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 fswtch::module_exports! {
     module = mod_hello,
@@ -14,16 +14,7 @@ unsafe extern "C" fn hello_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_hello", "rust_hello invoked");
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        fswtch::log_info("mod_hello", "missing stream handle");
-        return SUCCESS;
-    };
-    if let Err(error) = stream.write_str("hello from Rust\n") {
-        return error.0;
-    }
-
-    SUCCESS
+    fswtch::write_stream_response(stream, "hello from Rust\n")
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.

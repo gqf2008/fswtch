@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 static WEBHOOKS_QUEUED: AtomicUsize = AtomicUsize::new(0);
 static WEBHOOKS_SENT: AtomicUsize = AtomicUsize::new(0);
@@ -69,8 +69,11 @@ unsafe extern "C" fn post_api(
     fswtch::log_info("mod_http_webhook", "rust_webhook_post invoked");
     let Some(request) = WebhookRequest::parse(cmd) else {
         fswtch::log_info("mod_http_webhook", "invalid webhook command");
-        let status = write_response(stream, "usage: rust_webhook_post <http-url> <json-body>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(
+            stream,
+            "usage: rust_webhook_post <http-url> <json-body>\n",
+        );
+        return fswtch::false_on_success(status);
     };
 
     WEBHOOKS_QUEUED.fetch_add(1, Ordering::Relaxed);
@@ -93,7 +96,7 @@ unsafe extern "C" fn post_api(
         return fswtch::GENERR;
     }
 
-    write_response(stream, "webhook queued\n")
+    fswtch::write_stream_response(stream, "webhook queued\n")
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -103,7 +106,7 @@ unsafe extern "C" fn stats_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_http_webhook", "rust_webhook_stats invoked");
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!(
             "queued={} sent={} failed={}\n",
@@ -167,17 +170,5 @@ fn post_webhook(request: &WebhookRequest) -> std::io::Result<()> {
         Ok(())
     } else {
         Err(std::io::Error::other("non-success webhook response"))
-    }
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
     }
 }

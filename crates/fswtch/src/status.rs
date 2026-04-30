@@ -28,3 +28,7 @@ pub fn status_to_result(status: Status) -> Result<()> {
         Err(SwitchError(status))
     }
 }
+
+pub fn false_on_success(status: Status) -> Status {
+    if status == SUCCESS { FALSE } else { status }
+}

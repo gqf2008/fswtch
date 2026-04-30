@@ -1,6 +1,6 @@
 use std::ffi::c_char;
 
-use fswtch::{FALSE, Module, SUCCESS, Session, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Session, Status, sys};
 
 fswtch::module_exports! {
     module = mod_app_playback_control,
@@ -50,7 +50,7 @@ unsafe extern "C" fn info_api(
         "mod_app_playback_control",
         "rust_playback_control_info invoked",
     );
-    write_response(
+    fswtch::write_stream_response(
         stream,
         "application rust_playback_control registered; use from dialplan with a file path\n",
     )
@@ -87,16 +87,4 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

@@ -1,6 +1,6 @@
 use std::ffi::c_char;
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 fswtch::module_exports! {
     module = mod_stream_tools,
@@ -14,23 +14,16 @@ unsafe extern "C" fn table_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_stream_tools", "rust_table invoked");
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    for line in [
-        "name,value\n",
-        "language,rust\n",
-        "module,mod_stream_tools\n",
-        "binding,fswtch\n",
-    ] {
-        if let Err(error) = stream.write_str(line) {
-            return error.0;
-        }
-    }
-
-    SUCCESS
+    fswtch::write_stream_response(
+        stream,
+        &[
+            "name,value\n",
+            "language,rust\n",
+            "module,mod_stream_tools\n",
+            "binding,fswtch\n",
+        ]
+        .concat(),
+    )
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -40,24 +33,13 @@ unsafe extern "C" fn words_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_stream_tools", "rust_words invoked");
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
 
     let Some(text) = fswtch::command_text(cmd) else {
-        return match stream.write_str("0 words\n") {
-            Ok(()) => SUCCESS,
-            Err(error) => error.0,
-        };
+        return fswtch::write_stream_response(stream, "0 words\n");
     };
 
     let count = text.split_whitespace().count();
-    if let Err(error) = stream.write_str(&format!("{count} words\n")) {
-        return error.0;
-    }
-
-    SUCCESS
+    fswtch::write_stream_response(stream, &format!("{count} words\n"))
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.

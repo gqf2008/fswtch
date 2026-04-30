@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 use serde_json::Value;
 
 const REGISTRATION_CHECK_DELAY: Duration = Duration::from_millis(150);
@@ -23,14 +23,14 @@ unsafe extern "C" fn check_registration_api(
     fswtch::log_info("mod_registration_check", "rust_check_registration invoked");
     let Some(request) = RegistrationRequest::parse(cmd) else {
         fswtch::log_info("mod_registration_check", "invalid command syntax");
-        let status = write_response(
+        let status = fswtch::write_stream_response(
             stream,
             "usage: rust_check_registration <user@domain> <https://server/check>\n",
         );
-        return if status == SUCCESS { FALSE } else { status };
+        return fswtch::false_on_success(status);
     };
 
-    let status = write_response(stream, "registration check queued\n");
+    let status = fswtch::write_stream_response(stream, "registration check queued\n");
     if status != SUCCESS {
         return status;
     }
@@ -207,16 +207,4 @@ fn add_event_header(
         )
     };
     fswtch::status_to_result(status)
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return SUCCESS;
-    };
-    if let Err(error) = stream.write_str(text) {
-        return error.0;
-    }
-
-    SUCCESS
 }

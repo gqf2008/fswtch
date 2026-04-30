@@ -1,6 +1,6 @@
 use std::ffi::c_char;
 
-use fswtch::{Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 fswtch::module_exports! {
     module = mod_api_suite,
@@ -14,7 +14,7 @@ unsafe extern "C" fn ping_api(
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
     fswtch::log_info("mod_api_suite", "rust_ping invoked");
-    write_response(stream, "pong\n")
+    fswtch::write_stream_response(stream, "pong\n")
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -25,7 +25,7 @@ unsafe extern "C" fn echo_api(
 ) -> Status {
     fswtch::log_info("mod_api_suite", "rust_echo invoked");
     let text = fswtch::command_text(cmd).unwrap_or_default();
-    write_response(stream, &format!("{text}\n"))
+    fswtch::write_stream_response(stream, &format!("{text}\n"))
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -36,7 +36,7 @@ unsafe extern "C" fn upper_api(
 ) -> Status {
     fswtch::log_info("mod_api_suite", "rust_upper invoked");
     let text = fswtch::command_text(cmd).unwrap_or_default();
-    write_response(stream, &format!("{}\n", text.to_uppercase()))
+    fswtch::write_stream_response(stream, &format!("{}\n", text.to_uppercase()))
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -68,17 +68,6 @@ unsafe extern "C" fn switch_module_load(
         if let Err(error) = result {
             return error.0;
         }
-    }
-
-    SUCCESS
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    if let Some(mut stream) = Stream::from_raw(stream)
-        && let Err(error) = stream.write_str(text)
-    {
-        return error.0;
     }
 
     SUCCESS

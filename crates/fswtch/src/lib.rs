@@ -25,5 +25,7 @@ pub use module::{
     ApiInterface, ApplicationInterface, ChatApplicationInterface, EndpointInterface, Module,
 };
 pub use session::Session;
-pub use status::{FALSE, GENERR, Result, SUCCESS, Status, SwitchError, status_to_result};
-pub use stream::Stream;
+pub use status::{
+    FALSE, GENERR, Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result,
+};
+pub use stream::{Stream, write_stream_response};

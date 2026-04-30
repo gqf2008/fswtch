@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 static JOB_QUEUE: LazyLock<JobQueue> = LazyLock::new(JobQueue::start);
 const MAX_JOB_RESULTS: usize = 4096;
@@ -123,15 +123,15 @@ unsafe extern "C" fn submit_api(
     fswtch::log_info("mod_async_job_queue", "rust_job_submit invoked");
     let Some(payload) = fswtch::command_text(cmd) else {
         fswtch::log_info("mod_async_job_queue", "missing job payload");
-        let status = write_response(stream, "usage: rust_job_submit <payload>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(stream, "usage: rust_job_submit <payload>\n");
+        return fswtch::false_on_success(status);
     };
 
     match JOB_QUEUE.submit(payload) {
-        Ok(id) => write_response(stream, &format!("job queued id={id}\n")),
+        Ok(id) => fswtch::write_stream_response(stream, &format!("job queued id={id}\n")),
         Err(error) => {
             fswtch::log_error("mod_async_job_queue", error);
-            write_response(stream, &format!("job queue unavailable: {error}\n"))
+            fswtch::write_stream_response(stream, &format!("job queue unavailable: {error}\n"))
         }
     }
 }
@@ -144,8 +144,8 @@ unsafe extern "C" fn status_api(
 ) -> Status {
     fswtch::log_info("mod_async_job_queue", "rust_job_status invoked");
     let Some(id) = fswtch::command_text(cmd).and_then(|text| text.parse::<u64>().ok()) else {
-        let status = write_response(stream, "usage: rust_job_status <id>\n");
-        return if status == SUCCESS { FALSE } else { status };
+        let status = fswtch::write_stream_response(stream, "usage: rust_job_status <id>\n");
+        return fswtch::false_on_success(status);
     };
 
     let results = JOB_QUEUE
@@ -153,14 +153,14 @@ unsafe extern "C" fn status_api(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     match results.get(&id) {
-        Some(result) => write_response(
+        Some(result) => fswtch::write_stream_response(
             stream,
             &format!(
                 "id={id} status={} detail={}\n",
                 result.status, result.detail
             ),
         ),
-        None => write_response(stream, &format!("id={id} status=missing\n")),
+        None => fswtch::write_stream_response(stream, &format!("id={id} status=missing\n")),
     }
 }
 
@@ -196,16 +196,4 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

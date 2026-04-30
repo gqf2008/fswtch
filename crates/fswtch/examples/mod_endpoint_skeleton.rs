@@ -1,6 +1,6 @@
 use std::{ffi::c_char, ptr};
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 static mut IO_ROUTINES: sys::switch_io_routines = sys::switch_io_routines {
     outgoing_channel: None,
@@ -35,7 +35,7 @@ unsafe extern "C" fn info_api(
         "mod_endpoint_skeleton",
         "rust_endpoint_skeleton_info invoked",
     );
-    write_response(
+    fswtch::write_stream_response(
         stream,
         "endpoint rust_endpoint_skeleton registered with placeholder I/O routines\n",
     )
@@ -67,16 +67,4 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

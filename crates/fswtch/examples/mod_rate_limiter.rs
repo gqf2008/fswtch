@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 static LIMITERS: LazyLock<Mutex<HashMap<String, Bucket>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -58,11 +58,11 @@ unsafe extern "C" fn allow_api(
 ) -> Status {
     fswtch::log_info("mod_rate_limiter", "rust_rate_limit invoked");
     let Some(request) = LimitRequest::parse(cmd) else {
-        let status = write_response(
+        let status = fswtch::write_stream_response(
             stream,
             "usage: rust_rate_limit <key> [limit] [window-secs]\n",
         );
-        return if status == SUCCESS { FALSE } else { status };
+        return fswtch::false_on_success(status);
     };
 
     let now = Instant::now();
@@ -71,7 +71,7 @@ unsafe extern "C" fn allow_api(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     if !limiters.contains_key(&request.key) && limiters.len() >= MAX_BUCKETS {
         fswtch::log_error("mod_rate_limiter", "rate limiter bucket limit reached");
-        return write_response(stream, "rate limiter bucket limit reached\n");
+        return fswtch::write_stream_response(stream, "rate limiter bucket limit reached\n");
     }
     let bucket = limiters
         .entry(request.key.clone())
@@ -97,7 +97,7 @@ unsafe extern "C" fn allow_api(
         ),
     );
 
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!(
             "key={} allowed={} remaining={}\n",
@@ -117,7 +117,7 @@ unsafe extern "C" fn reset_api(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .clear();
-    write_response(stream, "rate limiters reset\n")
+    fswtch::write_stream_response(stream, "rate limiters reset\n")
 }
 
 // SAFETY: FreeSWITCH calls this function during module load with loader-owned pointers.
@@ -151,16 +151,4 @@ unsafe extern "C" fn switch_module_load(
     }
 
     SUCCESS
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }

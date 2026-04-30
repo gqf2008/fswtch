@@ -4,7 +4,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
-use fswtch::{FALSE, Module, SUCCESS, Status, Stream, sys};
+use fswtch::{Module, SUCCESS, Status, sys};
 
 static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
 
@@ -40,7 +40,7 @@ unsafe extern "C" fn show_api(
     let config = CONFIG
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    write_response(
+    fswtch::write_stream_response(
         stream,
         &format!(
             "enabled={} greeting={} max_sessions={}\n",
@@ -61,9 +61,11 @@ unsafe extern "C" fn reload_api(
             *CONFIG
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = config;
-            write_response(stream, "config reloaded\n")
+            fswtch::write_stream_response(stream, "config reloaded\n")
         }
-        Err(error) => write_response(stream, &format!("config reload failed: {error}\n")),
+        Err(error) => {
+            fswtch::write_stream_response(stream, &format!("config reload failed: {error}\n"))
+        }
     }
 }
 
@@ -180,16 +182,4 @@ fn xml_attr(node: sys::switch_xml_t, name: &'static CStr) -> Option<String> {
         .to_str()
         .ok()
         .map(ToOwned::to_owned)
-}
-
-fn write_response(stream: *mut sys::switch_stream_handle_t, text: &str) -> Status {
-    // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
-    let Some(mut stream) = Stream::from_raw(stream) else {
-        return FALSE;
-    };
-
-    match stream.write_str(text) {
-        Ok(()) => SUCCESS,
-        Err(error) => error.0,
-    }
 }
