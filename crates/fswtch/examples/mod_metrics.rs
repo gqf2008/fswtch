@@ -57,20 +57,20 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_metrics" {
+    fn switch_module_load(module) for "mod_metrics" {
         fswtch::log_info("mod_metrics", "loading module");
         module
             .api(
-                c"rust_metrics_hit",
-                c"increments a named example counter",
-                c"rust_metrics_hit <name>",
+                "rust_metrics_hit",
+                "increments a named example counter",
+                "rust_metrics_hit <name>",
                 hit_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_metrics_show",
-                    c"prints example counters in Prometheus text format",
-                    c"rust_metrics_show",
+                    "rust_metrics_show",
+                    "prints example counters in Prometheus text format",
+                    "rust_metrics_show",
                     show_api,
                 )
             })

@@ -9,10 +9,11 @@ mod module;
 mod session;
 mod status;
 mod stream;
+mod xml;
 
 pub use fswtch_sys as sys;
 
-pub use command::{command_text, cstring};
+pub use command::{StaticCStr, command_text, cstring};
 pub use event::{Event, EventRef};
 pub use logging::{
     LogLevel, log, log_alert, log_console, log_critical, log_debug, log_debug1, log_debug2,
@@ -32,6 +33,7 @@ pub use status::{
     FALSE, GENERR, Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result,
 };
 pub use stream::{ApiStream, Stream, write_stream_response};
+pub use xml::{XmlConfig, XmlNode};
 
 #[macro_export]
 macro_rules! api_callback {

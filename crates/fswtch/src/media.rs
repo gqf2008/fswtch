@@ -6,7 +6,7 @@ use std::{
     slice,
 };
 
-use crate::{Result, SwitchError, log_error, status_to_result, sys};
+use crate::{Result, StaticCStr, SwitchError, log_error, status_to_result, sys};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MediaBugAction {
@@ -76,13 +76,17 @@ pub struct MediaBugConfig {
 }
 
 impl MediaBugConfig {
-    pub const fn new(function: &'static CStr, target: &'static CStr, flags: MediaBugFlags) -> Self {
-        Self {
-            function,
-            target,
+    pub fn new(
+        function: impl StaticCStr,
+        target: impl StaticCStr,
+        flags: MediaBugFlags,
+    ) -> Result<Self> {
+        Ok(Self {
+            function: function.into_static_cstr()?,
+            target: target.into_static_cstr()?,
             flags,
             stop_time: 0,
-        }
+        })
     }
 
     pub const fn stop_time(mut self, stop_time: sys::time_t) -> Self {

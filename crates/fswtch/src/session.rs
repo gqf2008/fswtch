@@ -1,6 +1,6 @@
-use std::{ffi::CStr, ptr::NonNull};
+use std::ptr::NonNull;
 
-use crate::{Result, status_to_result, sys};
+use crate::{Result, cstring, status_to_result, sys};
 
 #[derive(Copy, Clone)]
 pub struct Session {
@@ -48,7 +48,8 @@ impl Session {
         status_to_result(status)
     }
 
-    pub fn play_file(self, path: &CStr) -> Result<()> {
+    pub fn play_file(self, path: impl AsRef<str>) -> Result<()> {
+        let path = cstring(path)?;
         // SAFETY: `self.raw` is live and `path` is a valid C string for the duration of the call.
         let status = unsafe {
             sys::switch_ivr_play_file(

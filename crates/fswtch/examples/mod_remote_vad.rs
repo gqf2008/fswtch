@@ -87,12 +87,12 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_remote_vad" {
+    fn switch_module_load(module) for "mod_remote_vad" {
         fswtch::log_info("mod_remote_vad", "loading module");
         module.api(
-            c"rust_vad_start",
-            c"starts an async remote websocket VAD worker",
-            c"rust_vad_start <call-uuid> <wss://vad.example/session>",
+            "rust_vad_start",
+            "starts an async remote websocket VAD worker",
+            "rust_vad_start <call-uuid> <wss://vad.example/session>",
             start_vad_api,
         )
     }
@@ -312,17 +312,17 @@ fn fire_vad_event(
     message: &str,
     result: Option<&VadResult>,
 ) -> fswtch::Result<()> {
-    let mut event = fswtch::Event::custom(c"fswtch::remote_vad")?;
-    event.add_header(c"VAD-Event", kind.as_str())?;
-    event.add_header(c"VAD-Call-UUID", &config.call_uuid)?;
-    event.add_header(c"VAD-Websocket-URL", &config.websocket_url)?;
-    event.add_header(c"VAD-Message", message)?;
+    let mut event = fswtch::Event::custom("fswtch::remote_vad")?;
+    event.add_header("VAD-Event", kind.as_str())?;
+    event.add_header("VAD-Call-UUID", &config.call_uuid)?;
+    event.add_header("VAD-Websocket-URL", &config.websocket_url)?;
+    event.add_header("VAD-Message", message)?;
 
     if let Some(result) = result {
-        event.add_header(c"VAD-Sequence", &result.sequence.to_string())?;
-        event.add_header(c"VAD-Speech", if result.speech { "true" } else { "false" })?;
-        event.add_header(c"VAD-Confidence", &result.confidence)?;
-        event.add_header(c"VAD-Label", &result.label)?;
+        event.add_header("VAD-Sequence", &result.sequence.to_string())?;
+        event.add_header("VAD-Speech", if result.speech { "true" } else { "false" })?;
+        event.add_header("VAD-Confidence", &result.confidence)?;
+        event.add_header("VAD-Label", &result.label)?;
     }
 
     event.fire()

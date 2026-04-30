@@ -27,22 +27,22 @@ fn upper_api(cmd, _session, stream) {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_api_suite" {
+    fn switch_module_load(module) for "mod_api_suite" {
         fswtch::log_info("mod_api_suite", "loading module");
-        module.api(c"rust_ping", c"returns pong", c"rust_ping", ping_api)
+        module.api("rust_ping", "returns pong", "rust_ping", ping_api)
         .and_then(|module| {
             module.api(
-                c"rust_echo",
-                c"echoes the command argument",
-                c"rust_echo <text>",
+                "rust_echo",
+                "echoes the command argument",
+                "rust_echo <text>",
                 echo_api,
             )
         })
         .and_then(|module| {
             module.api(
-                c"rust_upper",
-                c"uppercases the command argument",
-                c"rust_upper <text>",
+                "rust_upper",
+                "uppercases the command argument",
+                "rust_upper <text>",
                 upper_api,
             )
         })

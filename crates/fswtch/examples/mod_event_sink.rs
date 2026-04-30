@@ -42,20 +42,20 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_event_sink" {
+    fn switch_module_load(module) for "mod_event_sink" {
         fswtch::log_info("mod_event_sink", "loading module");
         module
             .api(
-                c"rust_event_sink_emit",
-                c"fires a custom event from a JSON object",
-                c"rust_event_sink_emit <subclass> <json-object>",
+                "rust_event_sink_emit",
+                "fires a custom event from a JSON object",
+                "rust_event_sink_emit <subclass> <json-object>",
                 emit_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_event_sink_stats",
-                    c"prints event sink counters",
-                    c"rust_event_sink_stats",
+                    "rust_event_sink_stats",
+                    "prints event sink counters",
+                    "rust_event_sink_stats",
                     stats_api,
                 )
             })
@@ -94,8 +94,7 @@ impl EventRequest {
 }
 
 fn fire_event(request: &EventRequest) -> fswtch::Result<()> {
-    let subclass = fswtch::cstring(&request.subclass)?;
-    let mut event = fswtch::Event::custom(&subclass)?;
+    let mut event = fswtch::Event::custom(&request.subclass)?;
 
     for (name, value) in &request.headers {
         event.add_header_name(name, value)?;

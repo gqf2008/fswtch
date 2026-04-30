@@ -378,45 +378,45 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_local_ai_bridge" {
+    fn switch_module_load(module) for "mod_local_ai_bridge" {
         fswtch::log_info("mod_local_ai_bridge", "loading module");
         LazyLock::force(&STATE);
         module
             .api(
-                c"rust_local_ai_status",
-                c"prints local ASR/TTS and OpenAI NLP integration status",
-                c"rust_local_ai_status",
+                "rust_local_ai_status",
+                "prints local ASR/TTS and OpenAI NLP integration status",
+                "rust_local_ai_status",
                 status_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_local_asr",
-                    c"runs local ORT speech recognition for a PCM file",
-                    c"rust_local_asr <pcm16le-file>",
+                    "rust_local_asr",
+                    "runs local ORT speech recognition for a PCM file",
+                    "rust_local_asr <pcm16le-file>",
                     asr_api,
                 )
             })
             .and_then(|module| {
                 module.api(
-                    c"rust_local_tts",
-                    c"runs local ORT speech synthesis for text",
-                    c"rust_local_tts <text>",
+                    "rust_local_tts",
+                    "runs local ORT speech synthesis for text",
+                    "rust_local_tts <text>",
                     tts_api,
                 )
             })
             .and_then(|module| {
                 module.api(
-                    c"rust_local_nlp",
-                    c"queues an OpenAI Responses API NLP request",
-                    c"rust_local_nlp <prompt>",
+                    "rust_local_nlp",
+                    "queues an OpenAI Responses API NLP request",
+                    "rust_local_nlp <prompt>",
                     nlp_api,
                 )
             })
             .and_then(|module| {
                 module.api(
-                    c"rust_local_nlp_sync",
-                    c"runs an OpenAI Responses API NLP request synchronously",
-                    c"rust_local_nlp_sync <prompt>",
+                    "rust_local_nlp_sync",
+                    "runs an OpenAI Responses API NLP request synchronously",
+                    "rust_local_nlp_sync <prompt>",
                     nlp_sync_api,
                 )
             })

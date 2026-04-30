@@ -32,20 +32,20 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_stream_tools" {
+    fn switch_module_load(module) for "mod_stream_tools" {
         fswtch::log_info("mod_stream_tools", "loading module");
         module
             .api(
-            c"rust_table",
-            c"prints a small CSV response",
-            c"rust_table",
+            "rust_table",
+            "prints a small CSV response",
+            "rust_table",
             table_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_words",
-                    c"counts words in the command argument",
-                    c"rust_words <text>",
+                    "rust_words",
+                    "counts words in the command argument",
+                    "rust_words <text>",
                     words_api,
                 )
             })

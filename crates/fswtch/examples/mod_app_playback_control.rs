@@ -20,16 +20,8 @@ fn playback_control_app(session, data) {
         return;
     };
 
-    let Ok(file) = fswtch::cstring(file) else {
-        fswtch::log_info(
-            "mod_app_playback_control",
-            "playback target contained NUL byte",
-        );
-        return;
-    };
-
     let _ = session.answer();
-    let _ = session.play_file(&file);
+    let _ = session.play_file(file);
     fswtch::log_info("mod_app_playback_control", "playback call returned");
 }
 }
@@ -45,21 +37,21 @@ fn info_api(_cmd, _session, stream) {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_app_playback_control" {
+    fn switch_module_load(module) for "mod_app_playback_control" {
         fswtch::log_info("mod_app_playback_control", "loading module");
         module
             .application(
-                c"rust_playback_control",
-                c"Answers a channel and plays the supplied file path",
-                c"Rust playback control example",
-                c"rust_playback_control <path-or-tone-stream>",
+                "rust_playback_control",
+                "Answers a channel and plays the supplied file path",
+                "Rust playback control example",
+                "rust_playback_control <path-or-tone-stream>",
                 playback_control_app,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_playback_control_info",
-                    c"describes the Rust playback control application",
-                    c"rust_playback_control_info",
+                    "rust_playback_control_info",
+                    "describes the Rust playback control application",
+                    "rust_playback_control_info",
                     info_api,
                 )
             })

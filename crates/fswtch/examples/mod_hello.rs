@@ -11,12 +11,12 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_hello" {
+    fn switch_module_load(module) for "mod_hello" {
         fswtch::log_info("mod_hello", "loading module");
         module.api(
-            c"rust_hello",
-            c"prints a Rust greeting",
-            c"rust_hello",
+            "rust_hello",
+            "prints a Rust greeting",
+            "rust_hello",
             hello_api,
         )
     }

@@ -1,10 +1,4 @@
-use std::{
-    ffi::CStr,
-    ptr,
-    sync::{LazyLock, Mutex},
-};
-
-use fswtch::sys;
+use std::sync::{LazyLock, Mutex};
 
 static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::default()));
 
@@ -63,7 +57,7 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_config_xml" {
+    fn switch_module_load(module) for "mod_config_xml" {
         fswtch::log_info("mod_config_xml", "loading module");
         if let Ok(config) = load_config() {
             *CONFIG
@@ -72,16 +66,16 @@ fswtch::module_load! {
         }
         module
             .api(
-                c"rust_config_xml_show",
-                c"prints settings loaded from fswtch_examples.conf",
-                c"rust_config_xml_show",
+                "rust_config_xml_show",
+                "prints settings loaded from fswtch_examples.conf",
+                "rust_config_xml_show",
                 show_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_config_xml_reload",
-                    c"reloads settings from fswtch_examples.conf",
-                    c"rust_config_xml_reload",
+                    "rust_config_xml_reload",
+                    "reloads settings from fswtch_examples.conf",
+                    "rust_config_xml_reload",
                     reload_api,
                 )
             })
@@ -91,47 +85,25 @@ fswtch::module_load! {
 fn load_config() -> Result<Config, &'static str> {
     fswtch::log_info("mod_config_xml", "loading fswtch_examples.conf");
     let mut config = Config::default();
-    let mut settings = ptr::null_mut();
-    // SAFETY: FreeSWITCH writes the configuration node into `settings` when the file is found.
-    let root = unsafe {
-        sys::switch_xml_open_cfg(
-            c"fswtch_examples.conf".as_ptr(),
-            &mut settings,
-            ptr::null_mut(),
-        )
-    };
-    if root.is_null() {
-        return Err("fswtch_examples.conf not found");
-    }
+    let xml =
+        fswtch::XmlConfig::open("fswtch_examples.conf").ok_or("fswtch_examples.conf not found")?;
 
-    if !settings.is_null() {
-        // SAFETY: `settings` is the live configuration node returned by FreeSWITCH.
-        let settings_node = unsafe { sys::switch_xml_child(settings, c"settings".as_ptr()) };
-        if !settings_node.is_null() {
-            parse_settings(settings_node, &mut config);
-        }
-    }
-
-    // SAFETY: `root` was returned by FreeSWITCH XML APIs and must be released after traversal.
-    unsafe {
-        sys::switch_xml_free(root);
+    if let Some(settings) = xml.settings().and_then(|node| node.child("settings")) {
+        parse_settings(settings, &mut config);
     }
 
     Ok(config)
 }
 
-fn parse_settings(settings: sys::switch_xml_t, config: &mut Config) {
-    // SAFETY: `settings` is a live XML node, and the child name is a static C string.
-    let mut param = unsafe { sys::switch_xml_child(settings, c"param".as_ptr()) };
-    while !param.is_null() {
-        let Some(name) = xml_attr(param, c"name") else {
-            // SAFETY: `param` is live for traversal.
-            param = unsafe { (*param).next };
+fn parse_settings(settings: fswtch::XmlNode, config: &mut Config) {
+    let mut param = settings.child("param");
+    while let Some(node) = param {
+        let Some(name) = node.attr("name") else {
+            param = node.next();
             continue;
         };
-        let Some(value) = xml_attr(param, c"value") else {
-            // SAFETY: `param` is live for traversal.
-            param = unsafe { (*param).next };
+        let Some(value) = node.attr("value") else {
+            param = node.next();
             continue;
         };
 
@@ -146,21 +118,6 @@ fn parse_settings(settings: sys::switch_xml_t, config: &mut Config) {
             _ => {}
         }
 
-        // SAFETY: `param` is live for traversal.
-        param = unsafe { (*param).next };
+        param = node.next();
     }
-}
-
-fn xml_attr(node: sys::switch_xml_t, name: &'static CStr) -> Option<String> {
-    // SAFETY: `node` is live and `name` is a static C string.
-    let value = unsafe { sys::switch_xml_attr(node, name.as_ptr()) };
-    if value.is_null() {
-        return None;
-    }
-
-    // SAFETY: FreeSWITCH returns a null-terminated attribute value when present.
-    unsafe { CStr::from_ptr(value) }
-        .to_str()
-        .ok()
-        .map(ToOwned::to_owned)
 }

@@ -107,20 +107,20 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_rate_limiter" {
+    fn switch_module_load(module) for "mod_rate_limiter" {
         fswtch::log_info("mod_rate_limiter", "loading module");
         module
             .api(
-                c"rust_rate_limit",
-                c"checks a token-bucket rate limit",
-                c"rust_rate_limit <key> [limit] [window-secs]",
+                "rust_rate_limit",
+                "checks a token-bucket rate limit",
+                "rust_rate_limit <key> [limit] [window-secs]",
                 allow_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_rate_limit_reset",
-                    c"clears all rate limiter buckets",
-                    c"rust_rate_limit_reset",
+                    "rust_rate_limit_reset",
+                    "clears all rate limiter buckets",
+                    "rust_rate_limit_reset",
                     reset_api,
                 )
             })

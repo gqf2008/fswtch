@@ -7,7 +7,8 @@ pub struct Event {
 }
 
 impl Event {
-    pub fn custom(subclass: &CStr) -> Result<Self> {
+    pub fn custom(subclass: impl AsRef<str>) -> Result<Self> {
+        let subclass = cstring(subclass)?;
         let mut raw = std::ptr::null_mut();
         // SAFETY: FreeSWITCH initializes `raw` for the custom subclass when the call succeeds.
         let status = unsafe {
@@ -30,10 +31,11 @@ impl Event {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
-    pub fn add_header(&mut self, name: &CStr, value: &str) -> Result<()> {
+    pub fn add_header(&mut self, name: impl AsRef<str>, value: &str) -> Result<()> {
         let Some(raw) = self.raw else {
             return Ok(());
         };
+        let name = cstring(name)?;
         let value = cstring(value)?;
         // SAFETY: `raw` is a live event and both C strings are valid for this call.
         let status = unsafe {
@@ -47,9 +49,8 @@ impl Event {
         status_to_result(status)
     }
 
-    pub fn add_header_name(&mut self, name: &str, value: &str) -> Result<()> {
-        let name = cstring(name)?;
-        self.add_header(&name, value)
+    pub fn add_header_name(&mut self, name: impl AsRef<str>, value: &str) -> Result<()> {
+        self.add_header(name, value)
     }
 
     pub fn fire(mut self) -> Result<()> {
@@ -104,8 +105,9 @@ impl EventRef {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
-    pub fn header(self, name: &CStr) -> Option<String> {
+    pub fn header(self, name: impl AsRef<str>) -> Option<String> {
         let raw = self.raw?;
+        let name = cstring(name).ok()?;
         // SAFETY: `raw` is a live event for the callback duration.
         let value = unsafe { sys::switch_event_get_header_idx(raw.as_ptr(), name.as_ptr(), -1) };
         if value.is_null() {

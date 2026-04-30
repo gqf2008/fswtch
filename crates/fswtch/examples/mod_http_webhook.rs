@@ -104,20 +104,20 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_http_webhook" {
+    fn switch_module_load(module) for "mod_http_webhook" {
         fswtch::log_info("mod_http_webhook", "loading module");
         module
             .api(
-                c"rust_webhook_post",
-                c"queues a plain HTTP webhook POST",
-                c"rust_webhook_post <http-url> <json-body>",
+                "rust_webhook_post",
+                "queues a plain HTTP webhook POST",
+                "rust_webhook_post <http-url> <json-body>",
                 post_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_webhook_stats",
-                    c"prints webhook delivery counters",
-                    c"rust_webhook_stats",
+                    "rust_webhook_stats",
+                    "prints webhook delivery counters",
+                    "rust_webhook_stats",
                     stats_api,
                 )
             })

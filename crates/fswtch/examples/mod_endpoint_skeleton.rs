@@ -38,16 +38,16 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_endpoint_skeleton" {
+    fn switch_module_load(module) for "mod_endpoint_skeleton" {
         fswtch::log_info("mod_endpoint_skeleton", "loading module");
         module
-            .endpoint(c"rust_endpoint_skeleton", &raw mut IO_ROUTINES)
+            .endpoint("rust_endpoint_skeleton", &raw mut IO_ROUTINES)
             .inspect(|_| fswtch::log_info("mod_endpoint_skeleton", "endpoint interface registered"))
             .and_then(|module| {
                 module.api(
-                    c"rust_endpoint_skeleton_info",
-                    c"describes the Rust endpoint skeleton",
-                    c"rust_endpoint_skeleton_info",
+                    "rust_endpoint_skeleton_info",
+                    "describes the Rust endpoint skeleton",
+                    "rust_endpoint_skeleton_info",
                     info_api,
                 )
             })

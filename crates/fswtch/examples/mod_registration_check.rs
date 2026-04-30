@@ -55,12 +55,12 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_registration_check" {
+    fn switch_module_load(module) for "mod_registration_check" {
         fswtch::log_info("mod_registration_check", "loading module");
         module.api(
-            c"rust_check_registration",
-            c"asynchronously validates a registration and fires a custom event",
-            c"rust_check_registration <user@domain> <https://server/check>",
+            "rust_check_registration",
+            "asynchronously validates a registration and fires a custom event",
+            "rust_check_registration <user@domain> <https://server/check>",
             check_registration_api,
         )
     }
@@ -132,15 +132,15 @@ fn fire_registration_event(
     request: &RegistrationRequest,
     result: &RegistrationResult,
 ) -> fswtch::Result<()> {
-    let mut event = fswtch::Event::custom(c"fswtch::registration_check")?;
-    event.add_header(c"Registration-User", &request.user)?;
-    event.add_header(c"Registration-Server", &request.server_url)?;
+    let mut event = fswtch::Event::custom("fswtch::registration_check")?;
+    event.add_header("Registration-User", &request.user)?;
+    event.add_header("Registration-Server", &request.server_url)?;
     event.add_header(
-        c"Registration-Accepted",
+        "Registration-Accepted",
         if result.accepted { "true" } else { "false" },
     )?;
-    event.add_header(c"Registration-Score", &result.score.to_string())?;
-    event.add_header(c"Registration-Reason", &result.reason)?;
-    event.add_header(c"Registration-Request-ID", &result.request_id)?;
+    event.add_header("Registration-Score", &result.score.to_string())?;
+    event.add_header("Registration-Reason", &result.reason)?;
+    event.add_header("Registration-Request-ID", &result.request_id)?;
     event.fire()
 }

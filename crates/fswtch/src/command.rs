@@ -19,3 +19,20 @@ pub fn command_text(cmd: *const c_char) -> Option<String> {
 pub fn cstring(text: impl AsRef<str>) -> Result<CString> {
     CString::new(text.as_ref()).map_err(|_| SwitchError(GENERR))
 }
+
+pub trait StaticCStr {
+    fn into_static_cstr(self) -> Result<&'static CStr>;
+}
+
+impl StaticCStr for &'static CStr {
+    fn into_static_cstr(self) -> Result<&'static CStr> {
+        Ok(self)
+    }
+}
+
+impl StaticCStr for &'static str {
+    fn into_static_cstr(self) -> Result<&'static CStr> {
+        let text = cstring(self)?;
+        Ok(Box::leak(text.into_boxed_c_str()))
+    }
+}

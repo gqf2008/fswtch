@@ -28,13 +28,13 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_lifecycle" {
+    fn switch_module_load(module) for "mod_lifecycle" {
         fswtch::log_info("mod_lifecycle", "loading module");
         LOADS.fetch_add(1, Ordering::Relaxed);
         module.api(
-            c"rust_lifecycle_stats",
-            c"prints module lifecycle counters",
-            c"rust_lifecycle_stats",
+            "rust_lifecycle_stats",
+            "prints module lifecycle counters",
+            "rust_lifecycle_stats",
             stats_api,
         )
     }

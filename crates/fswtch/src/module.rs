@@ -1,10 +1,7 @@
-use std::{
-    ffi::{CStr, c_char},
-    ptr::NonNull,
-};
+use std::{ffi::c_char, ptr::NonNull};
 
 use crate::{
-    GENERR, Result, Status, SwitchError,
+    GENERR, Result, StaticCStr, Status, SwitchError,
     sys::{self},
 };
 
@@ -18,11 +15,12 @@ impl Module {
     pub fn create(
         slot: *mut *mut sys::switch_loadable_module_interface_t,
         pool: *mut sys::switch_memory_pool_t,
-        name: &'static CStr,
+        name: impl StaticCStr,
     ) -> Result<Self> {
         if slot.is_null() {
             return Err(SwitchError(GENERR));
         }
+        let name = name.into_static_cstr()?;
 
         // SAFETY: The caller guarantees `pool` and `name` are valid for FreeSWITCH's loader.
         let raw =
@@ -42,15 +40,18 @@ impl Module {
     /// Registers a FreeSWITCH API command on this module.
     pub fn add_api(
         self,
-        name: &'static CStr,
-        description: &'static CStr,
-        syntax: &'static CStr,
+        name: impl StaticCStr,
+        description: impl StaticCStr,
+        syntax: impl StaticCStr,
         function: unsafe extern "C" fn(
             *const c_char,
             *mut sys::switch_core_session_t,
             *mut sys::switch_stream_handle_t,
         ) -> Status,
     ) -> Result<ApiInterface> {
+        let name = name.into_static_cstr()?;
+        let description = description.into_static_cstr()?;
+        let syntax = syntax.into_static_cstr()?;
         // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
         let raw = unsafe {
             sys::switch_loadable_module_create_interface(
@@ -76,12 +77,16 @@ impl Module {
 
     pub fn add_application(
         self,
-        name: &'static CStr,
-        long_description: &'static CStr,
-        short_description: &'static CStr,
-        syntax: &'static CStr,
+        name: impl StaticCStr,
+        long_description: impl StaticCStr,
+        short_description: impl StaticCStr,
+        syntax: impl StaticCStr,
         function: unsafe extern "C" fn(*mut sys::switch_core_session_t, *const c_char),
     ) -> Result<ApplicationInterface> {
+        let name = name.into_static_cstr()?;
+        let long_description = long_description.into_static_cstr()?;
+        let short_description = short_description.into_static_cstr()?;
+        let syntax = syntax.into_static_cstr()?;
         // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
         let raw = unsafe {
             sys::switch_loadable_module_create_interface(
@@ -108,12 +113,16 @@ impl Module {
 
     pub fn add_chat_application(
         self,
-        name: &'static CStr,
-        long_description: &'static CStr,
-        short_description: &'static CStr,
-        syntax: &'static CStr,
+        name: impl StaticCStr,
+        long_description: impl StaticCStr,
+        short_description: impl StaticCStr,
+        syntax: impl StaticCStr,
         function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> Status,
     ) -> Result<ChatApplicationInterface> {
+        let name = name.into_static_cstr()?;
+        let long_description = long_description.into_static_cstr()?;
+        let short_description = short_description.into_static_cstr()?;
+        let syntax = syntax.into_static_cstr()?;
         // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
         let raw = unsafe {
             sys::switch_loadable_module_create_interface(
@@ -140,9 +149,10 @@ impl Module {
 
     pub fn add_endpoint(
         self,
-        name: &'static CStr,
+        name: impl StaticCStr,
         io_routines: *mut sys::switch_io_routines_t,
     ) -> Result<EndpointInterface> {
+        let name = name.into_static_cstr()?;
         // SAFETY: `self.raw` is a live module interface created by FreeSWITCH for this module.
         let raw = unsafe {
             sys::switch_loadable_module_create_interface(
@@ -173,7 +183,7 @@ impl ModuleBuilder {
     pub fn new(
         slot: *mut *mut sys::switch_loadable_module_interface_t,
         pool: *mut sys::switch_memory_pool_t,
-        name: &'static CStr,
+        name: impl StaticCStr,
     ) -> Result<Self> {
         Ok(Self {
             module: Module::create(slot, pool, name)?,
@@ -182,9 +192,9 @@ impl ModuleBuilder {
 
     pub fn api(
         self,
-        name: &'static CStr,
-        description: &'static CStr,
-        syntax: &'static CStr,
+        name: impl StaticCStr,
+        description: impl StaticCStr,
+        syntax: impl StaticCStr,
         function: unsafe extern "C" fn(
             *const c_char,
             *mut sys::switch_core_session_t,
@@ -197,10 +207,10 @@ impl ModuleBuilder {
 
     pub fn application(
         self,
-        name: &'static CStr,
-        long_description: &'static CStr,
-        short_description: &'static CStr,
-        syntax: &'static CStr,
+        name: impl StaticCStr,
+        long_description: impl StaticCStr,
+        short_description: impl StaticCStr,
+        syntax: impl StaticCStr,
         function: unsafe extern "C" fn(*mut sys::switch_core_session_t, *const c_char),
     ) -> Result<Self> {
         self.module
@@ -210,10 +220,10 @@ impl ModuleBuilder {
 
     pub fn chat_application(
         self,
-        name: &'static CStr,
-        long_description: &'static CStr,
-        short_description: &'static CStr,
-        syntax: &'static CStr,
+        name: impl StaticCStr,
+        long_description: impl StaticCStr,
+        short_description: impl StaticCStr,
+        syntax: impl StaticCStr,
         function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> Status,
     ) -> Result<Self> {
         self.module.add_chat_application(
@@ -228,7 +238,7 @@ impl ModuleBuilder {
 
     pub fn endpoint(
         self,
-        name: &'static CStr,
+        name: impl StaticCStr,
         io_routines: *mut sys::switch_io_routines_t,
     ) -> Result<Self> {
         self.module.add_endpoint(name, io_routines)?;

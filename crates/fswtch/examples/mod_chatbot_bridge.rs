@@ -13,19 +13,19 @@ fswtch::chat_callback! {
     fn chatbot_app(event, data) {
         fswtch::log_info("mod_chatbot_bridge", "chat application invoked");
         let text = data.unwrap_or_else(|| "empty chat payload".to_owned());
-        let from = event.header(c"from").unwrap_or_else(|| "unknown".to_owned());
-        let to = event.header(c"to").unwrap_or_else(|| "unknown".to_owned());
+        let from = event.header("from").unwrap_or_else(|| "unknown".to_owned());
+        let to = event.header("to").unwrap_or_else(|| "unknown".to_owned());
 
-        let mut out = match fswtch::Event::custom(c"fswtch::chatbot_bridge") {
+        let mut out = match fswtch::Event::custom("fswtch::chatbot_bridge") {
             Ok(event) => event,
             Err(error) => return error.0,
         };
 
         for result in [
-            out.add_header(c"Chatbot-From", &from),
-            out.add_header(c"Chatbot-To", &to),
-            out.add_header(c"Chatbot-Text", &text),
-            out.add_header(c"Chatbot-Provider", "example-llm"),
+            out.add_header("Chatbot-From", &from),
+            out.add_header("Chatbot-To", &to),
+            out.add_header("Chatbot-Text", &text),
+            out.add_header("Chatbot-Provider", "example-llm"),
         ] {
             if let Err(error) = result {
                 return error.0;
@@ -58,21 +58,21 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_chatbot_bridge" {
+    fn switch_module_load(module) for "mod_chatbot_bridge" {
         fswtch::log_info("mod_chatbot_bridge", "loading module");
         module
             .chat_application(
-                    c"rust_chatbot_bridge",
-                    c"Transforms inbound chat messages into custom chatbot events",
-                    c"Rust chatbot bridge example",
-                    c"rust_chatbot_bridge <message>",
+                    "rust_chatbot_bridge",
+                    "Transforms inbound chat messages into custom chatbot events",
+                    "Rust chatbot bridge example",
+                    "rust_chatbot_bridge <message>",
                     chatbot_app,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_chatbot_bridge_stats",
-                    c"prints chatbot bridge counters",
-                    c"rust_chatbot_bridge_stats",
+                    "rust_chatbot_bridge_stats",
+                    "prints chatbot bridge counters",
+                    "rust_chatbot_bridge_stats",
                     stats_api,
                 )
             })

@@ -61,11 +61,20 @@ fswtch::app_callback! {
             return;
         };
 
-        let config = MediaBugConfig::new(
-            c"rust_media_bug_meter",
-            c"read-write-stream",
+        let config = match MediaBugConfig::new(
+            "rust_media_bug_meter",
+            "read-write-stream",
             MediaBugFlags::READ_STREAM | MediaBugFlags::WRITE_STREAM | MediaBugFlags::NO_PAUSE,
-        );
+        ) {
+            Ok(config) => config,
+            Err(error) => {
+                fswtch::log_error(
+                    "mod_media_bug_meter",
+                    format!("invalid media bug config: {error}"),
+                );
+                return;
+            }
+        };
         let handler = MeterState {
             read_frames: 0,
             write_frames: 0,
@@ -104,21 +113,21 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_media_bug_meter" {
+    fn switch_module_load(module) for "mod_media_bug_meter" {
         fswtch::log_info("mod_media_bug_meter", "loading module");
         module
             .application(
-                c"rust_media_bug_meter",
-                c"Attaches a read/write-stream media bug and counts observed audio frames",
-                c"Rust media bug meter example",
-                c"rust_media_bug_meter",
+                "rust_media_bug_meter",
+                "Attaches a read/write-stream media bug and counts observed audio frames",
+                "Rust media bug meter example",
+                "rust_media_bug_meter",
                 meter_app,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_media_bug_meter_stats",
-                    c"prints media bug meter counters",
-                    c"rust_media_bug_meter_stats",
+                    "rust_media_bug_meter_stats",
+                    "prints media bug meter counters",
+                    "rust_media_bug_meter_stats",
                     stats_api,
                 )
             })

@@ -64,20 +64,20 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_cdr_enricher" {
+    fn switch_module_load(module) for "mod_cdr_enricher" {
         fswtch::log_info("mod_cdr_enricher", "loading module");
         module
             .api(
-                c"rust_cdr_enrich",
-                c"enriches a CDR JSON document and emits a custom event",
-                c"rust_cdr_enrich <json-cdr>",
+                "rust_cdr_enrich",
+                "enriches a CDR JSON document and emits a custom event",
+                "rust_cdr_enrich <json-cdr>",
                 enrich_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_cdr_enricher_stats",
-                    c"prints CDR enrichment counters",
-                    c"rust_cdr_enricher_stats",
+                    "rust_cdr_enricher_stats",
+                    "prints CDR enrichment counters",
+                    "rust_cdr_enricher_stats",
                     stats_api,
                 )
             })
@@ -129,11 +129,11 @@ fn enrich_cdr(cdr: &Value) -> EnrichedCdr {
 }
 
 fn fire_cdr_event(cdr: &EnrichedCdr) -> fswtch::Result<()> {
-    let mut event = fswtch::Event::custom(c"fswtch::cdr_enriched")?;
-    event.add_header(c"CDR-UUID", &cdr.uuid)?;
-    event.add_header(c"CDR-Account", &cdr.account)?;
-    event.add_header(c"CDR-Account-Tier", cdr.tier)?;
-    event.add_header(c"CDR-Risk-Score", &cdr.risk.to_string())?;
-    event.add_header(c"CDR-Billable-Seconds", &cdr.billable_seconds.to_string())?;
+    let mut event = fswtch::Event::custom("fswtch::cdr_enriched")?;
+    event.add_header("CDR-UUID", &cdr.uuid)?;
+    event.add_header("CDR-Account", &cdr.account)?;
+    event.add_header("CDR-Account-Tier", cdr.tier)?;
+    event.add_header("CDR-Risk-Score", &cdr.risk.to_string())?;
+    event.add_header("CDR-Billable-Seconds", &cdr.billable_seconds.to_string())?;
     event.fire()
 }

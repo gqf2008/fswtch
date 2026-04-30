@@ -155,21 +155,21 @@ fswtch::api_callback! {
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for c"mod_async_job_queue" {
+    fn switch_module_load(module) for "mod_async_job_queue" {
         fswtch::log_info("mod_async_job_queue", "loading module");
         LazyLock::force(&JOB_QUEUE);
         module
             .api(
-                c"rust_job_submit",
-                c"queues background work without blocking FreeSWITCH API execution",
-                c"rust_job_submit <payload>",
+                "rust_job_submit",
+                "queues background work without blocking FreeSWITCH API execution",
+                "rust_job_submit <payload>",
                 submit_api,
             )
             .and_then(|module| {
                 module.api(
-                    c"rust_job_status",
-                    c"checks background job status",
-                    c"rust_job_status <id>",
+                    "rust_job_status",
+                    "checks background job status",
+                    "rust_job_status <id>",
                     status_api,
                 )
             })
