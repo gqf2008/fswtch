@@ -13,6 +13,7 @@ fswtch-sys = { version = "0.1.5", path = "../fswtch-sys" }
 
 [dev-dependencies]
 futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "time"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
@@ -64,6 +65,10 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "mod_lifecycle"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_local_ai_bridge"
 crate-type = ["cdylib"]
 
 [[example]]

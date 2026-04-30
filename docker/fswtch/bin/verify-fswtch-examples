@@ -84,6 +84,9 @@ assert_api 'rust_webhook_post http://127.0.0.1:9/smoke {"event":"smoke"}' "webho
 assert_api "rust_table" "language,rust"
 assert_api "rust_words one two three" "3 words"
 assert_api "rust_lifecycle_stats" "loads=1"
+assert_api "rust_local_ai_status" "asr_backend=mock tts_backend=mock nlp_backend=mock"
+assert_api "rust_local_tts hello" "backend=mock sample_rate=16000"
+assert_api "rust_local_nlp_sync hello" "mock nlp response: hello"
 assert_api "rust_media_bug_meter_stats" "attached=0"
 assert_api "rust_metrics_hit smoke" "metric=smoke count=1"
 assert_api "rust_metrics_show" 'fswtch_example_events_total{name="smoke"} 1'

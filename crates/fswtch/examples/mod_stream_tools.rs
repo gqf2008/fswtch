@@ -13,6 +13,7 @@ unsafe extern "C" fn table_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_stream_tools", "rust_table invoked");
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
     let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
         return FALSE;
@@ -38,6 +39,7 @@ unsafe extern "C" fn words_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_stream_tools", "rust_words invoked");
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
     let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
         return FALSE;
@@ -63,6 +65,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
+    fswtch::log_example("mod_stream_tools", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_stream_tools") } {
         Ok(module) => module,

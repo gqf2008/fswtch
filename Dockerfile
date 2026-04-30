@@ -81,6 +81,7 @@ RUN set -eux; \
       mod_hello \
       mod_http_webhook \
       mod_lifecycle \
+      mod_local_ai_bridge \
       mod_media_bug_meter \
       mod_metrics \
       mod_rate_limiter \

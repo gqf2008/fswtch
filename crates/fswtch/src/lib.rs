@@ -36,6 +36,10 @@ pub fn status_to_result(status: Status) -> Result<()> {
     }
 }
 
+pub fn log_example(module: &str, message: impl fmt::Display) {
+    eprintln!("[fswtch:{module}] {message}");
+}
+
 #[derive(Copy, Clone)]
 pub struct Module {
     raw: NonNull<sys::switch_loadable_module_interface_t>,

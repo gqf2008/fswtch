@@ -13,8 +13,10 @@ unsafe extern "C" fn hello_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_hello", "rust_hello invoked");
     // SAFETY: FreeSWITCH provides a valid stream pointer for the duration of the API callback.
     let Some(mut stream) = (unsafe { Stream::from_raw(stream) }) else {
+        fswtch::log_example("mod_hello", "missing stream handle");
         return SUCCESS;
     };
     if let Err(error) = stream.write_str("hello from Rust\n") {
@@ -29,6 +31,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
+    fswtch::log_example("mod_hello", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_hello") } {
         Ok(module) => module,

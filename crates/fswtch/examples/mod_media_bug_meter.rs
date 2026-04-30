@@ -24,7 +24,9 @@ struct MeterState {
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_application_function_t`.
 unsafe extern "C" fn meter_app(session: *mut sys::switch_core_session_t, _data: *const c_char) {
+    fswtch::log_example("mod_media_bug_meter", "dialplan application invoked");
     if session.is_null() {
+        fswtch::log_example("mod_media_bug_meter", "missing session");
         return;
     }
 
@@ -53,7 +55,12 @@ unsafe extern "C" fn meter_app(session: *mut sys::switch_core_session_t, _data: 
 
     if status == SUCCESS {
         BUGS_ATTACHED.fetch_add(1, Ordering::Relaxed);
+        fswtch::log_example("mod_media_bug_meter", "media bug attached");
     } else {
+        fswtch::log_example(
+            "mod_media_bug_meter",
+            format!("failed to attach media bug: {status:?}"),
+        );
         // SAFETY: FreeSWITCH did not take ownership when add failed.
         unsafe {
             drop(Box::from_raw(state));
@@ -85,6 +92,7 @@ unsafe extern "C" fn meter_callback(
             AUDIO_BYTES_SEEN.fetch_add(bytes, Ordering::Relaxed);
         }
     } else if callback_type == sys::switch_abc_type_t_SWITCH_ABC_TYPE_CLOSE {
+        fswtch::log_example("mod_media_bug_meter", "media bug closing");
         // SAFETY: Reclaims the box allocated in `meter_app`; close is the terminal callback.
         unsafe {
             drop(Box::from_raw(user_data.cast::<MeterState>()));
@@ -101,6 +109,7 @@ unsafe extern "C" fn stats_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_media_bug_meter", "rust_media_bug_meter_stats invoked");
     write_response(
         stream,
         &format!(
@@ -118,6 +127,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
+    fswtch::log_example("mod_media_bug_meter", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_media_bug_meter") } {
         Ok(module) => module,

@@ -66,7 +66,9 @@ unsafe extern "C" fn post_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_http_webhook", "rust_webhook_post invoked");
     let Some(request) = WebhookRequest::parse(cmd) else {
+        fswtch::log_example("mod_http_webhook", "invalid webhook command");
         let status = write_response(stream, "usage: rust_webhook_post <http-url> <json-body>\n");
         return if status == SUCCESS { FALSE } else { status };
     };
@@ -76,6 +78,7 @@ unsafe extern "C" fn post_api(
         .name("fswtch-http-webhook".to_owned())
         .spawn(move || match post_webhook(&request) {
             Ok(()) => {
+                fswtch::log_example("mod_http_webhook", "webhook delivered");
                 WEBHOOKS_SENT.fetch_add(1, Ordering::Relaxed);
             }
             Err(error) => {
@@ -96,6 +99,7 @@ unsafe extern "C" fn stats_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_http_webhook", "rust_webhook_stats invoked");
     write_response(
         stream,
         &format!(
@@ -112,6 +116,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
+    fswtch::log_example("mod_http_webhook", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_http_webhook") } {
         Ok(module) => module,

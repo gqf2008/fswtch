@@ -16,6 +16,7 @@
     <load module="mod_hello"/>
     <load module="mod_http_webhook"/>
     <load module="mod_lifecycle"/>
+    <load module="mod_local_ai_bridge"/>
     <load module="mod_media_bug_meter"/>
     <load module="mod_metrics"/>
     <load module="mod_rate_limiter"/>

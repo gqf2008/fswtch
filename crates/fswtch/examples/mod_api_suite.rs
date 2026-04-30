@@ -13,6 +13,7 @@ unsafe extern "C" fn ping_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_api_suite", "rust_ping invoked");
     write_response(stream, "pong\n")
 }
 
@@ -22,6 +23,7 @@ unsafe extern "C" fn echo_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_api_suite", "rust_echo invoked");
     let text = command_text(cmd).unwrap_or_default();
     write_response(stream, &format!("{text}\n"))
 }
@@ -32,6 +34,7 @@ unsafe extern "C" fn upper_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example("mod_api_suite", "rust_upper invoked");
     let text = command_text(cmd).unwrap_or_default();
     write_response(stream, &format!("{}\n", text.to_uppercase()))
 }
@@ -41,6 +44,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
+    fswtch::log_example("mod_api_suite", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module = match unsafe { Module::create(module_interface, pool, c"mod_api_suite") } {
         Ok(module) => module,

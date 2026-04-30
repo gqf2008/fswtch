@@ -12,11 +12,17 @@ unsafe extern "C" fn playback_control_app(
     session: *mut sys::switch_core_session_t,
     data: *const c_char,
 ) {
+    fswtch::log_example("mod_app_playback_control", "dialplan application invoked");
     if session.is_null() {
+        fswtch::log_example("mod_app_playback_control", "missing session");
         return;
     }
 
     let Some(file) = command_text(data) else {
+        fswtch::log_example(
+            "mod_app_playback_control",
+            "no playback target supplied; sleeping",
+        );
         // SAFETY: `session` is provided by FreeSWITCH for this application invocation.
         let _ = unsafe {
             sys::switch_ivr_sleep(
@@ -30,6 +36,10 @@ unsafe extern "C" fn playback_control_app(
     };
 
     let Ok(file) = std::ffi::CString::new(file) else {
+        fswtch::log_example(
+            "mod_app_playback_control",
+            "playback target contained NUL byte",
+        );
         return;
     };
 
@@ -56,6 +66,7 @@ unsafe extern "C" fn playback_control_app(
             std::ptr::null_mut(),
         )
     };
+    fswtch::log_example("mod_app_playback_control", "playback call returned");
 }
 
 // SAFETY: FreeSWITCH calls this function with pointers matching `switch_api_function_t`.
@@ -64,6 +75,10 @@ unsafe extern "C" fn info_api(
     _session: *mut sys::switch_core_session_t,
     stream: *mut sys::switch_stream_handle_t,
 ) -> Status {
+    fswtch::log_example(
+        "mod_app_playback_control",
+        "rust_playback_control_info invoked",
+    );
     write_response(
         stream,
         "application rust_playback_control registered; use from dialplan with a file path\n",
@@ -75,6 +90,7 @@ unsafe extern "C" fn switch_module_load(
     module_interface: *mut *mut sys::switch_loadable_module_interface_t,
     pool: *mut sys::switch_memory_pool_t,
 ) -> Status {
+    fswtch::log_example("mod_app_playback_control", "loading module");
     // SAFETY: The loader passes the module slot and pool, and the module name is static.
     let module =
         match unsafe { Module::create(module_interface, pool, c"mod_app_playback_control") } {
