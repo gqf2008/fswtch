@@ -71,13 +71,19 @@ RUN set -eux; \
     cargo build -p fswtch --examples --release; \
     for module in \
       mod_api_suite \
+      mod_async_job_queue \
       mod_app_playback_control \
+      mod_cdr_enricher \
       mod_chatbot_bridge \
       mod_config_xml \
       mod_endpoint_skeleton \
+      mod_event_sink \
       mod_hello \
+      mod_http_webhook \
       mod_lifecycle \
       mod_media_bug_meter \
+      mod_metrics \
+      mod_rate_limiter \
       mod_registration_check \
       mod_remote_vad \
       mod_stream_tools; \

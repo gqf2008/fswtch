@@ -27,7 +27,15 @@ name = "mod_api_suite"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "mod_async_job_queue"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "mod_app_playback_control"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_cdr_enricher"
 crate-type = ["cdylib"]
 
 [[example]]
@@ -43,7 +51,15 @@ name = "mod_endpoint_skeleton"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "mod_event_sink"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "mod_hello"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_http_webhook"
 crate-type = ["cdylib"]
 
 [[example]]
@@ -52,6 +68,14 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "mod_media_bug_meter"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_metrics"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_rate_limiter"
 crate-type = ["cdylib"]
 
 [[example]]
