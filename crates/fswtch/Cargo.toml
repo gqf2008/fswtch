@@ -20,7 +20,6 @@ tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 
 [features]
 default = ["bundled"]
-bindgen = ["fswtch-sys/bindgen"]
 bundled = ["fswtch-sys/bundled"]
 
 [[example]]

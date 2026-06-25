@@ -1,8 +1,11 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+mod caller;
+mod channel;
 mod command;
 mod event;
 mod exports;
+mod ivr;
 mod logging;
 mod media;
 mod module;
@@ -13,8 +16,11 @@ mod xml;
 
 pub use fswtch_sys as sys;
 
-pub use command::{StaticCStr, command_text, cstring};
-pub use event::{Event, EventRef};
+pub use caller::CallerProfile;
+pub use channel::{Channel, cause_to_str, str_to_cause};
+pub use command::{StaticCStr, borrowed_cstr_to_str, borrowed_cstr_to_string, command_text, cstring, free_cstr};
+pub use event::{Event, EventBinder, EventRef};
+pub use ivr::{park, record_file};
 pub use logging::{
     LogLevel, log, log_alert, log_console, log_critical, log_debug, log_debug1, log_debug2,
     log_debug3, log_debug4, log_debug5, log_debug6, log_debug7, log_debug8, log_debug9,
@@ -28,9 +34,11 @@ pub use module::{
     ApiInterface, ApplicationInfo, ApplicationInterface, ChatApplicationInterface,
     EndpointInterface, Module, ModuleBuilder,
 };
-pub use session::Session;
+pub use session::{Session, SessionGuard};
 pub use status::{
-    FALSE, GENERR, Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result,
+    CAUSE_NONE, CAUSE_NORMAL_CLEARING, CAUSE_NO_ANSWER, CAUSE_NO_USER_RESPONSE,
+    CAUSE_ORIGINATOR_CANCEL, CAUSE_RECOVERY_ON_TIMER_EXPIRE, CAUSE_USER_BUSY, FALSE, GENERR,
+    Cause, Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result,
 };
 pub use stream::{ApiStream, Stream, write_stream_response};
 pub use xml::{XmlConfig, XmlNode};
@@ -74,6 +82,19 @@ macro_rules! chat_callback {
         ) -> $crate::Status {
             let $event = unsafe { $crate::EventRef::from_raw($event) };
             let $data = unsafe { $crate::command_text($data) };
+            $body
+        }
+    };
+}
+
+/// Declares an `unsafe extern "C" fn` matching FreeSWITCH's `switch_event_callback_t`, wrapping the
+/// raw event pointer in an [`EventRef`](crate::EventRef) for a safe body. Use the resulting function
+/// pointer with [`EventBinder::bind`](crate::EventBinder::bind).
+#[macro_export]
+macro_rules! event_callback {
+    (fn $name:ident($event:ident) $body:block) => {
+        unsafe extern "C" fn $name($event: *mut $crate::sys::switch_event_t) {
+            let $event = unsafe { $crate::EventRef::from_raw($event) };
             $body
         }
     };

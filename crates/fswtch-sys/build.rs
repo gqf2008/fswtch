@@ -1,7 +1,4 @@
-use std::{env, error::Error, io};
-
-#[cfg(feature = "bindgen")]
-use std::{fs, path::PathBuf};
+use std::{env, error::Error, fs, io, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-env-changed=FREESWITCH_INCLUDE_DIR");
@@ -22,7 +19,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[cfg(feature = "bindgen")]
 fn generate_bindings() -> Result<(), Box<dyn Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let wrapper = out_dir.join("wrapper.h");
@@ -56,7 +52,7 @@ fn generate_bindings() -> Result<(), Box<dyn Error>> {
                 format!(
                     "FREESWITCH_INCLUDE_DIR must point at configured FreeSWITCH headers; missing {}",
                     config_header.display()
-                ),
+                )
             )
             .into());
         }
@@ -70,7 +66,6 @@ fn generate_bindings() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-#[cfg(feature = "bindgen")]
 fn add_include_dirs(mut builder: bindgen::Builder, include_dirs: Vec<PathBuf>) -> bindgen::Builder {
     for path in include_dirs {
         if path.exists() {
@@ -82,7 +77,7 @@ fn add_include_dirs(mut builder: bindgen::Builder, include_dirs: Vec<PathBuf>) -
     builder
 }
 
-#[cfg(all(feature = "bindgen", feature = "bundled"))]
+#[cfg(feature = "bundled")]
 fn bundled_include_dirs() -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let include_dirs = fswtch_src::include_dirs();
     let switch_header = fswtch_src::root().join("src/include/switch.h");
@@ -100,12 +95,11 @@ fn bundled_include_dirs() -> Result<Vec<PathBuf>, Box<dyn Error>> {
     Ok(include_dirs)
 }
 
-#[cfg(all(feature = "bindgen", not(feature = "bundled")))]
+#[cfg(not(feature = "bundled"))]
 fn bundled_include_dirs() -> Result<Vec<PathBuf>, Box<dyn Error>> {
     Ok(Vec::new())
 }
 
-#[cfg(feature = "bindgen")]
 fn local_workspace_include_dirs() -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let repo_root = manifest_dir
@@ -131,7 +125,6 @@ fn local_workspace_include_dirs() -> Result<Vec<PathBuf>, Box<dyn Error>> {
     .collect())
 }
 
-#[cfg(feature = "bindgen")]
 fn write_bundled_config_header(include_dir: &PathBuf) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(include_dir)?;
     fs::write(
@@ -161,10 +154,5 @@ fn write_bundled_config_header(include_dir: &PathBuf) -> Result<(), Box<dyn Erro
 #endif
 "#,
     )?;
-    Ok(())
-}
-
-#[cfg(not(feature = "bindgen"))]
-fn generate_bindings() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
