@@ -37,7 +37,7 @@ pub use buffer::Buffer;
 pub use caller::CallerProfile;
 pub use channel::{Channel, cause_to_str, str_to_cause};
 pub use codec::Codec;
-pub use command::{StaticCStr, borrowed_cstr_to_str, borrowed_cstr_to_string, command_text, cstring, free_cstr};
+pub use command::{StaticCStr, borrowed_cstr_to_str, borrowed_cstr_to_string, command_text, cstring, free_cstr, strdup_to_string};
 pub use console::{CompletionFunc, CompletionMatches, complete, execute, expand_alias, free_matches};
 pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable, set_variable};
 pub use core_db::{CoreDb, Stmt, StmtRows};

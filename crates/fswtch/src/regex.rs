@@ -196,11 +196,6 @@ impl RegexMatch {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
-    /// Always `true` — this value only exists when a match occurred.
-    pub fn is_match(&self) -> bool {
-        true
-    }
-
     /// The number of capture pairs reported by the matcher.
     ///
     /// This is the value `switch_regex_perform` returned: `1` for a bare match with no groups,
@@ -276,11 +271,6 @@ impl RegexMatch {
             .map(|s| s.to_owned())
             .map(Some)
             .map_err(|_| SwitchError(GENERR))
-    }
-
-    /// Returns the whole match (capture group `0`) as an owned `String`, or `None` if absent.
-    pub fn whole_match(&self) -> Result<Option<String>> {
-        self.capture(0)
     }
 
     /// Substitutes captured groups into `template` and returns the result.

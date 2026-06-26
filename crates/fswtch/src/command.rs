@@ -45,6 +45,29 @@ pub unsafe fn free_cstr(ptr: *mut c_char) {
     }
 }
 
+/// Takes a malloc'd C string (as returned by a FreeSWITCH `*_strdup`-family function), copies it
+/// into an owned [`String`], and frees the original. Returns `None` when `ptr` is null.
+///
+/// This composes [`borrowed_cstr_to_str`] + `to_owned` + [`free_cstr`] so the four-step "call a
+/// `*_strdup` FFI, null-check, copy out, free" pattern does not need to be repeated at each call
+/// site.
+///
+/// # Safety
+///
+/// `ptr` must be null or a pointer obtained from a libc `malloc`-family allocator that has not
+/// been freed, and must remain valid for the duration of this call.
+// SAFETY: The caller must provide null or a valid malloc'd pointer.
+pub unsafe fn strdup_to_string(ptr: *mut c_char) -> Option<String> {
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: `ptr` is non-null and a valid C string per the caller's contract.
+    let text = unsafe { borrowed_cstr_to_str(ptr) }.map(ToOwned::to_owned);
+    // SAFETY: `ptr` was malloc'd by the caller and is now copied out.
+    unsafe { free_cstr(ptr) };
+    text
+}
+
 /// Converts a nullable FreeSWITCH command pointer into a trimmed Rust string.
 ///
 /// # Safety

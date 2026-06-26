@@ -154,12 +154,6 @@ impl DtmfSource {
     pub const APP: Self = Self(sys::switch_dtmf_source_t_SWITCH_DTMF_APP);
 }
 
-impl Default for DtmfSource {
-    fn default() -> Self {
-        Self::UNKNOWN
-    }
-}
-
 /// Flags passed to `read_frame` / `write_frame` and the video/text variants
 /// (`switch_io_flag_t`). This is a bitset; combine variants with `|`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -432,18 +426,6 @@ impl IoRoutinesBuilder {
         // SAFETY: `ptr` is a valid, well-aligned, owned allocation produced by
         // `Box::into_raw`; it remains valid for the program lifetime by design.
         Ok(ptr)
-    }
-
-    /// Finalizes the I/O routines table and returns it by value together with a
-    /// leaked pointer, for callers that want to inspect the table before handing
-    /// the pointer off. Equivalent to [`IoRoutinesBuilder::build`] but also
-    /// yields the populated struct for logging or assertions.
-    pub fn build_into(self) -> Result<(sys::switch_io_routines, *mut sys::switch_io_routines_t)> {
-        let ptr = self.build()?;
-        // SAFETY: `ptr` is the leaked boxed `switch_io_routines`; reading it back
-        // by reference is sound and yields the same contents we just stored.
-        let copy = unsafe { *ptr };
-        Ok((copy, ptr))
     }
 }
 

@@ -118,10 +118,9 @@ impl CoreDb {
                 &mut errmsg,
             )
         };
-        // SAFETY: when set, `errmsg` is malloc'd by SQLite and owned by us until freed.
-        if !errmsg.is_null() {
-            unsafe { free_cstr(errmsg) };
-        }
+        // SAFETY: `free_cstr` is null-safe; when set, `errmsg` is malloc'd by SQLite and owned by
+        // us until freed.
+        unsafe { free_cstr(errmsg) };
         db_result(code)
     }
 

@@ -203,17 +203,12 @@ pub fn fire_event(
 /// status to report.
 pub fn status(backend: &str) -> Result<Option<String>> {
     let backend = cstring(backend)?;
-    // SAFETY: `backend` is a valid NUL-terminated C string.
+    // SAFETY: `backend` is a valid NUL-terminated C string. The returned pointer is null or a
+    // malloc'd null-terminated string owned by the caller (per the header: "caller must free
+    // returned value"); `strdup_to_string` copies it out and frees it.
     let ptr = unsafe { sys::switch_limit_status(backend.as_ptr()) };
-    if ptr.is_null() {
-        return Ok(None);
-    }
-    // SAFETY: `ptr` is a malloc'd null-terminated string owned by the caller (per the header:
-    // "caller must free returned value").
-    let text = unsafe { crate::borrowed_cstr_to_str(ptr) }.map(ToOwned::to_owned);
-    // SAFETY: `ptr` was malloc'd by `switch_limit_status` and has been copied out.
-    unsafe { crate::free_cstr(ptr) };
-    Ok(text)
+    // SAFETY: `ptr` is null or a malloc'd C string as above.
+    Ok(unsafe { crate::strdup_to_string(ptr) })
 }
 
 /// Initialize the limit core. Generally called once by the FreeSWITCH core during startup.

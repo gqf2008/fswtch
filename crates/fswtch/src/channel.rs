@@ -1,7 +1,7 @@
 use std::ptr::NonNull;
 
 use crate::caller::CallerProfile;
-use crate::command::{borrowed_cstr_to_str, borrowed_cstr_to_string, free_cstr};
+use crate::command::{borrowed_cstr_to_str, borrowed_cstr_to_string, strdup_to_string};
 use crate::{Cause, Result, cstring, status_to_result, sys};
 
 /// A borrowed handle to a FreeSWITCH channel — the per-call state machine, variable store, and
@@ -36,17 +36,12 @@ impl Channel {
     /// invalidated by later `set_variable` calls. Returns `Ok(None)` when the variable is unset.
     pub fn variable(self, name: impl AsRef<str>) -> Result<Option<String>> {
         let name = cstring(name)?;
-        // SAFETY: `self.raw` is a live channel; `name` is a valid C string for the call.
+        // SAFETY: `self.raw` is a live channel; `name` is a valid C string for the call. The
+        // returned pointer is null or a malloc'd "strdup copy ... without using a memory pool"
+        // (per switch_channel.h) that `strdup_to_string` copies out and frees.
         let value = unsafe { sys::switch_channel_get_variable_strdup(self.raw.as_ptr(), name.as_ptr()) };
-        if value.is_null() {
-            return Ok(None);
-        }
-        // SAFETY: `value` is a malloc'd null-terminated string ("strdup copy ... without using a
-        // memory pool", per switch_channel.h).
-        let text = unsafe { borrowed_cstr_to_str(value) }.map(ToOwned::to_owned);
-        // SAFETY: `value` was malloc'd by `switch_channel_get_variable_strdup` and is now copied out.
-        unsafe { free_cstr(value.cast_mut()) };
-        Ok(text)
+        // SAFETY: `value` is null or a malloc'd C string as above.
+        Ok(unsafe { strdup_to_string(value.cast_mut()) })
     }
 
     /// Sets a channel variable, substituting it into the channel's variable scope.

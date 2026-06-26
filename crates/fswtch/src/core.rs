@@ -3,7 +3,7 @@
 //! These wrap the `switch_core_get_*` / `switch_core_set_*` family from `switch_core.h` as free
 //! functions. They operate on process-global core state and need no handle, pool, or session.
 
-use crate::command::{borrowed_cstr_to_string, free_cstr};
+use crate::command::{borrowed_cstr_to_string, strdup_to_string};
 use crate::{Result, cstring, sys};
 
 /// Retrieves a global core variable into an owned [`String`].
@@ -17,16 +17,11 @@ use crate::{Result, cstring, sys};
 pub fn get_variable(name: impl AsRef<str>) -> Result<Option<String>> {
     let name = cstring(name)?;
     // SAFETY: `name` is a valid C string for the duration of the call. The returned pointer is
-    // either null (unset) or a malloc'd null-terminated string owned by this call.
+    // either null (unset) or a malloc'd null-terminated string that `strdup_to_string` copies out
+    // and frees.
     let value = unsafe { sys::switch_core_get_variable_dup(name.as_ptr()) };
-    if value.is_null() {
-        return Ok(None);
-    }
-    // SAFETY: `value` is a live malloc'd null-terminated string per the call contract above.
-    let text = borrowed_cstr_to_string(value.cast_const());
-    // SAFETY: `value` was malloc'd by `switch_core_get_variable_dup` and has now been copied out.
-    unsafe { free_cstr(value) };
-    Ok(text)
+    // SAFETY: `value` is null or a malloc'd C string per the call contract above.
+    Ok(unsafe { strdup_to_string(value) })
 }
 
 /// Sets a global core variable. Pass `None` for `value` to delete the variable.
@@ -76,12 +71,14 @@ pub fn get_domain(dup: bool) -> Result<Option<String>> {
     if ptr.is_null() {
         return Ok(None);
     }
-    let text = borrowed_cstr_to_string(ptr.cast_const());
     if dup {
-        // SAFETY: With `dup == SWITCH_TRUE` the pointer is malloc'd and now copied out.
-        unsafe { free_cstr(ptr) };
+        // SAFETY: With `dup == SWITCH_TRUE` the pointer is malloc'd; `strdup_to_string` copies it
+        // out and frees it.
+        Ok(unsafe { strdup_to_string(ptr) })
+    } else {
+        // Borrowed static storage; copy out without freeing.
+        Ok(borrowed_cstr_to_string(ptr.cast_const()))
     }
-    Ok(text)
 }
 
 /// The FreeSWITCH host name as configured at core startup.
