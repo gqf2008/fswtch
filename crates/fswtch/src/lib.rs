@@ -67,10 +67,16 @@ pub use media::{
     MediaFrame, MediaFrameMut, attach_media_bug,
 };
 pub use module::{
-    ApiInterface, ApplicationInfo, ApplicationInterface, AsrInterface, ChatApplicationInterface,
-    ChatInterface, DatabaseInterface, DialplanInterface, DirectoryInterface, EndpointInterface,
-    FileInterface, JsonApiInterface, LimitInterface, ManagementInterface, Module, ModuleBuilder,
-    SayInterface, SpeechInterface, TimerInterface,
+    ApiInterface, ApplicationInfo, ApplicationInterface, AsrCloseFn, AsrFeedFn, AsrInterface,
+    AsrLoadGrammarFn, AsrOpenFn, AsrUnloadGrammarFn, ChatApplicationInterface, ChatInterface,
+    ChatSendFn, DatabaseInterface, DbExecDetailedFn, DbHandleDestroyFn, DbHandleNewFn,
+    DialplanInterface, DirectoryCloseFn, DirectoryInterface, DirectoryNextFn, DirectoryNextPairFn,
+    DirectoryOpenFn, DirectoryQueryFn, EndpointInterface, FileCloseFn, FileInterface, FileOpenFn,
+    FileReadFn, FileTruncateFn, FileWriteFn, JsonApiInterface, LimitIncrFn, LimitInterface,
+    LimitIntervalResetFn, LimitReleaseFn, LimitResetFn, LimitStatusFn, LimitUsageFn, ManagementFn,
+    ManagementInterface, Module, ModuleBuilder, SayInterface, SpeechCloseFn, SpeechFeedTtsFn,
+    SpeechInterface, SpeechOpenFn, SpeechReadTtsFn, TimerCheckFn, TimerDestroyFn, TimerInitFn,
+    TimerInterface, TimerNextFn, TimerStepFn, TimerSyncFn,
 };
 pub use packetizer::{BitstreamType, Packetizer};
 pub use plc::Plc;

@@ -906,3 +906,87 @@ impl DatabaseInterface {
         self.raw.as_ptr()
     }
 }
+
+/// Compile-time assertion that every callback alias matches the corresponding bindgen field type.
+/// If a future bindgen regen changes a field signature, this fails to compile at the offending line.
+#[cfg(test)]
+mod alias_type_checks {
+    use super::*;
+
+    #[test]
+    fn timer_aliases_match_fields() {
+        let r: sys::switch_timer_interface = Default::default();
+        let _: TimerInitFn = r.timer_init;
+        let _: TimerNextFn = r.timer_next;
+        let _: TimerStepFn = r.timer_step;
+        let _: TimerSyncFn = r.timer_sync;
+        let _: TimerCheckFn = r.timer_check;
+        let _: TimerDestroyFn = r.timer_destroy;
+    }
+
+    #[test]
+    fn file_aliases_match_fields() {
+        let r: sys::switch_file_interface = Default::default();
+        let _: FileOpenFn = r.file_open;
+        let _: FileCloseFn = r.file_close;
+        let _: FileTruncateFn = r.file_truncate;
+        let _: FileReadFn = r.file_read;
+        let _: FileWriteFn = r.file_write;
+    }
+
+    #[test]
+    fn speech_aliases_match_fields() {
+        let r: sys::switch_speech_interface = Default::default();
+        let _: SpeechOpenFn = r.speech_open;
+        let _: SpeechCloseFn = r.speech_close;
+        let _: SpeechFeedTtsFn = r.speech_feed_tts;
+        let _: SpeechReadTtsFn = r.speech_read_tts;
+    }
+
+    #[test]
+    fn asr_aliases_match_fields() {
+        let r: sys::switch_asr_interface = Default::default();
+        let _: AsrOpenFn = r.asr_open;
+        let _: AsrLoadGrammarFn = r.asr_load_grammar;
+        let _: AsrUnloadGrammarFn = r.asr_unload_grammar;
+        let _: AsrCloseFn = r.asr_close;
+        let _: AsrFeedFn = r.asr_feed;
+    }
+
+    #[test]
+    fn directory_aliases_match_fields() {
+        let r: sys::switch_directory_interface = Default::default();
+        let _: DirectoryOpenFn = r.directory_open;
+        let _: DirectoryCloseFn = r.directory_close;
+        let _: DirectoryQueryFn = r.directory_query;
+        let _: DirectoryNextFn = r.directory_next;
+        let _: DirectoryNextPairFn = r.directory_next_pair;
+    }
+
+    #[test]
+    fn chat_management_aliases_match_fields() {
+        let chat: sys::switch_chat_interface = Default::default();
+        let _: ChatSendFn = chat.chat_send;
+        let mgmt: sys::switch_management_interface = Default::default();
+        let _: ManagementFn = mgmt.management_function;
+    }
+
+    #[test]
+    fn limit_aliases_match_fields() {
+        let r: sys::switch_limit_interface = Default::default();
+        let _: LimitIncrFn = r.incr;
+        let _: LimitReleaseFn = r.release;
+        let _: LimitUsageFn = r.usage;
+        let _: LimitResetFn = r.reset;
+        let _: LimitStatusFn = r.status;
+        let _: LimitIntervalResetFn = r.interval_reset;
+    }
+
+    #[test]
+    fn database_aliases_match_fields() {
+        let r: sys::switch_database_interface = Default::default();
+        let _: DbHandleNewFn = r.handle_new;
+        let _: DbHandleDestroyFn = r.handle_destroy;
+        let _: DbExecDetailedFn = r.exec_detailed;
+    }
+}
