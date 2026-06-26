@@ -38,7 +38,9 @@ pub use fswtch_sys as sys;
 
 pub use buffer::Buffer;
 pub use caller::CallerProfile;
-pub use channel::{Channel, cause_to_str, str_to_cause};
+pub use channel::{
+    Channel, bind_device_state_handler, cause_to_str, str_to_cause, unbind_device_state_handler,
+};
 pub use codec::Codec;
 pub use command::{
     StaticCStr, borrowed_cstr_to_str, borrowed_cstr_to_string, command_text, cstring, free_cstr,
@@ -51,8 +53,26 @@ pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable,
 pub use core_db::{CoreDb, Stmt, StmtRows};
 pub use endpoint::{Dtmf, DtmfSource, Frame, FrameMut, IoFlags, IoRoutinesBuilder, SessionMessage};
 pub use estimators::{CusumDetector, KalmanEstimator, is_slow_link};
-pub use event::{Event, EventBinder, EventRef};
-pub use ivr::{park, record_file};
+pub use event::{
+    Event, EventBinder, EventRef, EventXml, HeaderIter, binary_deserialize, bind_permanent,
+    channel_bind, channel_broadcast, channel_deliver, channel_permission_clear,
+    channel_permission_modify, channel_permission_verify, channel_unbind, event_name,
+    event_running, name_event, unbind_callback,
+};
+pub use ivr::{
+    DigitMachine, DmachineMatch, IvrMenu, IvrMenuConfig, OriginateOutcome, block_dtmf_session,
+    broadcast, broadcast_in_thread, capture_text, check_hold, check_presence_mapping,
+    collect_digits_callback, collect_digits_count, delay_echo, detect_speech,
+    detect_speech_disable_all_grammars, detect_speech_disable_grammar,
+    detect_speech_enable_grammar, detect_speech_init, detect_speech_load_grammar,
+    detect_speech_start_input_timers, detect_speech_unload_grammar, displace_session,
+    eavesdrop_exec_all, eavesdrop_pop_eavesdropper, generate_json_cdr, generate_xml_cdr, media,
+    multi_threaded_bridge, multi_threaded_bridge_raw, nomedia, originate, originate_raw, park,
+    parse_all_events, parse_event, parse_next_event, pause_detect_speech, play_file, read,
+    record_file, record_session, record_session_event, record_session_mask, record_session_pause,
+    resume_detect_speech, say, say_ip, say_spell, say_string, stop_detect_speech,
+    unblock_dtmf_session, uuid_exists, uuid_force_exists,
+};
 pub use jitterbuffer::{JbFlag, JbFrames, JbKind, JitterBuffer, JitterBufferConfig};
 pub use limit::{
     Usage, backend, fire_event, incr, init, interval_reset, release, reset, status, usage,
