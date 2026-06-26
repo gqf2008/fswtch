@@ -51,7 +51,10 @@ impl Pool {
         status_to_result(status)?;
         // SAFETY: `new_memory_pool` returned SUCCESS, so `pool` is a non-null, freshly created pool.
         let raw = NonNull::new(pool).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw, _marker: PhantomData })
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// The underlying `switch_memory_pool_t *`.

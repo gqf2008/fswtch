@@ -189,7 +189,10 @@ impl Drop for CompletionFunc {
         if status != crate::SUCCESS {
             // De-registration best-effort in `Drop`; surface failure via the error log rather than
             // panicking.
-            crate::log_error("console", "switch_console_del_complete_func failed during Drop");
+            crate::log_error(
+                "console",
+                "switch_console_del_complete_func failed during Drop",
+            );
         }
     }
 }

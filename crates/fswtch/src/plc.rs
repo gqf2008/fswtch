@@ -12,7 +12,7 @@
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use crate::{Result, SwitchError, GENERR, log_error, sys};
+use crate::{GENERR, Result, SwitchError, log_error, sys};
 
 /// An owned packet-loss-concealment generator.
 ///
@@ -40,7 +40,10 @@ impl Plc {
         // allocation failure.
         let raw = unsafe { sys::switch_plc_init(std::ptr::null_mut()) };
         NonNull::new(raw)
-            .map(|raw| Self { raw, _marker: PhantomData })
+            .map(|raw| Self {
+                raw,
+                _marker: PhantomData,
+            })
             .ok_or(SwitchError(GENERR))
     }
 
@@ -53,7 +56,10 @@ impl Plc {
     /// already owned by another `Plc` (or any other RAII guard) is unsound — it would be freed
     /// twice.
     pub unsafe fn from_raw(raw: *mut sys::switch_plc_state_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw, _marker: PhantomData })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// The raw `switch_plc_state_t` pointer for escape-hatch FFI.

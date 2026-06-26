@@ -516,6 +516,9 @@ mod tests {
 
     #[test]
     fn flag_maps_to_raw() {
-        assert_eq!(JbFlag::QueueOnly.as_raw(), sys::switch_jb_flag_t_SJB_QUEUE_ONLY);
+        assert_eq!(
+            JbFlag::QueueOnly.as_raw(),
+            sys::switch_jb_flag_t_SJB_QUEUE_ONLY
+        );
     }
 }

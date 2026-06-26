@@ -75,7 +75,11 @@ impl Codec {
             // SAFETY: `raw` was just box-allocated and zeroed; `init` succeeded so the struct is a
             // live, non-null codec handle for the lifetime of this wrapper.
             let raw = unsafe { NonNull::new_unchecked(Box::into_raw(raw)) };
-            Self { raw, rate, _marker: PhantomData }
+            Self {
+                raw,
+                rate,
+                _marker: PhantomData,
+            }
         })
     }
 

@@ -77,9 +77,8 @@ impl Event {
         let body = cstring(body)?;
         // SAFETY: `raw` is a live event; the format string and `body` are valid C strings. The
         // variadic call supplies the single `%s` argument.
-        let status = unsafe {
-            sys::switch_event_add_body(raw.as_ptr(), c"%s".as_ptr(), body.as_ptr())
-        };
+        let status =
+            unsafe { sys::switch_event_add_body(raw.as_ptr(), c"%s".as_ptr(), body.as_ptr()) };
         status_to_result(status)
     }
 

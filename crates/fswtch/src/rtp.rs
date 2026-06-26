@@ -48,7 +48,10 @@ impl Rtp {
     /// must not already be owned by another [`Rtp`] or have been destroyed. Ownership transfers to
     /// the returned [`Rtp`]; dropping it will call `switch_rtp_destroy`.
     pub unsafe fn from_raw(raw: *mut switch_rtp_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw, _marker: PhantomData })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// The underlying `switch_rtp_t *`. Escape hatch for unwrapped RTP features.
@@ -82,7 +85,8 @@ impl Rtp {
     /// yet available.
     pub fn read_frame(&self, frame: *mut switch_frame_t, io_flags: switch_io_flag_t) -> Result<()> {
         // SAFETY: `self.raw` is a live RTP session; `frame` is a valid out-pointer for the call.
-        let status = unsafe { sys::switch_rtp_zerocopy_read_frame(self.raw.as_ptr(), frame, io_flags) };
+        let status =
+            unsafe { sys::switch_rtp_zerocopy_read_frame(self.raw.as_ptr(), frame, io_flags) };
         status_to_result(status)
     }
 
@@ -385,7 +389,10 @@ mod tests {
     fn flag_set_clears_others_only_for_index() {
         let cfg = RtpConfig::new().flag(sys::switch_rtp_flag_t_SWITCH_RTP_FLAG_USE_TIMER);
         let idx = sys::switch_rtp_flag_t_SWITCH_RTP_FLAG_USE_TIMER as usize;
-        assert_eq!(cfg.flags[idx], sys::switch_rtp_flag_t_SWITCH_RTP_FLAG_USE_TIMER);
+        assert_eq!(
+            cfg.flags[idx],
+            sys::switch_rtp_flag_t_SWITCH_RTP_FLAG_USE_TIMER
+        );
         assert_eq!(cfg.flags[0], 0);
     }
 

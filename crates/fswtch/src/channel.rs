@@ -39,7 +39,8 @@ impl Channel {
         // SAFETY: `self.raw` is a live channel; `name` is a valid C string for the call. The
         // returned pointer is null or a malloc'd "strdup copy ... without using a memory pool"
         // (per switch_channel.h) that `strdup_to_string` copies out and frees.
-        let value = unsafe { sys::switch_channel_get_variable_strdup(self.raw.as_ptr(), name.as_ptr()) };
+        let value =
+            unsafe { sys::switch_channel_get_variable_strdup(self.raw.as_ptr(), name.as_ptr()) };
         // SAFETY: `value` is null or a malloc'd C string as above.
         Ok(unsafe { strdup_to_string(value.cast_mut()) })
     }
@@ -105,7 +106,9 @@ impl Channel {
     /// only this channel's own state is awaited.
     pub fn wait_for_state(self, want: sys::switch_channel_state_t) {
         // SAFETY: `self.raw` is a live channel; a null `other_channel` is permitted.
-        unsafe { sys::switch_channel_wait_for_state(self.raw.as_ptr(), std::ptr::null_mut(), want) };
+        unsafe {
+            sys::switch_channel_wait_for_state(self.raw.as_ptr(), std::ptr::null_mut(), want)
+        };
     }
 
     /// Requests a state transition. Returns the resulting state.

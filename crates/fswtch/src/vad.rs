@@ -54,10 +54,7 @@ impl VadState {
     /// `true` when this state marks the start of speech (`START_TALKING` or `TALKING`).
     #[inline]
     pub fn is_talking(self) -> bool {
-        matches!(
-            self,
-            Self::START_TALKING | Self::TALKING
-        )
+        matches!(self, Self::START_TALKING | Self::TALKING)
     }
 
     /// The canonical name FreeSWITCH uses for this state (e.g. `"TALKING"`).
@@ -107,7 +104,10 @@ impl Vad {
         // integers is sound (it returns NULL for invalid arguments).
         let raw = unsafe { sys::switch_vad_init(sample_rate as _, channels as _) };
         NonNull::new(raw)
-            .map(|raw| Self { raw, _marker: PhantomData })
+            .map(|raw| Self {
+                raw,
+                _marker: PhantomData,
+            })
             .ok_or(SwitchError(crate::GENERR))
     }
 

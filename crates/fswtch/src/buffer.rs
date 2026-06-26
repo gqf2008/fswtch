@@ -11,7 +11,7 @@
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use crate::{Result, SwitchError, GENERR, status_to_result, sys};
+use crate::{GENERR, Result, SwitchError, status_to_result, sys};
 
 /// The realloc granularity applied when a dynamic buffer needs to grow, in bytes.
 ///
@@ -181,9 +181,8 @@ impl Buffer {
             let n = remaining.min(CHUNK) as sys::switch_size_t;
             // SAFETY: `self.raw` is a live owned buffer; `zeros` is a valid readable buffer of `n`
             // bytes (n <= CHUNK).
-            let written = unsafe {
-                sys::switch_buffer_zwrite(self.raw.as_ptr(), zeros.as_ptr().cast(), n)
-            };
+            let written =
+                unsafe { sys::switch_buffer_zwrite(self.raw.as_ptr(), zeros.as_ptr().cast(), n) };
             if written == 0 {
                 return Err(SwitchError(GENERR));
             }

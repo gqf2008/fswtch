@@ -29,8 +29,8 @@
 use std::ffi::CString;
 use std::ptr::NonNull;
 
-use crate::{Result, SwitchError, sys};
 use crate::{GENERR, SUCCESS};
+use crate::{Result, SwitchError, sys};
 
 /// A compiled PCRE2 regular expression.
 ///
@@ -68,7 +68,10 @@ impl Regex {
             )
         };
         let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw: Some(raw), pattern: pat })
+        Ok(Self {
+            raw: Some(raw),
+            pattern: pat,
+        })
     }
 
     /// Wraps an already-compiled FreeSWITCH regex pointer together with its source pattern text.
@@ -79,7 +82,10 @@ impl Regex {
     /// `switch_regex_perform`) that the caller transfers ownership of, and which has not yet been
     /// freed. `pattern` must be the exact pattern text that produced `raw`.
     pub unsafe fn from_raw(raw: *mut sys::switch_regex_t, pattern: CString) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw: Some(raw), pattern })
+        NonNull::new(raw).map(|raw| Self {
+            raw: Some(raw),
+            pattern,
+        })
     }
 
     /// The raw compiled-regex pointer, for direct FFI use.
@@ -92,9 +98,7 @@ impl Regex {
     #[inline]
     pub fn pattern(&self) -> &str {
         // SAFETY: `self.pattern` was constructed from a `&str` and contains no interior NULs.
-        self.pattern
-            .to_str()
-            .unwrap_or("")
+        self.pattern.to_str().unwrap_or("")
     }
 
     /// Matches `subject` against this regex.
@@ -180,10 +184,7 @@ impl RegexMatch {
     /// `raw` must point to a `switch_regex_match_t` produced by `switch_regex_perform` (or PCRE2)
     /// that the caller transfers ownership of, and which has not yet been freed. `group_count`
     /// must be the value `switch_regex_perform` returned for that match.
-    pub unsafe fn from_raw(
-        raw: *mut sys::switch_regex_match_t,
-        group_count: i32,
-    ) -> Option<Self> {
+    pub unsafe fn from_raw(raw: *mut sys::switch_regex_match_t, group_count: i32) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw: Some(raw),
             group_count,

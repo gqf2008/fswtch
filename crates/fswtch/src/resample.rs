@@ -63,7 +63,10 @@ impl Resample {
         status_to_result(status)?;
         // SAFETY: `switch_resample_perform_create` returned SUCCESS, so `raw` is a live handle.
         let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw, _marker: PhantomData })
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// Creates a resampler using [`DEFAULT_QUALITY`].
@@ -108,9 +111,8 @@ impl Resample {
         // SAFETY: `self.raw` is a live resampler; `src` is a valid readable buffer of `srclen`
         // samples. The call writes into the resampler's internal `to` buffer and returns the count
         // of samples written (never more than the allocated `to_size`).
-        let out_len = unsafe {
-            sys::switch_resample_process(self.raw.as_ptr(), src.as_mut_ptr(), srclen)
-        };
+        let out_len =
+            unsafe { sys::switch_resample_process(self.raw.as_ptr(), src.as_mut_ptr(), srclen) };
         let out_len = out_len as usize;
         // SAFETY: `self.raw` is a live resampler; `to` is the internal output buffer and `out_len`
         // is the number of samples the call just wrote into it.
@@ -138,8 +140,7 @@ impl Drop for Resample {
 /// FreeSWITCH's automatic gain control is parameterized by five values; this builder keeps the
 /// construction call site readable. All fields default to `0` (use [`AgcConfig::default`] and fill
 /// in the values you care about).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AgcConfig {
     /// Rolling average energy level the AGC targets.
     pub energy_avg: u32,
@@ -152,7 +153,6 @@ pub struct AgcConfig {
     /// Number of samples per adjustment period.
     pub period_len: u32,
 }
-
 
 impl AgcConfig {
     /// Sets [`AgcConfig::energy_avg`].
@@ -218,7 +218,11 @@ impl Agc {
         status_to_result(status)?;
         // SAFETY: `switch_agc_create` returned SUCCESS, so `raw` is a live handle.
         let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw, tokens: Vec::new(), _marker: PhantomData })
+        Ok(Self {
+            raw,
+            tokens: Vec::new(),
+            _marker: PhantomData,
+        })
     }
 
     /// Convenience constructor passing individual parameters (equivalent to
@@ -298,7 +302,9 @@ impl Agc {
         let count = u32::try_from(samples.len()).unwrap_or(u32::MAX);
         // SAFETY: `self.raw` is a live AGC handle; `samples` is a writable buffer of `count`
         // samples for `channels` interleaved channels.
-        let status = unsafe { sys::switch_agc_feed(self.raw.as_ptr(), samples.as_mut_ptr(), count, channels) };
+        let status = unsafe {
+            sys::switch_agc_feed(self.raw.as_ptr(), samples.as_mut_ptr(), count, channels)
+        };
         status_to_result(status)
     }
 }

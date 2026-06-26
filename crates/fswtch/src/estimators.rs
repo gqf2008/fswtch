@@ -27,7 +27,7 @@
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
-use crate::{Result, SwitchError, GENERR, sys};
+use crate::{GENERR, Result, SwitchError, sys};
 
 /// `SWITCH_TRUE` from `fswtch-sys`, as a plain `bool` for ergonomic comparisons.
 #[inline]
@@ -82,7 +82,10 @@ impl KalmanEstimator {
             sys::switch_kalman_init(Box::as_mut(&mut raw), q, r);
         }
 
-        Ok(Self { raw, _marker: PhantomData })
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// The raw `kalman_estimator_t` pointer, for escape-hatch FFI.
@@ -101,7 +104,11 @@ impl KalmanEstimator {
     /// constants in use. Typical values observed in the tree are `0` and `1`.
     ///
     /// Returns `false` when `switch_kalman_estimate` reports `SWITCH_FALSE`.
-    pub fn estimate(&self, measurement: f32, system_model: i32) -> bool {
+    ///
+    /// Takes `&mut self` because the Kalman step mutates the estimator's internal state
+    /// (`val_estimate`/`P`/`K`); the exclusive borrow prevents aliasing with concurrent reads
+    /// of the estimator's fields.
+    pub fn estimate(&mut self, measurement: f32, system_model: i32) -> bool {
         // SAFETY: `self.raw` is a live, initialized estimator box; the box's
         // pointer is valid for the duration of the call. `measurement` is a plain
         // float and `system_model` is a plain `c_int`.
@@ -199,14 +206,15 @@ impl CusumDetector {
         // SAFETY: `raw` is a freshly zeroed detector struct; `epsilon`/`h` are
         // plain floats. `switch_kalman_cusum_init` seeds the detector's constants
         // and returns `SWITCH_TRUE` on success.
-        let rc = unsafe {
-            sys::switch_kalman_cusum_init(Box::as_mut(&mut raw), epsilon, h)
-        };
+        let rc = unsafe { sys::switch_kalman_cusum_init(Box::as_mut(&mut raw), epsilon, h) };
         if !is_true(rc) {
             return Err(SwitchError(GENERR));
         }
 
-        Ok(Self { raw, _marker: PhantomData })
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// The raw `cusum_kalman_detector_t` pointer, for escape-hatch FFI.
@@ -221,7 +229,9 @@ impl CusumDetector {
     ///
     /// `switch_kalman_cusum_detect_change` returns `SWITCH_TRUE` exactly when the
     /// accumulated CUSUM statistic crosses the configured `h` threshold.
-    pub fn detect_change(&self, measurement: f32, rtt_avg: f32) -> bool {
+    ///
+    /// Takes `&mut self` because the CUSUM step mutates the detector's internal state.
+    pub fn detect_change(&mut self, measurement: f32, rtt_avg: f32) -> bool {
         // SAFETY: `self.raw` is a live, initialized detector box; the box's
         // pointer is valid for the duration of the call. `measurement`/`rtt_avg`
         // are plain floats.
@@ -267,9 +277,7 @@ impl std::fmt::Debug for CusumDetector {
 pub fn is_slow_link(est_loss: &KalmanEstimator, est_rtt: &KalmanEstimator) -> bool {
     // SAFETY: both estimators are live, initialized boxes; their pointers are
     // valid for the duration of the (read-only) call.
-    let rc = unsafe {
-        sys::switch_kalman_is_slow_link(est_loss.as_ptr(), est_rtt.as_ptr())
-    };
+    let rc = unsafe { sys::switch_kalman_is_slow_link(est_loss.as_ptr(), est_rtt.as_ptr()) };
     is_true(rc)
 }
 

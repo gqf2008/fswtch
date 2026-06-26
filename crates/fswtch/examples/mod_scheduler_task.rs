@@ -11,8 +11,8 @@
 //! - `rust_scheduler_spawn`  — schedules a recurring counter task and writes its task id;
 //! - `rust_scheduler_count`  — writes the current counter value.
 
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 

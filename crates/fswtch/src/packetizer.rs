@@ -39,7 +39,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use crate::{Result, SwitchError, GENERR, FALSE, SUCCESS, status_to_result, sys};
+use crate::{FALSE, GENERR, Result, SUCCESS, SwitchError, status_to_result, sys};
 
 /// The bitstream framing a [`Packetizer`] expects on feed, wrapping
 /// `switch_packetizer_bitstream_t`.
@@ -92,10 +92,7 @@ impl BitstreamType {
     /// `true` for any of the H.264 framing modes.
     #[inline]
     pub fn is_h264(self) -> bool {
-        matches!(
-            self,
-            Self::H264 | Self::H264_SIZED | Self::H264_SINGLE_NALU
-        )
+        matches!(self, Self::H264 | Self::H264_SIZED | Self::H264_SINGLE_NALU)
     }
 
     /// `true` for the VP8 / VP9 modes.
@@ -158,7 +155,10 @@ impl Packetizer {
         // a `uint32_t`; both arguments are plain integers. It returns NULL on failure.
         let raw = unsafe { sys::switch_packetizer_create(kind.0, slice_size) };
         NonNull::new(raw)
-            .map(|raw| Self { raw, _marker: PhantomData })
+            .map(|raw| Self {
+                raw,
+                _marker: PhantomData,
+            })
             .ok_or(SwitchError(GENERR))
     }
 
@@ -171,7 +171,10 @@ impl Packetizer {
     /// the [`Packetizer`] is dropped. `raw` must not be used by any other wrapper or
     /// freed by anything else after this call.
     pub unsafe fn from_raw(raw: *mut sys::switch_packetizer_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw, _marker: PhantomData })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// The raw `switch_packetizer_t` pointer, for escape-hatch FFI.

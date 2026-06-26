@@ -146,13 +146,7 @@ impl CoreDb {
         // SAFETY: `self.raw` is live; `sql` is a valid C string; `nBytes = -1` reads to the NUL
         // terminator; `stmt` and `tail` are valid out-params.
         let code = unsafe {
-            sys::switch_core_db_prepare(
-                self.raw.as_ptr(),
-                sql.as_ptr(),
-                -1,
-                &mut stmt,
-                &mut tail,
-            )
+            sys::switch_core_db_prepare(self.raw.as_ptr(), sql.as_ptr(), -1, &mut stmt, &mut tail)
         };
         db_result(code)?;
         let stmt = NonNull::new(stmt).ok_or(SwitchError(GENERR))?;
@@ -265,13 +259,7 @@ impl<'a> Stmt<'a> {
         // SAFETY: `self.stmt` is live; `value` is a valid C string owned by `self.bound` for the
         // statement's lifetime, so the null (SQLITE_STATIC) destructor is sound.
         let code = unsafe {
-            sys::switch_core_db_bind_text(
-                self.stmt.as_ptr(),
-                idx,
-                value.as_ptr(),
-                -1,
-                None,
-            )
+            sys::switch_core_db_bind_text(self.stmt.as_ptr(), idx, value.as_ptr(), -1, None)
         };
         self.bound.push(value);
         db_result(code)
@@ -408,7 +396,10 @@ mod tests {
         let q = db.prepare("SELECT id, s FROM t").unwrap();
         assert_eq!(q.column_count(), 2);
         assert!(q.step().unwrap());
-        assert_eq!(q.column_text(0).map(|s| s.parse::<i64>().unwrap()), Some(db.last_insert_rowid()));
+        assert_eq!(
+            q.column_text(0).map(|s| s.parse::<i64>().unwrap()),
+            Some(db.last_insert_rowid())
+        );
         assert_eq!(q.column_text(1), Some("hello".to_owned()));
         assert!(!q.step().unwrap());
     }
@@ -417,14 +408,22 @@ mod tests {
     fn iterator_yields_one_row() {
         let db = memdb();
         db.exec("CREATE TABLE t(s TEXT)").unwrap();
-        db.exec("INSERT INTO t(s) VALUES ('a'), ('b'), ('c')").unwrap();
+        db.exec("INSERT INTO t(s) VALUES ('a'), ('b'), ('c')")
+            .unwrap();
         let q = db.prepare("SELECT s FROM t ORDER BY s").unwrap();
         let mut values = Vec::new();
         for row in q.iter() {
             row.unwrap();
             values.push(q.column_text(0));
         }
-        assert_eq!(values, vec![Some("a".to_owned()), Some("b".to_owned()), Some("c".to_owned())]);
+        assert_eq!(
+            values,
+            vec![
+                Some("a".to_owned()),
+                Some("b".to_owned()),
+                Some("c".to_owned())
+            ]
+        );
     }
 
     #[test]

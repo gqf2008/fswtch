@@ -59,7 +59,10 @@ impl Timer {
             )
         };
         status_to_result(status)?;
-        Ok(Self { raw, _marker: PhantomData })
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     #[inline]

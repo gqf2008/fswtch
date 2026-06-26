@@ -11,7 +11,7 @@
 use std::ffi::c_char;
 
 use crate::command::borrowed_cstr_to_string;
-use crate::{Result, SwitchError, cstring, sys, GENERR};
+use crate::{GENERR, Result, SwitchError, cstring, sys};
 
 /// Worst-case growth factor for the escape / URL-encode routines: each source byte may expand to
 /// at most three bytes (`%XX`), plus a trailing NUL.
@@ -19,9 +19,7 @@ const EXPAND_FACTOR: usize = 3;
 
 /// Sizes an output buffer large enough to hold `len` input bytes under any expansion, plus a NUL.
 fn out_capacity(len: usize) -> usize {
-    len.saturating_mul(EXPAND_FACTOR)
-        .saturating_add(1)
-        .max(1)
+    len.saturating_mul(EXPAND_FACTOR).saturating_add(1).max(1)
 }
 
 /// Escapes a string the way FreeSWITCH does internally (URL-ish escaping via
@@ -38,11 +36,7 @@ pub fn escape_string(s: &str) -> Result<String> {
     // SAFETY: `input` is a valid NUL-terminated C string; `buf` points to `cap` writable bytes
     // (>= 3*len + 1), sufficient for any expansion plus the NUL terminator written by the FFI.
     let written = unsafe {
-        sys::switch_escape_string(
-            input.as_ptr(),
-            buf.as_mut_ptr(),
-            cap as sys::switch_size_t,
-        )
+        sys::switch_escape_string(input.as_ptr(), buf.as_mut_ptr(), cap as sys::switch_size_t)
     };
     // `switch_escape_string` returns the `out` buffer on success; a null return indicates failure.
     if written.is_null() {

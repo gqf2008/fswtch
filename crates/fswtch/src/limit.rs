@@ -150,8 +150,9 @@ pub fn interval_reset(backend: &str, realm: &str, resource: &str) -> Result<()> 
     let realm = cstring(realm)?;
     let resource = cstring(resource)?;
     // SAFETY: all three C strings are valid NUL-terminated values.
-    let status =
-        unsafe { sys::switch_limit_interval_reset(backend.as_ptr(), realm.as_ptr(), resource.as_ptr()) };
+    let status = unsafe {
+        sys::switch_limit_interval_reset(backend.as_ptr(), realm.as_ptr(), resource.as_ptr())
+    };
     status_to_result(status)
 }
 
@@ -224,4 +225,3 @@ pub unsafe fn init(pool: *mut sys::switch_memory_pool_t) {
     // SAFETY: upheld by the caller via the `# Safety` contract above.
     unsafe { sys::switch_limit_init(pool) };
 }
-

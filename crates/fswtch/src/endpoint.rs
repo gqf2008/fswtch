@@ -45,8 +45,8 @@ use std::ffi::c_void;
 use std::os::raw::c_char;
 use std::ptr::NonNull;
 
-use crate::{MediaFrame, MediaFrameMut, Result, sys};
 use crate::command::borrowed_cstr_to_str;
+use crate::{MediaFrame, MediaFrameMut, Result, sys};
 
 /// A borrowed view of a FreeSWITCH media frame in an endpoint I/O callback.
 ///
@@ -80,7 +80,8 @@ impl Dtmf {
     /// (the C `switch_dtmf_t.digit` field is one `c_char`, so non-ASCII input would be silently
     /// truncated).
     pub fn new(digit: char, duration: u32, source: DtmfSource) -> Result<Self> {
-        let digit = c_char::try_from(digit as u32).map_err(|_| crate::SwitchError(crate::GENERR))?;
+        let digit =
+            c_char::try_from(digit as u32).map_err(|_| crate::SwitchError(crate::GENERR))?;
         Ok(Self(sys::switch_dtmf_t {
             digit,
             duration,

@@ -129,7 +129,10 @@ mod tests {
     fn borrowed_cstr_handles_null_and_value() {
         assert!(borrowed_cstr_to_string(std::ptr::null()).is_none());
         let c = cstring("world").unwrap();
-        assert_eq!(borrowed_cstr_to_string(c.as_ptr()), Some("world".to_owned()));
+        assert_eq!(
+            borrowed_cstr_to_string(c.as_ptr()),
+            Some("world".to_owned())
+        );
     }
 
     #[test]

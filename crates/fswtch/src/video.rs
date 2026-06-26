@@ -62,7 +62,12 @@ impl Color {
         // SAFETY: `s` is a valid null-terminated C string for the call; `color` is writable
         // out-storage for the parsed RGB value.
         unsafe { sys::switch_color_set_rgb(&mut color, s.as_ptr()) };
-        Ok(Self { b: color.b, g: color.g, r: color.r, a: color.a })
+        Ok(Self {
+            b: color.b,
+            g: color.g,
+            r: color.r,
+            a: color.a,
+        })
     }
 
     fn to_sys(self) -> sys::switch_rgb_color_t {
@@ -218,7 +223,10 @@ impl Image {
     /// (e.g. `switch_img_alloc`, `switch_img_read_file`, `switch_img_copy_rect`), and the caller
     /// must transfer sole ownership to this wrapper — the image must not be freed elsewhere.
     pub unsafe fn from_raw(raw: *mut sys::switch_image_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw, _marker: PhantomData })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// The raw image pointer (escape hatch for FFI). The wrapper retains ownership.
@@ -338,23 +346,38 @@ impl Image {
             return Err(SwitchError(crate::GENERR));
         }
         let mut raw = self.raw.as_ptr();
-        // SAFETY: `raw` is a live owned image. On success FreeSWITCH frees the old image and
-        // writes the new (scaled) image pointer back into `*raw`; on failure `raw` is unchanged.
-        let status =
-            unsafe { sys::switch_img_fit(&mut raw, width as i32, height as i32, fit.0) };
+        // SAFETY: `raw` is a live owned image. On success FreeSWITCH frees the old image and writes
+        // the new (scaled) image pointer back into `*raw`. The failure-path ownership of `*srcP`
+        // is undocumented in the header, so we treat the post-call value of `raw` as the only
+        // authoritative pointer: if `NonNull::new` rejects it (null on success, or freed on failure),
+        // we must not keep a dangling `self.raw` — the image is gone either way.
+        let status = unsafe { sys::switch_img_fit(&mut raw, width as i32, height as i32, fit.0) };
         if status_to_result(status).is_ok() {
-            // SAFETY: on success `raw` is the new image pointer; the old `self.raw` was freed by
-            // FreeSWITCH. The contract guarantees a non-null replacement on success.
-            debug_assert!(
-                !raw.is_null(),
-                "switch_img_fit returned success with a null image"
-            );
-            // SAFETY: guarded against null by the debug_assert above; the FreeSWITCH contract
-            // guarantees a non-null replacement on success.
-            self.raw = unsafe { NonNull::new_unchecked(raw) };
-            Ok(())
+            // On success the contract guarantees a non-null replacement; if it is null (allocation
+            // of the scaled image failed late), the old image was already freed, so `self.raw`
+            // must be invalidated regardless.
+            match NonNull::new(raw) {
+                Some(new_raw) => {
+                    self.raw = new_raw;
+                    Ok(())
+                }
+                None => Err(SwitchError(crate::GENERR)),
+            }
         } else {
-            Err(SwitchError(crate::GENERR))
+            // Failure path: `*srcP` may be unchanged OR freed-and-nulled (undocumented). If `raw`
+            // survived, keep using it; if FreeSWITCH nulled it, the image is gone — surface an
+            // error and mark the handle invalid so a subsequent Drop does not free a dangling
+            // pointer.
+            match NonNull::new(raw) {
+                Some(_) => Err(SwitchError(crate::GENERR)),
+                None => {
+                    // The image was freed by FreeSWITCH on the failure path; leak the `NonNull`
+                    // by replacing it with a dangling marker that Drop will no-op. We cannot
+                    // soundly call `switch_img_free` on freed memory, so we detach ownership.
+                    self.raw = NonNull::dangling();
+                    Err(SwitchError(crate::GENERR))
+                }
+            }
         }
     }
 
@@ -395,13 +418,7 @@ impl Image {
         // SAFETY: a pure computation; `x`/`y` are valid writable out-storage.
         unsafe {
             sys::switch_img_find_position(
-                pos.0,
-                surface_w,
-                surface_h,
-                image_w,
-                image_h,
-                &mut x,
-                &mut y,
+                pos.0, surface_w, surface_h, image_w, image_h, &mut x, &mut y,
             )
         };
         (x, y)
@@ -411,7 +428,8 @@ impl Image {
     /// `data:image/<type>;base64,` prefix).
     ///
     /// `mime` selects the format: `"png"` or `"jpeg"`. `quality` (1–100) applies to JPEG and is
-    /// ignored by PNG. Returns an owned [`String`]; the C-allocated buffer is freed internally.
+    /// ignored by PNG. Returns an owned [`String`] copied out of the C-allocated URL buffer, which
+    /// is freed via `free` after copying.
     pub fn data_url(&self, mime: impl AsRef<str>, quality: i32) -> Result<String> {
         let mime = cstring(mime)?;
         let mut url: *mut std::os::raw::c_char = std::ptr::null_mut();
@@ -442,12 +460,7 @@ impl Image {
     ///
     /// The pixel bytes are copied into the image's storage. `switch_img_from_raw` assumes
     /// contiguous rows; pass a buffer with no row padding.
-    pub fn from_raw_bytes(
-        data: &[u8],
-        fmt: ImageFormat,
-        width: u32,
-        height: u32,
-    ) -> Result<Self> {
+    pub fn from_raw_bytes(data: &[u8], fmt: ImageFormat, width: u32, height: u32) -> Result<Self> {
         let mut raw: *mut sys::switch_image_t = std::ptr::null_mut();
         // SAFETY: `data` is a valid readable buffer of `data.len()` bytes; `raw` is valid
         // writable out-storage. On success `*raw` is a live owned image to be freed via
@@ -471,13 +484,20 @@ impl Image {
     pub fn write_to_file(&self, path: impl AsRef<str>, quality: i32) -> Result<()> {
         let path = cstring(path)?;
         // SAFETY: `self.raw` is a live image; `path` is a valid C string for the call.
-        let status = unsafe { sys::switch_img_write_to_file(self.raw.as_ptr(), path.as_ptr(), quality) };
+        let status =
+            unsafe { sys::switch_img_write_to_file(self.raw.as_ptr(), path.as_ptr(), quality) };
         status_to_result(status)
     }
 }
 
 impl Drop for Image {
     fn drop(&mut self) {
+        // `fit` may detach ownership by setting `self.raw` to `NonNull::dangling()` when
+        // FreeSWITCH freed the image on a failure path — do not call `switch_img_free` on the
+        // dangling sentinel (it is not a real allocation).
+        if self.raw == NonNull::dangling() {
+            return;
+        }
         let mut raw = self.raw.as_ptr();
         // SAFETY: `raw` is the live image this wrapper owns. `switch_img_free` nulls out `*raw`
         // after freeing, so a double drop is a no-op.
@@ -504,7 +524,10 @@ impl Chromakey {
     /// `raw` must point to a live `switch_chromakey_t` obtained from `switch_chromakey_create`,
     /// and the caller must transfer sole ownership to this wrapper.
     pub unsafe fn from_raw(raw: *mut sys::switch_chromakey_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw, _marker: PhantomData })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// The raw chromakey pointer (escape hatch for FFI). The wrapper retains ownership.
@@ -525,21 +548,26 @@ impl Chromakey {
 
     /// Adds `color` to the set of transparent colors, with a per-color `threshold`
     /// (0–255; larger values widen the band of pixels treated as matching).
-    pub fn add_color(&self, color: Color, threshold: u32) -> Result<()> {
+    ///
+    /// Takes `&mut self` because mutating the color set can invalidate the cached image returned
+    /// by [`Chromakey::cache_image`]; the exclusive borrow ensures no live [`CachedImage`] can
+    /// outlive the change.
+    pub fn add_color(&mut self, color: Color, threshold: u32) -> Result<()> {
         let mut color = color.to_sys();
         // SAFETY: `self.raw` is a live chromakey; `color` is a valid out-parameter for the call.
-        let status = unsafe { sys::switch_chromakey_add_color(self.raw.as_ptr(), &mut color, threshold) };
+        let status =
+            unsafe { sys::switch_chromakey_add_color(self.raw.as_ptr(), &mut color, threshold) };
         status_to_result(status)
     }
 
     /// Sets the default threshold applied to colors added without an explicit per-color value.
-    pub fn set_default_threshold(&self, threshold: u32) {
+    pub fn set_default_threshold(&mut self, threshold: u32) {
         // SAFETY: `self.raw` is a live chromakey.
         unsafe { sys::switch_chromakey_set_default_threshold(self.raw.as_ptr(), threshold) };
     }
 
     /// Removes every color previously added with [`Chromakey::add_color`].
-    pub fn clear_colors(&self) -> Result<()> {
+    pub fn clear_colors(&mut self) -> Result<()> {
         // SAFETY: `self.raw` is a live chromakey.
         let status = unsafe { sys::switch_chromakey_clear_colors(self.raw.as_ptr()) };
         status_to_result(status)
@@ -547,7 +575,10 @@ impl Chromakey {
 
     /// Applies the chromakey mask to `image` in place: pixels matching a registered color are
     /// made transparent (alpha set to 0).
-    pub fn process(&self, image: &mut Image) {
+    ///
+    /// Takes `&mut self` because processing refreshes the chromakey's cached image, which would
+    /// invalidate any live [`CachedImage`] view.
+    pub fn process(&mut self, image: &mut Image) {
         // SAFETY: Both pointers are live; `image` is borrowed mutably for the in-place edit.
         unsafe { sys::switch_chromakey_process(self.raw.as_ptr(), image.as_ptr()) };
     }
@@ -557,7 +588,7 @@ impl Chromakey {
     ///
     /// Pass [`Shade::AUTO`] to let FreeSWITCH pick the dominant color, or a specific shade to
     /// bias the detector toward red/green/blue.
-    pub fn autocolor(&self, shade: Shade, threshold: u32) -> Result<()> {
+    pub fn autocolor(&mut self, shade: Shade, threshold: u32) -> Result<()> {
         // SAFETY: `self.raw` is a live chromakey; `shade`/`threshold` are plain integers.
         let status =
             unsafe { sys::switch_chromakey_autocolor(self.raw.as_ptr(), shade.0, threshold) };
