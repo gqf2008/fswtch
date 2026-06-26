@@ -1,26 +1,51 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
+mod buffer;
 mod caller;
 mod channel;
+mod codec;
 mod command;
+mod console;
+mod core;
+mod core_db;
 mod event;
 mod exports;
 mod ivr;
+mod jitterbuffer;
+mod limit;
 mod logging;
 mod media;
 mod module;
+mod pool;
+mod regex;
+mod resample;
+mod rtp;
+mod scheduler;
 mod session;
 mod status;
 mod stream;
+mod timer;
+mod utils;
+mod vad;
+mod video;
 mod xml;
 
 pub use fswtch_sys as sys;
 
+pub use buffer::Buffer;
 pub use caller::CallerProfile;
 pub use channel::{Channel, cause_to_str, str_to_cause};
+pub use codec::Codec;
 pub use command::{StaticCStr, borrowed_cstr_to_str, borrowed_cstr_to_string, command_text, cstring, free_cstr};
+pub use console::{CompletionFunc, CompletionMatches, complete, execute, expand_alias, free_matches};
+pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable, set_variable};
+pub use core_db::{CoreDb, Stmt, StmtRows};
 pub use event::{Event, EventBinder, EventRef};
 pub use ivr::{park, record_file};
+pub use jitterbuffer::{
+    JbFlag, JbFrames, JbKind, JitterBuffer, JitterBufferConfig,
+};
+pub use limit::{Usage, backend, fire_event, incr, init, interval_reset, release, reset, status, usage};
 pub use logging::{
     LogLevel, log, log_alert, log_console, log_critical, log_debug, log_debug1, log_debug2,
     log_debug3, log_debug4, log_debug5, log_debug6, log_debug7, log_debug8, log_debug9,
@@ -34,6 +59,17 @@ pub use module::{
     ApiInterface, ApplicationInfo, ApplicationInterface, ChatApplicationInterface,
     EndpointInterface, Module, ModuleBuilder,
 };
+pub use pool::Pool;
+pub use regex::{CaptureCallback, Regex, RegexMatch, is_match, is_match_partial};
+pub use resample::{
+    Agc, AgcConfig, DEFAULT_QUALITY, Resample, calc_buffer_size, change_sln_volume,
+    change_sln_volume_granular, char_to_float, float_to_char, float_to_short,
+    generate_sln_silence, merge_sln, mux_channels, short_to_float, swap_linear, unmerge_sln,
+};
+pub use rtp::{Rtp, RtpConfig, request_port};
+pub use scheduler::{
+    Task, TaskConfig, TaskFlags, TaskHandle, TaskHandler, cancel_group, spawn, start, stop,
+};
 pub use session::{Session, SessionGuard};
 pub use status::{
     CAUSE_NONE, CAUSE_NORMAL_CLEARING, CAUSE_NO_ANSWER, CAUSE_NO_USER_RESPONSE,
@@ -41,6 +77,10 @@ pub use status::{
     Cause, Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result,
 };
 pub use stream::{ApiStream, Stream, write_stream_response};
+pub use timer::Timer;
+pub use utils::{escape_string, find_end_paren, format_number, url_encode};
+pub use vad::{Vad, VadState};
+pub use video::{Chromakey, Color, Image, ImageFormat};
 pub use xml::{XmlConfig, XmlNode};
 
 #[macro_export]

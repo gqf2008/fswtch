@@ -21,6 +21,10 @@ tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 [features]
 default = ["bundled"]
 bundled = ["fswtch-sys/bundled"]
+# Enables unit tests that call into the live FreeSWITCH C API. These tests cannot link in the
+# headers-only `bundled` build (no freeswitch library is linked); enable `live_fs` only when a
+# real FreeSWITCH build is available via `FREESWITCH_LIB_DIR` or pkg-config.
+live_fs = []
 
 [[example]]
 name = "mod_api_suite"
