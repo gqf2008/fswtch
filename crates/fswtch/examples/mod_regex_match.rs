@@ -52,6 +52,7 @@ fswtch::api_callback! {
         match regex.matches(subject) {
             Ok(Some(m)) => {
                 // Whole match is capture group 0.
+
                 let whole = m
                     .capture(0)
                     .ok()

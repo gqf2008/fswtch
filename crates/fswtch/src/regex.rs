@@ -124,28 +124,32 @@ impl Regex {
                 &mut new_match_data,
             )
         };
-        // `switch_regex_perform` always compiles a fresh `re` and stores it in `*new_re`; it is not
-        // the same object as `self.raw` and must be freed here.
-        if !new_re.is_null() {
-            // SAFETY: `new_re` was produced by `switch_regex_perform` and is now unreferenced.
-            unsafe { sys::switch_regex_free(new_re.cast()) };
-        }
+        // `switch_regex_perform` always compiles a fresh `re` and stores it in `*new_re`. PCRE2's
+        // match_data keeps a pointer to the compiled code — substring extraction requires the code
+        // to remain alive, so we keep `new_re` in the RegexMatch and free it on Drop.
         if count <= 0 {
-            // No match. `switch_regex_perform` allocates `new_match_data` only on a successful
-            // match (consistent with FreeSWITCH's `switch_regex_match_safe_free` macro, which
-            // null-checks before freeing), so it is left NULL here and needs no freeing. We do
-            // NOT free defensively: without the vendored `.c` we cannot prove perform frees it
-            // internally, and a stray free on an already-freed pointer would be a double-free,
-            // whereas a leak on the no-match path is merely a minor one.
+            // No match. Free both the compiled regex and any match data (perform sets match_data
+            // to NULL on no-match, but defensively null-check).
+            if !new_re.is_null() {
+                // SAFETY: `new_re` was produced by `switch_regex_perform` and is now unreferenced.
+                unsafe { sys::switch_regex_free(new_re.cast()) };
+            }
             return Ok(None);
         }
-        if new_match_data.is_null() {
+        if new_match_data.is_null() || new_re.is_null() {
+            // Defensive: perform reported a match but left a null out-param.
+            if !new_re.is_null() {
+                unsafe { sys::switch_regex_free(new_re.cast()) };
+            }
             return Err(SwitchError(GENERR));
         }
-        // SAFETY: `new_match_data` is a freshly allocated, non-null match-data pointer.
+        // SAFETY: both pointers are freshly allocated and non-null.
         let md = unsafe { NonNull::new_unchecked(new_match_data) };
+        let re = unsafe { NonNull::new_unchecked(new_re) };
         Ok(Some(RegexMatch {
             raw: Some(md),
+            re: Some(re),
+            subject: field,
             group_count: count,
         }))
     }
@@ -173,6 +177,15 @@ impl Drop for Regex {
 /// groups with [`RegexMatch::capture`] or run a substitution template with [`RegexMatch::substitute`].
 pub struct RegexMatch {
     raw: Option<NonNull<sys::switch_regex_match_t>>,
+    /// The compiled regex produced by `switch_regex_perform`. Kept alive because PCRE2's match_data
+    /// stores a pointer to the code, and substring extraction requires the code to still be valid.
+    /// Freed on `Drop`.
+    #[allow(dead_code)]
+    re: Option<NonNull<sys::switch_regex_t>>,
+    /// The subject string passed to `switch_regex_perform`. PCRE2's match_data stores a pointer to
+    /// the subject; substring extraction reads it. Must outlive the match_data.
+    #[allow(dead_code)]
+    subject: std::ffi::CString,
     group_count: std::os::raw::c_int,
 }
 
@@ -187,6 +200,8 @@ impl RegexMatch {
     pub unsafe fn from_raw(raw: *mut sys::switch_regex_match_t, group_count: i32) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw: Some(raw),
+            re: None,
+            subject: std::ffi::CString::new("").unwrap(),
             group_count,
         })
     }
@@ -240,6 +255,15 @@ impl RegexMatch {
                 &mut size,
             )
         };
+        // pcre2_substring_copy_bynumber returns 0 on success (size = substring length excl. NUL),
+        // or a negative error code. When the buffer is too small, it returns PCRE2_ERROR_NOMEMORY
+        // (-48) and sets `size` to the required length.
+        if rc == 0 {
+            return std::str::from_utf8(&buf[..size])
+                .map(|s| s.to_owned())
+                .map(Some)
+                .map_err(|_| SwitchError(GENERR));
+        }
         if rc < 0 && size == 0 {
             // Group did not participate in this match.
             return Ok(None);
@@ -267,7 +291,7 @@ impl RegexMatch {
                 .map(Some)
                 .map_err(|_| SwitchError(GENERR));
         }
-        // rc == 0: success, `size` is the substring length (excluding terminator).
+        // rc > 0: unexpected positive return (shouldn't happen per PCRE2 docs, but handle defensively).
         std::str::from_utf8(&buf[..size])
             .map(|s| s.to_owned())
             .map(Some)
@@ -309,6 +333,12 @@ impl Drop for RegexMatch {
             // SAFETY: `raw` owns a match-data object that has not yet been freed;
             // `switch_regex_match_free` accepts `void *` and tolerates the cast.
             unsafe { sys::switch_regex_match_free(raw.as_ptr().cast()) };
+        }
+        // Free the compiled regex AFTER the match data — PCRE2's match_data references the code.
+        if let Some(re) = self.re.take() {
+            // SAFETY: `re` owns a compiled regex produced by `switch_regex_perform`; freed after
+            // the match data so substring extraction has already completed.
+            unsafe { sys::switch_regex_free(re.as_ptr().cast()) };
         }
     }
 }

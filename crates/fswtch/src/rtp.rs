@@ -358,6 +358,7 @@ pub fn request_port(ip: impl AsRef<str>) -> Result<switch_port_t> {
 #[cfg(all(test, feature = "live_fs"))]
 mod tests {
     use super::*;
+    use crate::switch_bool;
 
     #[test]
     fn config_builder_is_chainable() {
