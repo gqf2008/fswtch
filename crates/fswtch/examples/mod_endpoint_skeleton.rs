@@ -1,24 +1,19 @@
-use std::ptr;
-
 use fswtch::sys;
 
-static mut IO_ROUTINES: sys::switch_io_routines = sys::switch_io_routines {
-    outgoing_channel: None,
-    read_frame: None,
-    write_frame: None,
-    kill_channel: None,
-    send_dtmf: None,
-    receive_message: None,
-    receive_event: None,
-    state_change: None,
-    read_video_frame: None,
-    write_video_frame: None,
-    read_text_frame: None,
-    write_text_frame: None,
-    state_run: None,
-    get_jb: None,
-    padding: [ptr::null_mut(); 10],
-};
+/// Trampoline for the `kill_channel` I/O routine: logs the hangup and returns success.
+unsafe extern "C" fn kill_channel(
+    _session: *mut sys::switch_core_session_t,
+    _sig: std::os::raw::c_int,
+) -> fswtch::Status {
+    fswtch::log_info("mod_endpoint_skeleton", "kill_channel invoked");
+    fswtch::SUCCESS
+}
+
+/// Trampoline for the `state_change` I/O routine: logs the transition and returns success.
+unsafe extern "C" fn state_change(_session: *mut sys::switch_core_session_t) -> fswtch::Status {
+    fswtch::log_info("mod_endpoint_skeleton", "state_change invoked");
+    fswtch::SUCCESS
+}
 
 fswtch::module_exports! {
     module = mod_endpoint_skeleton,
@@ -32,7 +27,7 @@ fswtch::api_callback! {
             "rust_endpoint_skeleton_info invoked",
         );
         stream.write(
-            "endpoint rust_endpoint_skeleton registered with placeholder I/O routines\n",
+            "endpoint rust_endpoint_skeleton registered with kill_channel + state_change routines\n",
         )
     }
 }
@@ -40,16 +35,31 @@ fswtch::api_callback! {
 fswtch::module_load! {
     fn switch_module_load(module) for "mod_endpoint_skeleton" {
         fswtch::log_info("mod_endpoint_skeleton", "loading module");
-        module
-            .endpoint("rust_endpoint_skeleton", &raw mut IO_ROUTINES)
-            .inspect(|_| fswtch::log_info("mod_endpoint_skeleton", "endpoint interface registered"))
-            .and_then(|module| {
-                module.api(
-                    "rust_endpoint_skeleton_info",
-                    "describes the Rust endpoint skeleton",
-                    "rust_endpoint_skeleton_info",
-                    info_api,
-                )
+
+        // Build the I/O routines table safely with IoRoutinesBuilder, then register the endpoint
+        // interface. The table is allocated for the module's lifetime (intentionally leaked by
+        // build()), so the pointer remains valid for the interface's lifetime.
+        fswtch::IoRoutinesBuilder::new()
+            .kill_channel(Some(kill_channel))
+            .state_change(Some(state_change))
+            .build()
+            .and_then(|io| {
+                module
+                    .endpoint("rust_endpoint_skeleton", io)
+                    .inspect(|_| {
+                        fswtch::log_info(
+                            "mod_endpoint_skeleton",
+                            "endpoint interface registered",
+                        )
+                    })
+                    .and_then(|module| {
+                        module.api(
+                            "rust_endpoint_skeleton_info",
+                            "describes the Rust endpoint skeleton",
+                            "rust_endpoint_skeleton_info",
+                            info_api,
+                        )
+                    })
             })
     }
 }

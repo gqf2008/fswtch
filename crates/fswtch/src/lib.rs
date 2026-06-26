@@ -8,6 +8,7 @@ mod command;
 mod console;
 mod core;
 mod core_db;
+mod endpoint;
 mod event;
 mod exports;
 mod ivr;
@@ -40,6 +41,7 @@ pub use command::{StaticCStr, borrowed_cstr_to_str, borrowed_cstr_to_string, com
 pub use console::{CompletionFunc, CompletionMatches, complete, execute, expand_alias, free_matches};
 pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable, set_variable};
 pub use core_db::{CoreDb, Stmt, StmtRows};
+pub use endpoint::{Dtmf, DtmfSource, Frame, FrameMut, IoFlags, IoRoutinesBuilder, SessionMessage};
 pub use event::{Event, EventBinder, EventRef};
 pub use ivr::{park, record_file};
 pub use jitterbuffer::{
