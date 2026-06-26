@@ -67,8 +67,10 @@ pub use media::{
     MediaFrame, MediaFrameMut, attach_media_bug,
 };
 pub use module::{
-    ApiInterface, ApplicationInfo, ApplicationInterface, ChatApplicationInterface,
-    EndpointInterface, Module, ModuleBuilder,
+    ApiInterface, ApplicationInfo, ApplicationInterface, AsrInterface, ChatApplicationInterface,
+    ChatInterface, DatabaseInterface, DialplanInterface, DirectoryInterface, EndpointInterface,
+    FileInterface, JsonApiInterface, LimitInterface, ManagementInterface, Module, ModuleBuilder,
+    SayInterface, SpeechInterface, TimerInterface,
 };
 pub use packetizer::{BitstreamType, Packetizer};
 pub use plc::Plc;

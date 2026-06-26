@@ -5,6 +5,179 @@ use crate::{
     sys::{self},
 };
 
+// Callback type aliases for interfaces whose fields are inline `Option<fn>` (no bindgen typedef).
+pub type ChatSendFn =
+    Option<unsafe extern "C" fn(message_event: *mut sys::switch_event_t) -> Status>;
+pub type ManagementFn = Option<
+    unsafe extern "C" fn(
+        relative_oid: *mut c_char,
+        action: sys::switch_management_action_t,
+        data: *mut c_char,
+        datalen: sys::switch_size_t,
+    ) -> Status,
+>;
+pub type LimitIncrFn = Option<
+    unsafe extern "C" fn(
+        session: *mut sys::switch_core_session_t,
+        realm: *const c_char,
+        resource: *const c_char,
+        max: std::os::raw::c_int,
+        interval: std::os::raw::c_int,
+    ) -> Status,
+>;
+pub type LimitReleaseFn = Option<
+    unsafe extern "C" fn(
+        session: *mut sys::switch_core_session_t,
+        realm: *const c_char,
+        resource: *const c_char,
+    ) -> Status,
+>;
+pub type LimitUsageFn = Option<
+    unsafe extern "C" fn(
+        realm: *const c_char,
+        resource: *const c_char,
+        rcount: *mut u32,
+    ) -> std::os::raw::c_int,
+>;
+pub type LimitResetFn = Option<unsafe extern "C" fn() -> Status>;
+pub type LimitStatusFn = Option<unsafe extern "C" fn() -> *mut c_char>;
+pub type LimitIntervalResetFn =
+    Option<unsafe extern "C" fn(realm: *const c_char, resource: *const c_char) -> Status>;
+pub type TimerInitFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
+pub type TimerNextFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
+pub type TimerStepFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
+pub type TimerSyncFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
+pub type TimerCheckFn = Option<
+    unsafe extern "C" fn(arg1: *mut sys::switch_timer_t, arg2: sys::switch_bool_t) -> Status,
+>;
+pub type TimerDestroyFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
+pub type FileOpenFn = Option<
+    unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, file_path: *const c_char) -> Status,
+>;
+pub type FileCloseFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t) -> Status>;
+pub type FileTruncateFn =
+    Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, offset: i64) -> Status>;
+pub type FileReadFn = Option<
+    unsafe extern "C" fn(
+        arg1: *mut sys::switch_file_handle_t,
+        data: *mut std::ffi::c_void,
+        len: *mut sys::switch_size_t,
+    ) -> Status,
+>;
+pub type FileWriteFn = Option<
+    unsafe extern "C" fn(
+        arg1: *mut sys::switch_file_handle_t,
+        data: *mut std::ffi::c_void,
+        len: *mut sys::switch_size_t,
+    ) -> Status,
+>;
+pub type SpeechOpenFn = Option<
+    unsafe extern "C" fn(
+        sh: *mut sys::switch_speech_handle_t,
+        voice_name: *const c_char,
+        rate: std::os::raw::c_int,
+        channels: std::os::raw::c_int,
+        flags: *mut sys::switch_speech_flag_t,
+    ) -> Status,
+>;
+pub type SpeechCloseFn = Option<
+    unsafe extern "C" fn(
+        arg1: *mut sys::switch_speech_handle_t,
+        flags: *mut sys::switch_speech_flag_t,
+    ) -> Status,
+>;
+pub type SpeechFeedTtsFn = Option<
+    unsafe extern "C" fn(
+        sh: *mut sys::switch_speech_handle_t,
+        text: *mut c_char,
+        flags: *mut sys::switch_speech_flag_t,
+    ) -> Status,
+>;
+pub type SpeechReadTtsFn = Option<
+    unsafe extern "C" fn(
+        sh: *mut sys::switch_speech_handle_t,
+        data: *mut std::ffi::c_void,
+        datalen: *mut sys::switch_size_t,
+        flags: *mut sys::switch_speech_flag_t,
+    ) -> Status,
+>;
+pub type AsrOpenFn = Option<
+    unsafe extern "C" fn(
+        ah: *mut sys::switch_asr_handle_t,
+        codec: *const c_char,
+        rate: std::os::raw::c_int,
+        dest: *const c_char,
+        flags: *mut sys::switch_asr_flag_t,
+    ) -> Status,
+>;
+pub type AsrLoadGrammarFn = Option<
+    unsafe extern "C" fn(
+        ah: *mut sys::switch_asr_handle_t,
+        grammar: *const c_char,
+        name: *const c_char,
+    ) -> Status,
+>;
+pub type AsrUnloadGrammarFn =
+    Option<unsafe extern "C" fn(ah: *mut sys::switch_asr_handle_t, name: *const c_char) -> Status>;
+pub type AsrCloseFn = Option<
+    unsafe extern "C" fn(
+        ah: *mut sys::switch_asr_handle_t,
+        flags: *mut sys::switch_asr_flag_t,
+    ) -> Status,
+>;
+pub type AsrFeedFn = Option<
+    unsafe extern "C" fn(
+        ah: *mut sys::switch_asr_handle_t,
+        data: *mut std::ffi::c_void,
+        len: std::os::raw::c_uint,
+        flags: *mut sys::switch_asr_flag_t,
+    ) -> Status,
+>;
+pub type DirectoryOpenFn = Option<
+    unsafe extern "C" fn(
+        dh: *mut sys::switch_directory_handle_t,
+        source: *mut c_char,
+        dsn: *mut c_char,
+        passwd: *mut c_char,
+    ) -> Status,
+>;
+pub type DirectoryCloseFn =
+    Option<unsafe extern "C" fn(dh: *mut sys::switch_directory_handle_t) -> Status>;
+pub type DirectoryQueryFn = Option<
+    unsafe extern "C" fn(
+        dh: *mut sys::switch_directory_handle_t,
+        base: *mut c_char,
+        query: *mut c_char,
+    ) -> Status,
+>;
+pub type DirectoryNextFn =
+    Option<unsafe extern "C" fn(dh: *mut sys::switch_directory_handle_t) -> Status>;
+pub type DirectoryNextPairFn = Option<
+    unsafe extern "C" fn(
+        dh: *mut sys::switch_directory_handle_t,
+        var: *mut *mut c_char,
+        val: *mut *mut c_char,
+    ) -> Status,
+>;
+pub type DbHandleNewFn = Option<
+    unsafe extern "C" fn(
+        database_interface_options: sys::switch_cache_db_database_interface_options_t,
+        dih: *mut *mut sys::switch_database_interface_handle_t,
+    ) -> Status,
+>;
+pub type DbHandleDestroyFn =
+    Option<unsafe extern "C" fn(dih: *mut *mut sys::switch_database_interface_handle_t) -> Status>;
+pub type DbExecDetailedFn = Option<
+    unsafe extern "C" fn(
+        file: *const c_char,
+        func: *const c_char,
+        line: std::os::raw::c_int,
+        dih: *mut sys::switch_database_interface_handle_t,
+        sql: *const c_char,
+        err: *mut *mut c_char,
+    ) -> Status,
+>;
+
 #[derive(Copy, Clone)]
 pub struct Module {
     raw: NonNull<sys::switch_loadable_module_interface_t>,
@@ -144,6 +317,299 @@ impl Module {
         }
 
         Ok(EndpointInterface { raw: endpoint })
+    }
+
+    /// Registers a dialplan interface — a `hunt` callback that routes calls.
+    pub fn add_dialplan(
+        self,
+        name: impl StaticCStr,
+        hunt: sys::switch_dialplan_hunt_function_t,
+    ) -> Result<DialplanInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_dialplan_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_DIALPLAN_INTERFACE,
+        )?;
+        // SAFETY: `iface` is a valid interface allocation; `name` is static. Only set the
+        // user-owned fields (interface_name, hunt_function); rwlock/refs/reflock/parent/next are
+        // FreeSWITCH-owned runtime bookkeeping left zeroed by create_interface.
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).hunt_function = hunt;
+        }
+        Ok(DialplanInterface { raw: iface })
+    }
+
+    /// Registers a timer interface — a set of `*mut switch_timer_t` callbacks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_timer(
+        self,
+        name: impl StaticCStr,
+        timer_init: TimerInitFn,
+        timer_next: TimerNextFn,
+        timer_step: TimerStepFn,
+        timer_sync: TimerSyncFn,
+        timer_check: TimerCheckFn,
+        timer_destroy: TimerDestroyFn,
+    ) -> Result<TimerInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_timer_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_TIMER_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).timer_init = timer_init;
+            (*r).timer_next = timer_next;
+            (*r).timer_step = timer_step;
+            (*r).timer_sync = timer_sync;
+            (*r).timer_check = timer_check;
+            (*r).timer_destroy = timer_destroy;
+        }
+        Ok(TimerInterface { raw: iface })
+    }
+
+    /// Registers a file-format interface — read/write/seek callbacks over `*mut switch_file_handle_t`.
+    pub fn add_file(
+        self,
+        name: impl StaticCStr,
+        file_open: FileOpenFn,
+        file_close: FileCloseFn,
+        file_truncate: FileTruncateFn,
+        file_read: FileReadFn,
+        file_write: FileWriteFn,
+    ) -> Result<FileInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_file_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_FILE_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).file_open = file_open;
+            (*r).file_close = file_close;
+            (*r).file_truncate = file_truncate;
+            (*r).file_read = file_read;
+            (*r).file_write = file_write;
+        }
+        Ok(FileInterface { raw: iface })
+    }
+
+    /// Registers a speech (TTS) interface — callbacks over `*mut switch_speech_handle_t`.
+    pub fn add_speech(
+        self,
+        name: impl StaticCStr,
+        speech_open: SpeechOpenFn,
+        speech_close: SpeechCloseFn,
+        speech_feed_tts: SpeechFeedTtsFn,
+        speech_read_tts: SpeechReadTtsFn,
+    ) -> Result<SpeechInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_speech_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_SPEECH_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).speech_open = speech_open;
+            (*r).speech_close = speech_close;
+            (*r).speech_feed_tts = speech_feed_tts;
+            (*r).speech_read_tts = speech_read_tts;
+        }
+        Ok(SpeechInterface { raw: iface })
+    }
+
+    /// Registers an ASR interface — callbacks over `*mut switch_asr_handle_t`.
+    pub fn add_asr(
+        self,
+        name: impl StaticCStr,
+        asr_open: AsrOpenFn,
+        asr_load_grammar: AsrLoadGrammarFn,
+        asr_unload_grammar: AsrUnloadGrammarFn,
+        asr_close: AsrCloseFn,
+        asr_feed: AsrFeedFn,
+    ) -> Result<AsrInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_asr_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_ASR_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).asr_open = asr_open;
+            (*r).asr_load_grammar = asr_load_grammar;
+            (*r).asr_unload_grammar = asr_unload_grammar;
+            (*r).asr_close = asr_close;
+            (*r).asr_feed = asr_feed;
+        }
+        Ok(AsrInterface { raw: iface })
+    }
+
+    /// Registers a `say` interface (number/date/time pronunciation).
+    pub fn add_say(
+        self,
+        name: impl StaticCStr,
+        say_function: sys::switch_say_callback_t,
+        say_string_function: sys::switch_say_string_callback_t,
+    ) -> Result<SayInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_say_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_SAY_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).say_function = say_function;
+            (*r).say_string_function = say_string_function;
+        }
+        Ok(SayInterface { raw: iface })
+    }
+
+    /// Registers a directory interface — LDAP-style lookups over `*mut switch_directory_handle_t`.
+    pub fn add_directory(
+        self,
+        name: impl StaticCStr,
+        directory_open: DirectoryOpenFn,
+        directory_close: DirectoryCloseFn,
+        directory_query: DirectoryQueryFn,
+        directory_next: DirectoryNextFn,
+        directory_next_pair: DirectoryNextPairFn,
+    ) -> Result<DirectoryInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_directory_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_DIRECTORY_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).directory_open = directory_open;
+            (*r).directory_close = directory_close;
+            (*r).directory_query = directory_query;
+            (*r).directory_next = directory_next;
+            (*r).directory_next_pair = directory_next_pair;
+        }
+        Ok(DirectoryInterface { raw: iface })
+    }
+
+    /// Registers a chat transport interface — an outbound `chat_send` callback.
+    pub fn add_chat(self, name: impl StaticCStr, chat_send: ChatSendFn) -> Result<ChatInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_chat_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_CHAT_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).chat_send = chat_send;
+        }
+        Ok(ChatInterface { raw: iface })
+    }
+
+    /// Registers a management interface — an SNMP-style `management_function` keyed by
+    /// `relative_oid`. Note: the identifier field is `relative_oid`, not `interface_name`.
+    pub fn add_management(
+        self,
+        relative_oid: impl StaticCStr,
+        management_function: ManagementFn,
+    ) -> Result<ManagementInterface> {
+        let relative_oid = relative_oid.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_management_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_MANAGEMENT_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).relative_oid = relative_oid.as_ptr();
+            (*r).management_function = management_function;
+        }
+        Ok(ManagementInterface { raw: iface })
+    }
+
+    /// Registers a limit interface — a call-cap backend with incr/release/usage/reset/etc.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_limit(
+        self,
+        name: impl StaticCStr,
+        incr: LimitIncrFn,
+        release: LimitReleaseFn,
+        usage: LimitUsageFn,
+        reset: LimitResetFn,
+        status: LimitStatusFn,
+        interval_reset: LimitIntervalResetFn,
+    ) -> Result<LimitInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_limit_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_LIMIT_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).incr = incr;
+            (*r).release = release;
+            (*r).usage = usage;
+            (*r).reset = reset;
+            (*r).status = status;
+            (*r).interval_reset = interval_reset;
+        }
+        Ok(LimitInterface { raw: iface })
+    }
+
+    /// Registers a JSON API command — like [`Module::add_api`] but returning a cJSON object.
+    pub fn add_json_api(
+        self,
+        name: impl StaticCStr,
+        description: impl StaticCStr,
+        syntax: impl StaticCStr,
+        function: sys::switch_json_api_function_t,
+    ) -> Result<JsonApiInterface> {
+        let name = name.into_static_cstr()?;
+        let description = description.into_static_cstr()?;
+        let syntax = syntax.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_json_api_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_JSON_API_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).desc = description.as_ptr();
+            (*r).function = function;
+            (*r).syntax = syntax.as_ptr();
+        }
+        Ok(JsonApiInterface { raw: iface })
+    }
+
+    /// Registers a pluggable database backend. The `handle_new`/`handle_destroy` callbacks manage
+    /// `switch_database_interface_handle_t` storage; the rest operate on such a handle.
+    pub fn add_database(
+        self,
+        name: impl StaticCStr,
+        handle_new: DbHandleNewFn,
+        handle_destroy: DbHandleDestroyFn,
+        exec_detailed: DbExecDetailedFn,
+    ) -> Result<DatabaseInterface> {
+        let name = name.into_static_cstr()?;
+        let iface = create_interface::<sys::switch_database_interface>(
+            self.raw,
+            sys::switch_module_interface_name_t::SWITCH_DATABASE_INTERFACE,
+        )?;
+        unsafe {
+            let r = iface.as_ptr();
+            (*r).interface_name = name.as_ptr();
+            (*r).handle_new = handle_new;
+            (*r).handle_destroy = handle_destroy;
+            (*r).exec_detailed = exec_detailed;
+        }
+        Ok(DatabaseInterface { raw: iface })
     }
 }
 
@@ -305,6 +771,138 @@ pub struct EndpointInterface {
 
 impl EndpointInterface {
     pub fn as_ptr(&self) -> *mut sys::switch_endpoint_interface_t {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct DialplanInterface {
+    raw: NonNull<sys::switch_dialplan_interface>,
+}
+
+impl DialplanInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_dialplan_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct TimerInterface {
+    raw: NonNull<sys::switch_timer_interface>,
+}
+
+impl TimerInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_timer_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct FileInterface {
+    raw: NonNull<sys::switch_file_interface>,
+}
+
+impl FileInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_file_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct SpeechInterface {
+    raw: NonNull<sys::switch_speech_interface>,
+}
+
+impl SpeechInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_speech_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct AsrInterface {
+    raw: NonNull<sys::switch_asr_interface>,
+}
+
+impl AsrInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_asr_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct SayInterface {
+    raw: NonNull<sys::switch_say_interface>,
+}
+
+impl SayInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_say_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct DirectoryInterface {
+    raw: NonNull<sys::switch_directory_interface>,
+}
+
+impl DirectoryInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_directory_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct ChatInterface {
+    raw: NonNull<sys::switch_chat_interface>,
+}
+
+impl ChatInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_chat_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct ManagementInterface {
+    raw: NonNull<sys::switch_management_interface>,
+}
+
+impl ManagementInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_management_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct LimitInterface {
+    raw: NonNull<sys::switch_limit_interface>,
+}
+
+impl LimitInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_limit_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct JsonApiInterface {
+    raw: NonNull<sys::switch_json_api_interface>,
+}
+
+impl JsonApiInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_json_api_interface {
+        self.raw.as_ptr()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct DatabaseInterface {
+    raw: NonNull<sys::switch_database_interface>,
+}
+
+impl DatabaseInterface {
+    pub fn as_ptr(&self) -> *mut sys::switch_database_interface {
         self.raw.as_ptr()
     }
 }
