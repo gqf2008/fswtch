@@ -305,14 +305,34 @@ pub fn broadcast(uuid: impl AsRef<str>, path: impl AsRef<str>, flags: u32) -> Re
     status_to_result(status)
 }
 
-/// Broadcasts `app` to the session from a new thread. `flags` is an opaque integer passed through
-/// to the application. The C function returns no status. Returns an error if `app` contains an
-/// interior NUL.
+/// Broadcasts `app` to the session from a new background thread. `flags` is an opaque integer
+/// passed through to the application. Returns an error if `app` contains an interior NUL.
+///
+/// `switch_ivr_broadcast_in_thread` stores the `app` pointer and spawns a detached thread that
+/// reads it asynchronously (verified against `switch_ivr_async.c`: `bch->app = app` without
+/// `strdup`). The pointer must therefore outlive the caller's stack frame. This wrapper copies
+/// `app` into the session's memory pool via `switch_core_session_strdup` so the spawned thread's
+/// reference remains valid for the session's lifetime.
 pub fn broadcast_in_thread(session: Session, app: impl AsRef<str>, flags: i32) -> Result<()> {
     let app = cstring(app)?;
-    // SAFETY: `session.as_ptr()` is a live session; `app` is a valid C string alive for the
-    // duration of the call.
-    unsafe { sys::switch_ivr_broadcast_in_thread(session.as_ptr(), app.as_ptr(), flags) };
+    // SAFETY: `session.as_ptr()` is a live session; `app` is a valid C string for this call. The
+    // returned pointer is allocated from the session's pool and lives for the session's lifetime,
+    // so the spawned thread's `bch->app` reference is valid.
+    let pooled = unsafe {
+        sys::switch_core_perform_session_strdup(
+            session.as_ptr(),
+            app.as_ptr(),
+            c"fswtch-rs".as_ptr(),
+            c"broadcast_in_thread".as_ptr(),
+            line!() as _,
+        )
+    };
+    if pooled.is_null() {
+        return Err(crate::SwitchError(crate::GENERR));
+    }
+    // SAFETY: `session.as_ptr()` is a live session; `pooled` is a pool-allocated C string valid for
+    // the session's lifetime, so the spawned thread's async read is sound.
+    unsafe { sys::switch_ivr_broadcast_in_thread(session.as_ptr(), pooled, flags) };
     Ok(())
 }
 
