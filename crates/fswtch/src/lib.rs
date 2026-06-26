@@ -9,6 +9,7 @@ mod console;
 mod core;
 mod core_db;
 mod endpoint;
+mod estimators;
 mod event;
 mod exports;
 mod ivr;
@@ -17,6 +18,8 @@ mod limit;
 mod logging;
 mod media;
 mod module;
+mod packetizer;
+mod plc;
 mod pool;
 mod regex;
 mod resample;
@@ -42,6 +45,7 @@ pub use console::{CompletionFunc, CompletionMatches, complete, execute, expand_a
 pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable, set_variable};
 pub use core_db::{CoreDb, Stmt, StmtRows};
 pub use endpoint::{Dtmf, DtmfSource, Frame, FrameMut, IoFlags, IoRoutinesBuilder, SessionMessage};
+pub use estimators::{CusumDetector, KalmanEstimator, is_slow_link};
 pub use event::{Event, EventBinder, EventRef};
 pub use ivr::{park, record_file};
 pub use jitterbuffer::{
@@ -61,6 +65,8 @@ pub use module::{
     ApiInterface, ApplicationInfo, ApplicationInterface, ChatApplicationInterface,
     EndpointInterface, Module, ModuleBuilder,
 };
+pub use packetizer::{BitstreamType, Packetizer};
+pub use plc::Plc;
 pub use pool::Pool;
 pub use regex::{CaptureCallback, Regex, RegexMatch, is_match, is_match_partial};
 pub use resample::{
@@ -82,7 +88,7 @@ pub use stream::{ApiStream, Stream, write_stream_response};
 pub use timer::Timer;
 pub use utils::{escape_string, find_end_paren, format_number, url_encode};
 pub use vad::{Vad, VadState};
-pub use video::{Chromakey, Color, Image, ImageFormat};
+pub use video::{CachedImage, Chromakey, Color, Image, ImageFit, ImageFormat, ImagePosition, Shade};
 pub use xml::{XmlConfig, XmlNode};
 
 #[macro_export]
