@@ -98,5 +98,37 @@ crate-type = ["cdylib"]
 name = "mod_stream_tools"
 crate-type = ["cdylib"]
 
+[[example]]
+name = "mod_channel_vars"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_event_listener"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_db_lookup"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_regex_match"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_vad_detect"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_buffer_demo"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_scheduler_task"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mod_utils_demo"
+crate-type = ["cdylib"]
+
 [lints]
 workspace = true
