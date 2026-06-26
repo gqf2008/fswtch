@@ -17,8 +17,8 @@ use std::ptr::NonNull;
 
 use crate::pool::Pool;
 use crate::sys::{
-    self, switch_bool_t, switch_frame_t, switch_io_flag_t, switch_memory_pool_t, switch_payload_t,
-    switch_port_t, switch_rtp_flag_t, switch_rtp_t,
+    self, switch_frame_t, switch_io_flag_t, switch_memory_pool_t, switch_payload_t, switch_port_t,
+    switch_rtp_flag_t, switch_rtp_t,
 };
 use crate::{GENERR, Result, SwitchError, cstring, status_to_result};
 
@@ -130,7 +130,7 @@ impl Rtp {
                 host.as_ptr(),
                 port,
                 remote_rtcp_port,
-                switch_bool(change_adv_addr),
+                crate::switch_bool(change_adv_addr),
                 &mut err,
             )
         };
@@ -340,15 +340,6 @@ impl RtpConfig {
         }
         // SAFETY: `raw` is non-null and freshly created by `switch_rtp_new`; ownership transfers.
         Ok(unsafe { Rtp::from_raw(raw) }.expect("switch_rtp_new returned non-null pointer"))
-    }
-}
-
-/// Maps a Rust `bool` to FreeSWITCH's `switch_bool_t`.
-fn switch_bool(v: bool) -> switch_bool_t {
-    if v {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
     }
 }
 

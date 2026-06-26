@@ -54,11 +54,6 @@ pub fn switch_bool(value: bool) -> sys::switch_bool_t {
     }
 }
 
-/// Maps FreeSWITCH's `switch_bool_t` to a Rust `bool` (`true` only for `SWITCH_TRUE`).
-pub fn from_switch_bool(value: sys::switch_bool_t) -> bool {
-    value == sys::switch_bool_t_SWITCH_TRUE
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

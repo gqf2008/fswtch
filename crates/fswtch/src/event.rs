@@ -374,7 +374,14 @@ impl Event {
         let status = unsafe {
             sys::switch_event_serialize(raw.as_ptr(), &mut out, crate::switch_bool(encode))
         };
-        status_to_result(status)?;
+        if status != crate::SUCCESS {
+            // FreeSWITCH may have allocated `out` before failing — free it to avoid a leak.
+            if !out.is_null() {
+                // SAFETY: `out` is null or a malloc'd C string from FreeSWITCH.
+                unsafe { crate::free_cstr(out) };
+            }
+            return Err(crate::SwitchError(status));
+        }
         // SAFETY: On success `out` is a malloc'd null-terminated string owned by this call.
         Ok(unsafe { crate::strdup_to_string(out) }.unwrap_or_default())
     }
@@ -642,11 +649,7 @@ impl EventRef {
         let name = cstring(name).ok()?;
         // SAFETY: `raw` is a live event for the callback duration.
         let value = unsafe { sys::switch_event_get_header_idx(raw.as_ptr(), name.as_ptr(), idx) };
-        // SAFETY: FreeSWITCH returns a null-terminated header value when present.
-        unsafe { CStr::from_ptr(value) }
-            .to_str()
-            .ok()
-            .map(ToOwned::to_owned)
+        borrowed_cstr_to_string(value)
     }
 
     /// Borrows the event body for the callback's duration, when present.
@@ -729,6 +732,7 @@ impl EventRef {
         }
         let value = cstring(value)?;
         let in_ptr = value.as_ptr();
+        let fallback = value.to_string_lossy().into_owned();
         // SAFETY: `raw` is a live event and `value` is a valid C string.
         let out = unsafe {
             sys::switch_event_expand_headers_check(
@@ -739,17 +743,11 @@ impl EventRef {
                 0,
             )
         };
-        if out.is_null() {
-            return Ok(value.to_string_lossy().into_owned());
-        }
-        // switch_event_expand_headers_check returns the input pointer when no expansion occurs —
-        // freeing it would double-free the CString's buffer. Only free when it differs.
-        if out == in_ptr.cast_mut() {
-            return Ok(value.to_string_lossy().into_owned());
+        if out.is_null() || out == in_ptr.cast_mut() {
+            return Ok(fallback);
         }
         // SAFETY: `out` is a freshly malloc'd null-terminated string owned by this call.
-        Ok(unsafe { crate::strdup_to_string(out) }
-            .unwrap_or_else(|| value.to_string_lossy().into_owned()))
+        Ok(unsafe { crate::strdup_to_string(out) }.unwrap_or(fallback))
     }
 }
 
