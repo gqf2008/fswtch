@@ -12,6 +12,7 @@
 //! `Pool` (the borrow checker enforces this via `&self` lifetimes).
 
 use std::ffi::{CStr, c_char, c_void};
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::sys::{self, switch_memory_pool_t, switch_size_t};
@@ -27,6 +28,8 @@ use crate::{GENERR, Result, SwitchError, cstring, status_to_result};
 /// configuring a codec or timer).
 pub struct Pool {
     raw: NonNull<switch_memory_pool_t>,
+    // APR memory pools are not thread-safe by default; mutations from multiple threads race.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Pool {
@@ -48,7 +51,7 @@ impl Pool {
         status_to_result(status)?;
         // SAFETY: `new_memory_pool` returned SUCCESS, so `pool` is a non-null, freshly created pool.
         let raw = NonNull::new(pool).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw })
+        Ok(Self { raw, _marker: PhantomData })
     }
 
     /// The underlying `switch_memory_pool_t *`.

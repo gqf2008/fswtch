@@ -12,6 +12,7 @@
 //! keeps an owned `[switch_rtp_flag_t; 50]` and passes a pointer into the FFI call.
 
 use std::ffi::c_char;
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::pool::Pool;
@@ -34,6 +35,8 @@ const RTP_FLAG_COUNT: usize = 50;
 /// the underlying `switch_rtp_t *` for those code paths.
 pub struct Rtp {
     raw: NonNull<switch_rtp_t>,
+    // Not thread-safe; `write_frame`/`read_frame` mutate C state through `&self`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Rtp {
@@ -45,7 +48,7 @@ impl Rtp {
     /// must not already be owned by another [`Rtp`] or have been destroyed. Ownership transfers to
     /// the returned [`Rtp`]; dropping it will call `switch_rtp_destroy`.
     pub unsafe fn from_raw(raw: *mut switch_rtp_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw })
+        NonNull::new(raw).map(|raw| Self { raw, _marker: PhantomData })
     }
 
     /// The underlying `switch_rtp_t *`. Escape hatch for unwrapped RTP features.

@@ -9,6 +9,7 @@
 //! its [`Drop`] calls `switch_chromakey_destroy`. Neither wrapper exposes raw pointers in
 //! its public API.
 
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::{Result, SwitchError, cstring, status_to_result, sys};
@@ -65,6 +66,8 @@ impl Color {
 /// escape hatch into FFI.
 pub struct Image {
     raw: NonNull<sys::switch_image_t>,
+    // Not thread-safe; image operations mutate pixel/C state.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Image {
@@ -76,7 +79,7 @@ impl Image {
     /// (e.g. `switch_img_alloc`, `switch_img_read_file`, `switch_img_copy_rect`), and the caller
     /// must transfer sole ownership to this wrapper — the image must not be freed elsewhere.
     pub unsafe fn from_raw(raw: *mut sys::switch_image_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw })
+        NonNull::new(raw).map(|raw| Self { raw, _marker: PhantomData })
     }
 
     /// The raw image pointer (escape hatch for FFI). The wrapper retains ownership.
@@ -180,6 +183,8 @@ impl Drop for Image {
 /// API is intentionally not wrapped here.
 pub struct Chromakey {
     raw: NonNull<sys::switch_chromakey_t>,
+    // Not thread-safe; `process`/`add_color` mutate C state.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Chromakey {
@@ -190,7 +195,7 @@ impl Chromakey {
     /// `raw` must point to a live `switch_chromakey_t` obtained from `switch_chromakey_create`,
     /// and the caller must transfer sole ownership to this wrapper.
     pub unsafe fn from_raw(raw: *mut sys::switch_chromakey_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw })
+        NonNull::new(raw).map(|raw| Self { raw, _marker: PhantomData })
     }
 
     /// The raw chromakey pointer (escape hatch for FFI). The wrapper retains ownership.

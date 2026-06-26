@@ -4,6 +4,7 @@
 //! `switch_core_codec_decode` / `switch_core_codec_destroy` API. A [`Codec`] owns a
 //! `switch_codec_t` struct (allocated by the caller, not opaque) and releases it on drop.
 
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
@@ -20,6 +21,8 @@ pub struct Codec {
     /// The sample rate passed to `init_with_bitrate`, reused as the decoded/encoded rate argument
     /// for `encode` / `decode` so callers don't have to supply it on every call.
     rate: u32,
+    // `switch_codec_t` is not thread-safe; `encode`/`decode` mutate C state through `&self`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Codec {
@@ -72,7 +75,7 @@ impl Codec {
             // SAFETY: `raw` was just box-allocated and zeroed; `init` succeeded so the struct is a
             // live, non-null codec handle for the lifetime of this wrapper.
             let raw = unsafe { NonNull::new_unchecked(Box::into_raw(raw)) };
-            Self { raw, rate }
+            Self { raw, rate, _marker: PhantomData }
         })
     }
 

@@ -6,6 +6,7 @@
 //! the timer without waiting, and [`Timer::check`] polls whether enough samples are ready.
 //! The timer is destroyed on drop.
 
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 
 use crate::pool::Pool;
@@ -21,6 +22,8 @@ use crate::{Result, cstring, status_to_result, sys};
 /// field aliases the pool, so the `Timer` must not outlive the pool that owns it.
 pub struct Timer {
     raw: Box<sys::switch_timer_t>,
+    // `switch_timer_t` is not thread-safe; `tick`/`step` mutate C state through `&mut self`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Timer {
@@ -56,7 +59,7 @@ impl Timer {
             )
         };
         status_to_result(status)?;
-        Ok(Self { raw })
+        Ok(Self { raw, _marker: PhantomData })
     }
 
     #[inline]

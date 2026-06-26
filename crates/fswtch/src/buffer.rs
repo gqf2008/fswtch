@@ -8,6 +8,7 @@
 //! The public API exposes only `&[u8]` / `&mut [u8]` slices and `usize` counts — no raw pointers,
 //! no `unsafe` from the caller.
 
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::{Result, SwitchError, GENERR, status_to_result, sys};
@@ -28,6 +29,9 @@ const DEFAULT_BLOCKSIZE: usize = 1024;
 /// `max_len` ceiling is reached.
 pub struct Buffer {
     raw: NonNull<sys::switch_buffer_t>,
+    // `switch_buffer_t` is not thread-safe and `&self` methods mutate C state, so `Buffer` is
+    // neither `Send` nor `Sync`. The raw-pointer marker enforces this without affecting layout.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Buffer {
@@ -61,7 +65,10 @@ impl Buffer {
         // SAFETY: `switch_buffer_create_dynamic` returned SUCCESS, so `raw` is a valid non-null
         // owned handle.
         let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// Wraps a FreeSWITCH buffer pointer created elsewhere.
@@ -72,7 +79,10 @@ impl Buffer {
     /// destruction via `switch_buffer_destroy` when this `Buffer` is dropped. Wrapping a
     /// pool-allocated buffer is unsound — its storage belongs to the pool, not this wrapper.
     pub unsafe fn from_raw(raw: *mut sys::switch_buffer_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// Returns the raw `switch_buffer_t` pointer for escape-hatch FFI.
@@ -153,26 +163,33 @@ impl Buffer {
         unsafe { sys::switch_buffer_toss(self.raw.as_ptr(), n as sys::switch_size_t) };
     }
 
-    /// Writes `len` zero bytes into the buffer (the `switch_buffer_zwrite` zero-fill path). Returns
-    /// an error when the buffer cannot accept the request.
+    /// Writes `len` zero bytes into the buffer (via `switch_buffer_zwrite`). Returns an error when
+    /// the buffer cannot accept the request.
+    ///
+    /// `switch_buffer_zwrite`'s `data` parameter is SAL-annotated `_In_bytecount_(datalen)`, so it
+    /// requires a valid pointer even though the bytes are zero — a null pointer with a non-zero
+    /// length violates the contract. This method writes from a small stack-allocated zero buffer
+    /// in chunks to stay within the documented ABI.
     pub fn zero_fill(&self, len: usize) -> Result<()> {
         if len == 0 {
             return Ok(());
         }
-        // SAFETY: `self.raw` is a live owned buffer; a null `data` pointer with a non-zero `datalen`
-        // is the documented zero-fill contract of `switch_buffer_zwrite`.
-        let written = unsafe {
-            sys::switch_buffer_zwrite(
-                self.raw.as_ptr(),
-                std::ptr::null(),
-                len as sys::switch_size_t,
-            )
-        };
-        if written == 0 {
-            Err(SwitchError(GENERR))
-        } else {
-            Ok(())
+        const CHUNK: usize = 256;
+        let zeros = [0u8; CHUNK];
+        let mut remaining = len;
+        while remaining > 0 {
+            let n = remaining.min(CHUNK) as sys::switch_size_t;
+            // SAFETY: `self.raw` is a live owned buffer; `zeros` is a valid readable buffer of `n`
+            // bytes (n <= CHUNK).
+            let written = unsafe {
+                sys::switch_buffer_zwrite(self.raw.as_ptr(), zeros.as_ptr().cast(), n)
+            };
+            if written == 0 {
+                return Err(SwitchError(GENERR));
+            }
+            remaining -= written as usize;
         }
+        Ok(())
     }
 
     /// Returns the number of bytes that can still be written before the buffer reaches its

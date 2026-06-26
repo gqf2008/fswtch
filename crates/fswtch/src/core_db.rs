@@ -52,6 +52,8 @@ fn db_result(code: i32) -> Result<()> {
 /// ```
 pub struct CoreDb {
     raw: NonNull<sys::switch_core_db_t>,
+    // SQLite connections are not thread-safe by default; `exec`/`prepare` mutate through `&self`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl CoreDb {
@@ -69,7 +71,10 @@ impl CoreDb {
         let code = unsafe { sys::switch_core_db_open(filename.as_ptr(), &mut handle) };
         db_result(code)?;
         let raw = NonNull::new(handle).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// Like [`CoreDb::open`] but additionally enables `SQLITE_OPEN_URI` semantics (the `file:`
@@ -81,7 +86,10 @@ impl CoreDb {
         let code = unsafe { sys::switch_core_db_open_v2(filename.as_ptr(), &mut handle) };
         db_result(code)?;
         let raw = NonNull::new(handle).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     /// Wraps an existing FreeSWITCH database handle.
@@ -91,7 +99,10 @@ impl CoreDb {
     /// `raw` must point to a live `switch_core_db_t` obtained from `switch_core_db_open*` that the
     /// caller intends to transfer ownership of to this wrapper (it will be closed on `Drop`).
     pub unsafe fn from_raw(raw: *mut sys::switch_core_db_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw })
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _marker: PhantomData,
+        })
     }
 
     #[inline]

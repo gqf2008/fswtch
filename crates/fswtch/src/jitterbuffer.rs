@@ -9,6 +9,7 @@
 //! torn down alongside the buffer in [`JitterBuffer::drop`]), so constructing a
 //! [`JitterBuffer`] requires no external pool handle.
 
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::{GENERR, Result, SwitchError, status_to_result, sys};
@@ -127,6 +128,8 @@ pub struct JitterBuffer {
     // Owned memory pool passed to `switch_jb_create`. Held as an `Option` so that `Drop` can
     // take ownership of the pointer while keeping the field non-`None` until then.
     pool: Option<NonNull<sys::switch_memory_pool_t>>,
+    // Not thread-safe; `put_packet`/`get_packet` mutate C state through `&self`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl JitterBuffer {
@@ -181,6 +184,7 @@ impl JitterBuffer {
         Ok(Self {
             raw,
             pool: Some(pool),
+            _marker: PhantomData,
         })
     }
 

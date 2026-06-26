@@ -13,6 +13,7 @@
 //! All public entry points are safe; the raw FreeSWITCH pointers never escape the wrappers.
 
 use std::ffi::CString;
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::{GENERR, Result, SwitchError, cstring, status_to_result, sys};
@@ -29,6 +30,8 @@ pub const DEFAULT_QUALITY: i32 = 2;
 /// [`process`]: Resample::process
 pub struct Resample {
     raw: NonNull<sys::switch_audio_resampler_t>,
+    // Not thread-safe; `process` mutates the resampler's internal `to` buffer through `&self`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Resample {
@@ -60,7 +63,7 @@ impl Resample {
         status_to_result(status)?;
         // SAFETY: `switch_resample_perform_create` returned SUCCESS, so `raw` is a live handle.
         let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw })
+        Ok(Self { raw, _marker: PhantomData })
     }
 
     /// Creates a resampler using [`DEFAULT_QUALITY`].
@@ -96,13 +99,17 @@ impl Resample {
     /// The returned slice borrows the resampler's internal `to` buffer and is valid only while the
     /// borrow on `self` holds and until the next call to `process`. Each call overwrites the
     /// previous output.
-    pub fn process(&self, src: &[i16]) -> &[i16] {
+    ///
+    /// `src` is taken by exclusive reference because the underlying `switch_resample_process` C
+    /// signature declares `int16_t *src` (non-const) — FreeSWITCH does not document whether it
+    /// mutates the source, so an exclusive borrow is the sound choice.
+    pub fn process(&self, src: &mut [i16]) -> &[i16] {
         let srclen = u32::try_from(src.len()).unwrap_or(u32::MAX);
         // SAFETY: `self.raw` is a live resampler; `src` is a valid readable buffer of `srclen`
         // samples. The call writes into the resampler's internal `to` buffer and returns the count
         // of samples written (never more than the allocated `to_size`).
         let out_len = unsafe {
-            sys::switch_resample_process(self.raw.as_ptr(), src.as_ptr() as *mut i16, srclen)
+            sys::switch_resample_process(self.raw.as_ptr(), src.as_mut_ptr(), srclen)
         };
         let out_len = out_len as usize;
         // SAFETY: `self.raw` is a live resampler; `to` is the internal output buffer and `out_len`
@@ -189,6 +196,8 @@ pub struct Agc {
     /// to copy its argument, so we retain the bytes here for the handle's lifetime to avoid a
     /// use-after-free if the AGC stores the pointer.
     tokens: Vec<CString>,
+    // Not thread-safe; `feed` mutates C state through `&self`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Agc {
@@ -209,7 +218,7 @@ impl Agc {
         status_to_result(status)?;
         // SAFETY: `switch_agc_create` returned SUCCESS, so `raw` is a live handle.
         let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
-        Ok(Self { raw, tokens: Vec::new() })
+        Ok(Self { raw, tokens: Vec::new(), _marker: PhantomData })
     }
 
     /// Convenience constructor passing individual parameters (equivalent to

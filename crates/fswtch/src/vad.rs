@@ -9,6 +9,7 @@
 
 use std::ffi::CString;
 use std::fmt;
+use std::marker::PhantomData;
 use std::ptr::NonNull;
 
 use crate::{Result, SwitchError, cstring, sys};
@@ -91,6 +92,8 @@ impl fmt::Display for VadState {
 /// frames in with [`process`](Self::process) and read the resulting [`VadState`].
 pub struct Vad {
     raw: NonNull<sys::switch_vad_t>,
+    // Not thread-safe; `process` mutates the VAD's internal state through `&self`.
+    _marker: PhantomData<*const ()>,
 }
 
 impl Vad {
@@ -104,7 +107,7 @@ impl Vad {
         // integers is sound (it returns NULL for invalid arguments).
         let raw = unsafe { sys::switch_vad_init(sample_rate as _, channels as _) };
         NonNull::new(raw)
-            .map(|raw| Self { raw })
+            .map(|raw| Self { raw, _marker: PhantomData })
             .ok_or(SwitchError(crate::GENERR))
     }
 
