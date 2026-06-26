@@ -371,8 +371,9 @@ impl Event {
         let mut out: *mut std::ffi::c_char = std::ptr::null_mut();
         // SAFETY: `raw` is a live event; `out` is writable output storage receiving a malloc'd
         // string. `encode` selects URL-encoding of values.
-        let status =
-            unsafe { sys::switch_event_serialize(raw.as_ptr(), &mut out, encode_as_bool(encode)) };
+        let status = unsafe {
+            sys::switch_event_serialize(raw.as_ptr(), &mut out, crate::switch_bool(encode))
+        };
         status_to_result(status)?;
         // SAFETY: On success `out` is a malloc'd null-terminated string owned by this call.
         Ok(unsafe { crate::strdup_to_string(out) }.unwrap_or_default())
@@ -437,6 +438,7 @@ impl Event {
         };
         let value = cstring(value)?;
         let in_ptr = value.as_ptr();
+        let fallback = value.to_string_lossy().into_owned();
         // SAFETY: `raw` is a live event and `value` is a valid C string. Null var/api lists disable
         // variable-list and API expansion; recursion depth zero matches the common case.
         let out = unsafe {
@@ -448,18 +450,12 @@ impl Event {
                 0,
             )
         };
-        if out.is_null() {
-            return Ok(value.to_string_lossy().into_owned());
-        }
-        // switch_event_expand_headers_check returns the ORIGINAL input pointer when no ${}
-        // expansion occurs — freeing it would double-free the CString's buffer. Only call
-        // strdup_to_string (which frees) when the pointer differs from the input.
-        if out == in_ptr.cast_mut() {
-            return Ok(value.to_string_lossy().into_owned());
+        if out.is_null() || out == in_ptr.cast_mut() {
+            // Null or no-expansion (returned input verbatim): do not free the CString's buffer.
+            return Ok(fallback);
         }
         // SAFETY: `out` is a freshly malloc'd null-terminated string owned by this call.
-        Ok(unsafe { crate::strdup_to_string(out) }
-            .unwrap_or_else(|| value.to_string_lossy().into_owned()))
+        Ok(unsafe { crate::strdup_to_string(out) }.unwrap_or(fallback))
     }
 
     /// Parses a JSON string into a new owned [`Event`].
@@ -508,7 +504,7 @@ impl Event {
                 escape as std::ffi::c_char,
                 &mut event,
                 &mut new_data,
-                encode_as_bool(dup),
+                crate::switch_bool(dup),
             )
         };
         status_to_result(status)?;
@@ -558,15 +554,6 @@ impl Event {
         Ok(Event {
             raw: NonNull::new(event),
         })
-    }
-}
-
-/// Converts a Rust `bool` to FreeSWITCH's `switch_bool_t`.
-fn encode_as_bool(value: bool) -> sys::switch_bool_t {
-    if value {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
     }
 }
 
@@ -643,15 +630,7 @@ impl EventRef {
         let name = cstring(name).ok()?;
         // SAFETY: `raw` is a live event for the callback duration.
         let value = unsafe { sys::switch_event_get_header_idx(raw.as_ptr(), name.as_ptr(), -1) };
-        if value.is_null() {
-            return None;
-        }
-
-        // SAFETY: FreeSWITCH returns a null-terminated header value when present.
-        unsafe { CStr::from_ptr(value) }
-            .to_str()
-            .ok()
-            .map(ToOwned::to_owned)
+        borrowed_cstr_to_string(value)
     }
 
     /// Returns the value of the `idx`-th header named `name`, or the last when `idx` is negative.
@@ -716,7 +695,8 @@ impl EventRef {
         let mut out: *mut std::ffi::c_char = std::ptr::null_mut();
         // SAFETY: `raw` is a live event; `out` is writable output storage receiving a malloc'd
         // string.
-        let status = unsafe { sys::switch_event_serialize(raw, &mut out, encode_as_bool(encode)) };
+        let status =
+            unsafe { sys::switch_event_serialize(raw, &mut out, crate::switch_bool(encode)) };
         status_to_result(status)?;
         // SAFETY: On success `out` is a malloc'd null-terminated string owned by this call.
         Ok(unsafe { crate::strdup_to_string(out) }.unwrap_or_default())

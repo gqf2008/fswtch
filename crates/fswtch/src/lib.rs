@@ -115,7 +115,8 @@ pub use session::{Session, SessionGuard};
 pub use status::{
     CAUSE_NO_ANSWER, CAUSE_NO_USER_RESPONSE, CAUSE_NONE, CAUSE_NORMAL_CLEARING,
     CAUSE_ORIGINATOR_CANCEL, CAUSE_RECOVERY_ON_TIMER_EXPIRE, CAUSE_USER_BUSY, Cause, FALSE, GENERR,
-    Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result,
+    Result, SUCCESS, Status, SwitchError, false_on_success, from_switch_bool, status_to_result,
+    switch_bool,
 };
 pub use stream::{ApiStream, Stream, write_stream_response};
 pub use timer::Timer;

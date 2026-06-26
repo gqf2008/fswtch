@@ -795,22 +795,33 @@ impl Channel {
     /// scope.
     ///
     /// Wraps `switch_channel_expand_variables_check` with no var/api list and `recur = 0`. The
-    /// returned string is freshly `malloc`'d by FreeSWITCH; this method copies it out and frees
-    /// the original, so the result owns its storage and does not borrow the channel.
+    /// returned string is freshly `malloc`'d by FreeSWITCH *only when expansion occurs*; when the
+    /// input has no `${var}` references the original input pointer is returned verbatim, so this
+    /// method compares the two and avoids freeing the input's own buffer (a double-free).
     pub fn expand_variables(self, input: impl AsRef<str>) -> Result<Option<String>> {
         let input = cstring(input)?;
+        let in_ptr = input.as_ptr();
         // SAFETY: `self.raw` is a live channel; `input` is a valid C string. The returned pointer
-        // is null or a malloc'd C string the caller must free.
+        // is null, the input pointer (when no expansion occurs), or a malloc'd C string.
         let ptr = unsafe {
             sys::switch_channel_expand_variables_check(
                 self.raw.as_ptr(),
-                input.as_ptr(),
+                in_ptr,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 0,
             )
         };
-        // SAFETY: `ptr` is null or a malloc'd C string per the call contract.
+        if ptr.is_null() {
+            return Ok(None);
+        }
+        // switch_channel_expand_variables_check returns the ORIGINAL input pointer when no
+        // expansion occurs — freeing it would double-free the CString's buffer. Only call
+        // strdup_to_string (which frees) when the pointer differs from the input.
+        if ptr == in_ptr.cast_mut() {
+            return Ok(Some(input.to_string_lossy().into_owned()));
+        }
+        // SAFETY: `ptr` is a freshly malloc'd C string owned by this call.
         Ok(unsafe { strdup_to_string(ptr) })
     }
 

@@ -306,19 +306,14 @@ pub fn broadcast(uuid: impl AsRef<str>, path: impl AsRef<str>, flags: u32) -> Re
 }
 
 /// Broadcasts `app` to the session from a new thread. `flags` is an opaque integer passed through
-/// to the application. The C function returns no status, so this returns nothing.
-pub fn broadcast_in_thread(session: Session, app: impl AsRef<str>, flags: i32) {
-    let app = cstring(app).ok();
-    // SAFETY: `session.as_ptr()` is a live session; when non-null, `app` is a valid C string
-    // alive for the duration of the call. Passing null when allocation failed is the safest
-    // fallback for a fire-and-forget thread launch.
-    unsafe {
-        sys::switch_ivr_broadcast_in_thread(
-            session.as_ptr(),
-            app.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-            flags,
-        )
-    };
+/// to the application. The C function returns no status. Returns an error if `app` contains an
+/// interior NUL.
+pub fn broadcast_in_thread(session: Session, app: impl AsRef<str>, flags: i32) -> Result<()> {
+    let app = cstring(app)?;
+    // SAFETY: `session.as_ptr()` is a live session; `app` is a valid C string alive for the
+    // duration of the call.
+    unsafe { sys::switch_ivr_broadcast_in_thread(session.as_ptr(), app.as_ptr(), flags) };
+    Ok(())
 }
 
 /// Runs the dialplan application `app` (with argument `arg`) against every session currently

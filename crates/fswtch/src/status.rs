@@ -45,6 +45,20 @@ pub fn false_on_success(status: Status) -> Status {
     if status == SUCCESS { FALSE } else { status }
 }
 
+/// Maps a Rust `bool` to FreeSWITCH's `switch_bool_t` (`SWITCH_TRUE`/`SWITCH_FALSE`).
+pub fn switch_bool(value: bool) -> sys::switch_bool_t {
+    if value {
+        sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        sys::switch_bool_t_SWITCH_FALSE
+    }
+}
+
+/// Maps FreeSWITCH's `switch_bool_t` to a Rust `bool` (`true` only for `SWITCH_TRUE`).
+pub fn from_switch_bool(value: sys::switch_bool_t) -> bool {
+    value == sys::switch_bool_t_SWITCH_TRUE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
