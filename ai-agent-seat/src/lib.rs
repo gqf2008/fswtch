@@ -15,6 +15,7 @@ pub mod control;
 pub mod event_sub;
 pub mod llm;
 pub mod tts;
+pub mod tts_ws_codec;
 pub mod voice_core;
 
 use fswtch::{ApplicationInfo, Session, attach_media_bug};
