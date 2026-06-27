@@ -20,38 +20,23 @@ pub trait CallControl: Send + Sync {
     fn fire_transcript(&self, uuid: &str, body: &str) -> Result<()>;
 }
 
-/// Call actor trait for handling call state and media.
+/// Signal from the media bug (VAD) to the call actor's AI pipeline.
 ///
-/// This trait is kept object-safe-friendly by using synchronous methods only
-/// (no `async_trait`), so it does not require `dyn`-compatibility. Concrete
-/// actors are stored as [`Addr<crate::actor::CallActorImpl>`] in the registry.
-pub trait CallActor: Actor + Send {
-    /// The UUID of the call this actor owns.
-    fn uuid(&self) -> &str;
-    /// Process incoming caller audio. Returns `true` to continue processing.
-    fn process_audio(&mut self, audio: &[i16], sample_rate: u32) -> bool;
-    /// Write synthesized TTS audio back toward the caller.
-    fn write_tts_audio(&mut self, audio: &[i16], sample_rate: u32) -> Result<()>;
-    /// Handle a completed speech turn (transcribed text).
-    fn handle_speech_turn(&mut self, text: String) -> Result<()>;
-    /// Handle caller barge-in (interruption of AI speech).
-    fn handle_barge_in(&mut self) -> Result<()>;
-}
-
-/// Message sent when ASR produces a speech turn.
+/// Replaces the former separate `SpeechTurn` and `BargeIn` actix messages.
+/// `Turn` carries the raw 16 kHz i16 PCM of one detected speech segment; the
+/// [`crate::actor::CallActorImpl`] forwards it to the
+/// [`crate::orchestrator::Orchestrator::process_speech_segment`]. `BargeIn`
+/// signals caller interruption while the AI is speaking; the actor forwards it
+/// to [`crate::orchestrator::Orchestrator::cancel_current`].
 #[derive(Message)]
 #[rtype(result = "()")]
-pub struct SpeechTurn {
-    /// Transcribed text of the speech turn (may be empty until ASR runs).
-    pub text: String,
-    /// Raw caller audio samples (16kHz i16 PCM) associated with this turn.
-    pub audio: Vec<i16>,
+pub enum SpeechSignal {
+    /// A completed speech segment (caller finished a turn). `audio` is 16 kHz
+    /// mono i16 PCM (possibly with VAD pre-roll prepended).
+    Turn { audio: Vec<i16> },
+    /// Caller barged in while the AI was speaking — interrupt current TTS.
+    BargeIn,
 }
-
-/// Message sent when caller barges in.
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct BargeIn;
 
 /// Message to answer the call.
 #[derive(Message)]
@@ -86,8 +71,8 @@ pub struct TransferCall {
 /// Registry for active call actors.
 ///
 /// Stores concrete [`Addr<crate::actor::CallActorImpl>`] handles keyed by call UUID.
-/// Using a concrete address type (rather than `Addr<dyn CallActor>`) avoids the
-/// `dyn`-compatibility issues that arise from `async_trait` on the actor trait.
+/// Using a concrete address type (rather than `Addr<dyn ...>`) avoids any
+/// `dyn`-compatibility concerns.
 pub struct CallRegistry {
     actors: Mutex<HashMap<String, Addr<crate::actor::CallActorImpl>>>,
 }
@@ -143,7 +128,10 @@ pub fn registry() -> &'static Arc<CallRegistry> {
     REGISTRY.get_or_init(|| Arc::new(CallRegistry::new()))
 }
 
-/// AI speaking flag shared between bug and tool executor.
+/// AI speaking flag shared between the media bug and the orchestrator.
+///
+/// Set while TTS is playing toward the caller so the bug's write-leg VAD can
+/// detect barge-in. Cloned cheaply (Arc-inner).
 pub struct AiSpeakingFlag {
     flag: Arc<AtomicBool>,
 }

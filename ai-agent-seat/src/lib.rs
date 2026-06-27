@@ -1,11 +1,13 @@
 //! AI Agent Seat module for FreeSWITCH.
 //!
-//! This module implements an AI-powered voice agent that can handle voice calls
-//! with automatic speech recognition (ASR), large language model (LLM) processing,
-//! and text-to-speech (TTS) synthesis.
+//! This module implements an AI-powered voice agent that handles voice calls
+//! with an audio-native LLM (no separate ASR): caller audio is sent to the LLM
+//! as a multimodal message, and TTS is a `speak` tool the LLM calls. The
+//! [`orchestrator::Orchestrator`] owns the full pipeline (perception → LLM
+//! with tool calling → TTS via `speak`); [`actor::CallActorImpl`] is the thin
+//! actix adapter that wires it to the FreeSWITCH media bug.
 
 pub mod actor;
-pub mod asr;
 pub mod audio_dsp;
 pub mod boundary;
 pub mod bug;
@@ -13,7 +15,7 @@ pub mod call_core;
 pub mod config;
 pub mod control;
 pub mod event_sub;
-pub mod llm;
+pub mod orchestrator;
 pub mod tts;
 pub mod tts_ws_codec;
 pub mod voice_core;
@@ -71,8 +73,9 @@ fswtch::module_load! {
 // FreeSWITCH application callback for voice_seat.
 //
 // This is called when the dialplan executes the voice_seat application.
-// It attaches a media bug to intercept audio and spawns a CallActor to handle
-// the AI pipeline (ASR → LLM → TTS).
+// It attaches a media bug to intercept audio and spawns a CallActor that owns
+// an Orchestrator running the AI pipeline (audio → LLM with tool calling →
+// TTS via the `speak` tool; no separate ASR).
 fswtch::app_callback! {
     fn voice_seat_app(session, _data) {
         handle_voice_seat_app(session);

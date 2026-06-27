@@ -1,20 +1,30 @@
-//! CallActor - Actor-based AI pipeline for AI agent seat.
+//! CallActor - actix actor that owns the [`Orchestrator`] for one call.
 //!
-//! This module implements the CallActor which runs on an actix System and handles
-//! the AI pipeline: ASR → LLM → TTS.
+//! The actor is a thin adapter: it receives [`SpeechSignal`]s from the media
+//! bug ([`crate::bug::VoiceSeatBug`]) and forwards them to the
+//! [`Orchestrator`], which runs the actual AI pipeline (audio → LLM with
+//! tool calling → TTS via the `speak` tool). TTS audio produced by the
+//! orchestrator is drained from the `tts_rx` channel by a background task and
+//! (eventually) written back toward the caller.
+//!
+//! The orchestrator is created at call-answer time (when the actor starts)
+//! and torn down in `stopped`.
 
 use actix::prelude::*;
-use anyhow::Result;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use tokio::runtime::Runtime;
+use tokio::sync::mpsc;
 
 use crate::call_core::{
-    AnswerCall, BargeIn, CallActor, HangupCall, SendDtmf, SpeechTurn, TransferCall, registry,
+    AnswerCall, CallControl, HangupCall, SendDtmf, SpeechSignal, TransferCall, registry,
 };
+use crate::control::FfiControl;
+use crate::orchestrator::Orchestrator;
+use crate::tts::TtsSignal;
 use crate::voice_core::Config;
 
-/// Global tokio runtime for async operations (e.g. outbound HTTP for ASR/LLM/TTS).
+/// Global tokio runtime for async operations (LLM HTTP, Volcano TTS WS).
 static RUNTIME: OnceLock<Mutex<Option<Runtime>>> = OnceLock::new();
 
 /// Global actix System handle for actor management.
@@ -31,7 +41,7 @@ fn runtime_slot() -> &'static Mutex<Option<Runtime>> {
 /// thread. We store the [`System`] handle (which is `Clone + Send + Sync`) so
 /// other threads can spawn actors onto the system's arbiter.
 pub fn start_runtime() {
-    // Create tokio runtime for async work (ASR/LLM/TTS HTTP calls).
+    // Create tokio runtime for async work (LLM HTTP, TTS WebSocket).
     let runtime = Runtime::new().expect("Failed to create tokio runtime");
     *runtime_slot().lock().unwrap() = Some(runtime);
 
@@ -88,20 +98,14 @@ pub fn spawn_call_actor(uuid: String, config: Option<Config>) {
 
 /// CallActor implementation.
 ///
-/// Handles the AI pipeline: ASR → LLM → TTS.
+/// Owns the [`Orchestrator`] and the TTS drain task for one call.
 pub struct CallActorImpl {
     uuid: String,
     #[allow(dead_code)]
     config: Option<Config>,
-    /// Conversation history for LLM context.
-    conversation: Vec<ConversationMessage>,
-}
-
-/// Conversation message for LLM context.
-#[derive(Clone)]
-pub struct ConversationMessage {
-    pub role: String, // "user" or "assistant"
-    pub content: String,
+    /// The orchestrator runs the AI pipeline. Populated in `started` (so it
+    /// is created on the actix runtime, where spawned futures land correctly).
+    orchestrator: Option<Arc<Orchestrator>>,
 }
 
 impl CallActorImpl {
@@ -109,86 +113,138 @@ impl CallActorImpl {
         Self {
             uuid,
             config,
-            conversation: Vec::new(),
+            orchestrator: None,
         }
-    }
-
-    /// Process a speech turn through ASR and LLM.
-    #[allow(dead_code)]
-    async fn process_speech_turn(&mut self, audio: Vec<i16>) -> Result<String> {
-        // TODO: Implement ASR processing
-        // For now, return empty string
-        tracing::info!("Processing speech turn ({} samples)", audio.len());
-
-        // Placeholder: return empty response
-        Ok("I heard you speaking.".to_string())
-    }
-
-    /// Generate TTS audio from text.
-    #[allow(dead_code)]
-    async fn generate_tts(&self, text: &str) -> Result<Vec<i16>> {
-        // TODO: Implement TTS generation
-        // For now, return empty audio
-        tracing::info!("Generating TTS for: {}", text);
-
-        // Placeholder: return empty audio
-        Ok(Vec::new())
     }
 }
 
 impl Actor for CallActorImpl {
     type Context = Context<Self>;
 
-    fn started(&mut self, _ctx: &mut Self::Context) {
+    fn started(&mut self, ctx: &mut Self::Context) {
         tracing::info!("CallActor started for session {}", self.uuid);
+
+        // Create the TTS channel (orchestrator → media bug / drain task).
+        let (tts_tx, tts_rx) = mpsc::channel::<TtsSignal>(crate::tts::tts_channel_capacity());
+
+        // Build the orchestrator with the TTS producer end.
+        let orchestrator = Arc::new(Orchestrator::new(
+            self.uuid.clone(),
+            self.config.clone(),
+            tts_tx,
+        ));
+
+        // Wire the FFI call-control so `hangup`/`send_dtmf`/`transfer` tools
+        // act on the live FreeSWITCH session.
+        orchestrator.set_control(Arc::new(FfiControl) as Arc<dyn crate::call_core::CallControl>);
+
+        // Eagerly connect the Volcano WS at answer time. Spawns on the actor's
+        // own context so it lands on the actix arbiter (which has a tokio
+        // runtime). Errors are logged inside; they do NOT poison the session.
+        let orch_start = Arc::clone(&orchestrator);
+        ctx.spawn(
+            async move {
+                if let Err(e) = orch_start.start_tts().await {
+                    tracing::warn!(
+                        "CallActor: orchestrator start_tts failed for {}: {e}",
+                        orch_start.uuid()
+                    );
+                }
+            }
+            .into_actor(self),
+        );
+
+        // Spawn the TTS drain task on the actix arbiter (which has a tokio
+        // runtime). The orchestrator pushes TtsSignal::Chunk (16 kHz i16 PCM)
+        // here; this task is the sink that keeps the orchestrator's channel
+        // from back-pressuring. Playback injection into the media bug is wired
+        // separately; for now each chunk is logged at trace level.
+        let mut tts_rx = tts_rx;
+        let uuid_for_drain = self.uuid.clone();
+        actix::Arbiter::current().spawn(async move {
+            while let Some(signal) = tts_rx.recv().await {
+                match signal {
+                    TtsSignal::Chunk(audio) => {
+                        tracing::trace!(
+                            "TTS drain: {} samples for {}",
+                            audio.len(),
+                            uuid_for_drain
+                        );
+                    }
+                    TtsSignal::ClearBuffer => {
+                        // Barge-in flush — the media bug observes this signal
+                        // via its own polling; this is a no-op on the drain path.
+                    }
+                }
+            }
+        });
+
+        self.orchestrator = Some(orchestrator);
     }
 
     fn stopped(&mut self, _ctx: &mut Self::Context) {
         tracing::info!("CallActor stopped for session {}", self.uuid);
+
+        if let Some(orch) = self.orchestrator.take() {
+            orch.full_hangup_reset();
+        }
 
         // Unregister from registry
         registry().unregister(&self.uuid);
     }
 }
 
-/// Handle SpeechTurn message.
+/// Handle a speech segment (completed turn) or barge-in from the media bug.
 ///
-/// Spawns the ASR → LLM → TTS pipeline on the actor's own `Context` via
-/// [`AsyncContext::spawn`] (rather than `actix::spawn`, which would land on an
-/// arbitrary arbiter and race the actor's message loop). `into_actor(self)`
-/// pins the future to this actor's `LocalSet` and gives it `&mut self` access.
-impl Handler<SpeechTurn> for CallActorImpl {
+/// `SpeechSignal::Turn` drives the orchestrator's full pipeline (audio → LLM
+/// with tools → TTS via `speak`). `SpeechSignal::BargeIn` cancels the current
+/// turn. Both are spawned on the actor's own `Context` so they land on this
+/// actor's arbiter and don't race the message loop.
+impl Handler<SpeechSignal> for CallActorImpl {
     type Result = ();
 
-    fn handle(&mut self, msg: SpeechTurn, ctx: &mut Self::Context) -> Self::Result {
-        let uuid = self.uuid.clone();
-        let audio = msg.audio;
-
-        ctx.spawn(
-            async move {
-                // TODO: Implement full ASR → LLM → TTS pipeline, dispatching TTS
-                // audio back to the FreeSWITCH media bug via the registry / a
-                // TTS channel.
-                tracing::info!(
-                    "Processing speech turn for session {} ({} samples)",
-                    uuid,
-                    audio.len()
+    fn handle(&mut self, msg: SpeechSignal, ctx: &mut Self::Context) -> Self::Result {
+        let Some(orch) = self.orchestrator.as_ref().map(Arc::clone) else {
+            tracing::warn!(
+                "CallActor: speech signal for {} but orchestrator not initialized",
+                self.uuid
+            );
+            return;
+        };
+        match msg {
+            SpeechSignal::Turn { audio } => {
+                let uuid = self.uuid.clone();
+                ctx.spawn(
+                    async move {
+                        let n = audio.len();
+                        match orch.process_speech_segment(audio).await {
+                            Some((reply, asr)) => {
+                                tracing::info!(
+                                    "CallActor: turn complete for {} ({} samples) \
+                                     reply={} chars, asr={:?}",
+                                    uuid,
+                                    n,
+                                    reply.chars().count(),
+                                    asr
+                                );
+                            }
+                            None => {
+                                tracing::info!(
+                                    "CallActor: turn discarded for {} ({} samples)",
+                                    uuid,
+                                    n
+                                );
+                            }
+                        }
+                    }
+                    .into_actor(self),
                 );
             }
-            .into_actor(self),
-        );
-    }
-}
-
-/// Handle BargeIn message.
-impl Handler<BargeIn> for CallActorImpl {
-    type Result = ();
-
-    fn handle(&mut self, _msg: BargeIn, _ctx: &mut Self::Context) -> Self::Result {
-        tracing::info!("Barge-in detected for session {}", self.uuid);
-
-        // Clear conversation history or interrupt current TTS
-        // For now, just log
+            SpeechSignal::BargeIn => {
+                tracing::info!("CallActor: barge-in for {}", self.uuid);
+                orch.cancel_current();
+            }
+        }
     }
 }
 
@@ -224,7 +280,11 @@ impl Handler<SendDtmf> for CallActorImpl {
     fn handle(&mut self, msg: SendDtmf, _ctx: &mut Self::Context) -> Self::Result {
         tracing::info!("DTMF requested for session {}: {}", self.uuid, msg.digits);
 
-        // TODO: Implement DTMF sending via fswtch FFI
+        // Delegate to the FFI control plane directly (external command path).
+        let control = FfiControl;
+        if let Err(e) = control.send_dtmf(&self.uuid, &msg.digits) {
+            tracing::warn!("SendDtmf via FfiControl failed: {e}");
+        }
     }
 }
 
@@ -239,39 +299,9 @@ impl Handler<TransferCall> for CallActorImpl {
             msg.destination
         );
 
-        // TODO: Implement call transfer via fswtch FFI
-    }
-}
-
-/// Implement CallActor trait for CallActorImpl.
-impl CallActor for CallActorImpl {
-    fn uuid(&self) -> &str {
-        &self.uuid
-    }
-
-    fn process_audio(&mut self, _audio: &[i16], _sample_rate: u32) -> bool {
-        // Caller audio is processed through VAD by `VoiceSeatBug`; the actor
-        // receives completed speech turns via `SpeechTurn`. Continue processing.
-        true
-    }
-
-    fn write_tts_audio(&mut self, _audio: &[i16], _sample_rate: u32) -> Result<()> {
-        // TODO: Write TTS audio back toward the FreeSWITCH media bug.
-        Ok(())
-    }
-
-    fn handle_speech_turn(&mut self, text: String) -> Result<()> {
-        // Add to conversation history
-        self.conversation.push(ConversationMessage {
-            role: "user".to_string(),
-            content: text,
-        });
-
-        Ok(())
-    }
-
-    fn handle_barge_in(&mut self) -> Result<()> {
-        tracing::info!("Barge-in handled for session {}", self.uuid);
-        Ok(())
+        let control = FfiControl;
+        if let Err(e) = control.transfer(&self.uuid, &msg.destination) {
+            tracing::warn!("TransferCall via FfiControl failed: {e}");
+        }
     }
 }

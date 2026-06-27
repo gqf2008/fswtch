@@ -14,7 +14,7 @@ use fswtch::{
 };
 
 use crate::audio_dsp::{PIPELINE_SAMPLE_RATE, SampleRateConverter, get_codec_rate};
-use crate::call_core::{SpeechTurn, registry};
+use crate::call_core::{SpeechSignal, registry};
 use crate::voice_core::Config;
 
 /// earshot predicts on fixed 256-sample (16 ms at 16 kHz) frames.
@@ -211,12 +211,11 @@ impl MediaBugHandler for VoiceSeatBug {
                     let speech = std::mem::take(&mut this.speech_buffer);
 
                     if !speech.is_empty() {
-                        // Send speech turn (with accumulated audio) to CallActor for ASR.
+                        // Send the completed speech segment (with accumulated
+                        // audio) to the CallActor; it forwards it to the
+                        // Orchestrator as a multimodal LLM message (no ASR).
                         if let Some(addr) = registry().get(&this.uuid) {
-                            addr.do_send(SpeechTurn {
-                                text: String::new(),
-                                audio: speech,
-                            });
+                            addr.do_send(SpeechSignal::Turn { audio: speech });
                         }
 
                         this.pre_roll.clear();
@@ -267,7 +266,7 @@ impl MediaBugHandler for VoiceSeatBug {
                         tracing::info!("Barge-in detected for session {}", this.uuid);
 
                         if let Some(addr) = registry().get(&this.uuid) {
-                            addr.do_send(crate::call_core::BargeIn);
+                            addr.do_send(SpeechSignal::BargeIn);
                         }
 
                         // Reset AI speaking flag

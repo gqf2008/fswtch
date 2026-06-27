@@ -601,13 +601,11 @@ fn parse_pcm_le(bytes: &[u8]) -> Vec<i16> {
         .collect()
 }
 
-// ── Actix wrapper: TtsActor ────────────────────────────────────────────
+// ── TTS signal + helpers (consumed by the orchestrator) ───────────────
 
-use actix::prelude::*;
 use tokio::sync::mpsc;
 
 use crate::audio_dsp::PIPELINE_SAMPLE_RATE;
-use crate::voice_core::Config;
 
 /// Maximum number of TTS chunks buffered in the channel.
 const TTS_CHANNEL_CAPACITY: usize = 64;
@@ -616,188 +614,43 @@ const TTS_CHANNEL_CAPACITY: usize = 64;
 /// 320 samples = 20 ms at 16 kHz.
 const TTS_CHUNK_SAMPLES: usize = 320;
 
-/// Signals crossing the actor → media-bug boundary for TTS playback.
+/// Signals crossing the orchestrator → media-bug boundary for TTS playback.
+///
+/// The orchestrator owns the producer end (`mpsc::Sender<TtsSignal>`); the
+/// media bug drains the receiver and either plays back PCM (`Chunk`) or flushes
+/// its buffer (`ClearBuffer`, on barge-in).
 #[derive(Debug)]
 pub enum TtsSignal {
+    /// A chunk of 16 kHz mono i16 PCM to play toward the caller.
     Chunk(Vec<i16>),
+    /// Barge-in: drop any buffered TTS audio immediately.
     ClearBuffer,
-}
-
-/// Message: synthesize `text` into speech and stream the audio to the bug.
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct SynthesizeText {
-    pub text: String,
-}
-
-/// Message: clear any buffered TTS audio (barge-in).
-#[derive(Message)]
-#[rtype(result = "()")]
-pub struct ClearTtsBuffer;
-
-/// TTS actor — actix wrapper around [`VolcanoBidirectionalSession`].
-///
-/// Owns the producer end of the TTS mpsc channel. Text arrives via
-/// [`SynthesizeText`], is run through the Volcano bidirectional WebSocket
-/// TTS API, and the resulting 16 kHz i16 PCM is forwarded to the bug.
-pub struct TtsActor {
-    uuid: String,
-    config: Option<Config>,
-    tts_tx: mpsc::Sender<TtsSignal>,
-    session: Option<VolcanoBidirectionalSession>,
-}
-
-impl TtsActor {
-    pub fn new(uuid: String, config: Option<Config>) -> (Self, mpsc::Receiver<TtsSignal>) {
-        let (tts_tx, tts_rx) = mpsc::channel::<TtsSignal>(TTS_CHANNEL_CAPACITY);
-        let session = config.as_ref().map(|c| {
-            VolcanoBidirectionalSession::new(
-                c.ai.tts_api_key.clone(),
-                "seed-tts-2.0".to_string(),
-                c.ai.tts_endpoint.clone(),
-                uuid.clone(),
-            )
-        });
-        let actor = Self {
-            uuid,
-            config,
-            tts_tx,
-            session,
-        };
-        (actor, tts_rx)
-    }
-
-    pub fn with_sender(
-        uuid: String,
-        config: Option<Config>,
-        tts_tx: mpsc::Sender<TtsSignal>,
-    ) -> Self {
-        let session = config.as_ref().map(|c| {
-            VolcanoBidirectionalSession::new(
-                c.ai.tts_api_key.clone(),
-                "seed-tts-2.0".to_string(),
-                c.ai.tts_endpoint.clone(),
-                uuid.clone(),
-            )
-        });
-        Self {
-            uuid,
-            config,
-            tts_tx,
-            session,
-        }
-    }
-}
-
-impl Actor for TtsActor {
-    type Context = actix::Context<Self>;
-
-    fn started(&mut self, ctx: &mut Self::Context) {
-        tracing::info!("TtsActor started for session {}", self.uuid);
-        if let Some(session) = &self.session {
-            let session = session.clone();
-            ctx.spawn(
-                async move {
-                    if let Err(e) = session.start().await {
-                        tracing::warn!("TtsActor: Volcano TTS start failed: {e}");
-                    }
-                }
-                .into_actor(self),
-            );
-        }
-    }
-
-    fn stopped(&mut self, _ctx: &mut Self::Context) {
-        tracing::info!("TtsActor stopped for session {}", self.uuid);
-    }
-}
-
-impl Handler<SynthesizeText> for TtsActor {
-    type Result = ();
-
-    fn handle(&mut self, msg: SynthesizeText, ctx: &mut Self::Context) -> Self::Result {
-        let uuid = self.uuid.clone();
-        let text_len = msg.text.len();
-        tracing::info!(
-            "TtsActor: synthesize request for session {} ({} bytes)",
-            uuid,
-            text_len
-        );
-
-        let tts_tx = self.tts_tx.clone();
-        let session = self.session.clone();
-        let uuid_for_task = uuid.clone();
-
-        ctx.spawn(
-            async move {
-                if let Some(session) = &session {
-                    let cancel = tokio_util::sync::CancellationToken::new();
-                    // Bridge: VolcanoBidirectionalSession sends Vec<i16> audio;
-                    // we wrap each chunk into TtsSignal::Chunk for the media bug.
-                    let (raw_tx, mut raw_rx) =
-                        tokio::sync::mpsc::channel::<Vec<i16>>(TTS_CHANNEL_CAPACITY);
-                    let tts_tx_bridge = tts_tx.clone();
-                    // Forward raw audio → TtsSignal::Chunk in 320-sample chunks.
-                    tokio::spawn(async move {
-                        while let Some(audio) = raw_rx.recv().await {
-                            let mut start = 0;
-                            while start < audio.len() {
-                                let end = (start + TTS_CHUNK_SAMPLES).min(audio.len());
-                                let chunk = audio[start..end].to_vec();
-                                if tts_tx_bridge.send(TtsSignal::Chunk(chunk)).await.is_err() {
-                                    return;
-                                }
-                                start = end;
-                            }
-                        }
-                    });
-                    match session.synthesize(&msg.text, cancel, raw_tx).await {
-                        Ok(completed) => {
-                            tracing::info!(
-                                "TTS synthesize completed for session {} (completed={})",
-                                uuid_for_task,
-                                completed
-                            );
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                "TTS synthesize failed for session {}: {}",
-                                uuid_for_task,
-                                e
-                            );
-                        }
-                    }
-                } else {
-                    tracing::warn!(
-                        "TTS session not configured for session {}; skipping synthesis",
-                        uuid_for_task
-                    );
-                }
-            }
-            .into_actor(self),
-        );
-    }
-}
-
-impl Handler<ClearTtsBuffer> for TtsActor {
-    type Result = ();
-
-    fn handle(&mut self, _msg: ClearTtsBuffer, ctx: &mut Self::Context) -> Self::Result {
-        tracing::info!("Clearing TTS buffer for session {}", self.uuid);
-        let tts_tx = self.tts_tx.clone();
-        let uuid = self.uuid.clone();
-        ctx.spawn(
-            async move {
-                if tts_tx.send(TtsSignal::ClearBuffer).await.is_err() {
-                    tracing::warn!("TTS channel closed for session {}; clear dropped", uuid);
-                }
-            }
-            .into_actor(self),
-        );
-    }
 }
 
 /// Returns the sample rate TTS audio is produced at (16 kHz).
 pub fn tts_sample_rate() -> u32 {
     PIPELINE_SAMPLE_RATE
+}
+
+/// Split a flat PCM sample buffer into 20 ms (320-sample) chunks wrapped in
+/// [`TtsSignal::Chunk`], and send them sequentially on `tts_tx`.
+///
+/// The orchestrator calls this to forward the raw `Vec<i16>` audio it receives
+/// from [`VolcanoBidirectionalSession::synthesize`] into the media-bug channel
+/// (which expects 320-sample chunks).
+pub async fn forward_pcm_chunked(tts_tx: &mpsc::Sender<TtsSignal>, audio: Vec<i16>) {
+    let mut start = 0;
+    while start < audio.len() {
+        let end = (start + TTS_CHUNK_SAMPLES).min(audio.len());
+        let chunk = audio[start..end].to_vec();
+        if tts_tx.send(TtsSignal::Chunk(chunk)).await.is_err() {
+            return;
+        }
+        start = end;
+    }
+}
+
+/// Capacity of the TTS channel (orchestrator → media bug).
+pub fn tts_channel_capacity() -> usize {
+    TTS_CHANNEL_CAPACITY
 }
