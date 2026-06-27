@@ -1,0 +1,27 @@
+[package]
+name = "ai-agent-seat"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "FreeSWITCH in-process AI agent seat module"
+
+[lib]
+name = "ai_agent_seat"
+crate-type = ["cdylib"]
+
+[dependencies]
+fswtch = { path = "../crates/fswtch" }
+actix = "0.13"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"] }
+async-trait = "0.1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+earshot = "1"
+rubato = "0.15"
+mimalloc = "0.1"
+dashmap = "6"
+
