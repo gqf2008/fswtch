@@ -33,7 +33,19 @@ use tokio::sync::{Mutex, Notify};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 
+use crate::audio_dsp::PIPELINE_SAMPLE_RATE;
 use crate::tts_ws_codec::{EventType, Message, MsgType};
+
+/// `fswtch::Resample` (`switch_resample_t`) is `!Send` because the underlying C
+/// resampler is not safe under *concurrent* access. A TTS driver task holds one
+/// resampler and runs it single-threaded — tokio's task-migration provides a
+/// happens-before relationship, so exclusive ownership across `.await` points is
+/// sound. We opt into `Send` to satisfy the `tokio::spawn` future bound.
+struct SendResample(fswtch::Resample);
+// SAFETY: the wrapped resampler is only ever touched from the driver task that
+// owns it; it is never shared across threads concurrently. Task migration
+// serializes access via the runtime's synchronization.
+unsafe impl Send for SendResample {}
 
 /// The Volcano bidirectional TTS WebSocket endpoint.
 const ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection";
@@ -267,7 +279,8 @@ impl VolcanoBidirectionalSession {
         *self.inner.cmd_tx.lock() = Some(cmd_tx.clone());
 
         let state = Arc::clone(&self.inner.state);
-        let driver = tokio::spawn(driver_loop(ws_stream, cmd_rx, state));
+        let server_sr = self.inner.server_sample_rate;
+        let driver = tokio::spawn(driver_loop(ws_stream, cmd_rx, state, server_sr));
         *self.inner.driver_join.lock() = Some(driver);
 
         self.send_raw(Message::start_connection()).await?;
@@ -431,9 +444,38 @@ async fn driver_loop(
     >,
     mut cmd_rx: tokio::sync::mpsc::Receiver<DriverCmd>,
     state: Arc<Mutex<SessionState>>,
+    server_sample_rate: u32,
 ) {
     use futures::{SinkExt, StreamExt};
     let (mut sink, mut stream) = ws_stream.split();
+
+    // Resample the server's output rate down to the 16 kHz pipeline rate, using
+    // FreeSWITCH's native `switch_resample`. One resampler lives for the whole
+    // connection; it carries internal state across chunks, so per-turn reset is
+    // not needed (the server emits continuous audio within a session).
+    let mut resampler: Option<SendResample> = if server_sample_rate != PIPELINE_SAMPLE_RATE {
+        match fswtch::Resample::new(server_sample_rate, PIPELINE_SAMPLE_RATE, 1, 1) {
+            Ok(r) => {
+                tracing::info!(
+                    "Volcano TTS resampler: {} Hz -> {} Hz (FreeSWITCH switch_resample)",
+                    server_sample_rate,
+                    PIPELINE_SAMPLE_RATE,
+                );
+                Some(SendResample(r))
+            }
+            Err(e) => {
+                tracing::error!(
+                    "resample init failed ({} -> {}): {:?}; audio will play at wrong rate",
+                    server_sample_rate,
+                    PIPELINE_SAMPLE_RATE,
+                    e,
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     loop {
         tokio::select! {
@@ -459,7 +501,7 @@ async fn driver_loop(
             },
             frame = stream.next() => match frame {
                 Some(Ok(WsMessage::Binary(bytes))) => {
-                    if let Err(e) = route_frame(&bytes, &state).await {
+                    if let Err(e) = route_frame(&bytes, &state, &mut resampler).await {
                         tracing::warn!("Volcano TTS frame route error: {e}");
                     }
                 }
@@ -493,7 +535,11 @@ async fn driver_loop(
 }
 
 /// Unmarshal one server frame and route it.
-async fn route_frame(bytes: &[u8], state: &Mutex<SessionState>) -> Result<()> {
+async fn route_frame(
+    bytes: &[u8],
+    state: &Mutex<SessionState>,
+    resampler: &mut Option<SendResample>,
+) -> Result<()> {
     let msg = Message::unmarshal(bytes).context("Volcano TTS unmarshal failed")?;
     tracing::debug!(
         "Volcano TTS recv: msg_type={:?} event={:?} flag={:?} seq={} payload_len={}",
@@ -567,6 +613,18 @@ async fn route_frame(bytes: &[u8], state: &Mutex<SessionState>) -> Result<()> {
             }
 
             if !samples.is_empty() {
+                // Resample the server-rate PCM down to the 16 kHz pipeline rate
+                // using the connection-scoped FreeSWITCH resampler. `.to_vec()`
+                // copies out of the resampler's internal buffer before the borrow ends.
+                let out: Vec<i16> = if let Some(r) = resampler.as_ref() {
+                    let mut buf = samples;
+                    r.0.process(&mut buf).to_vec()
+                } else {
+                    samples
+                };
+                if out.is_empty() {
+                    return Ok(());
+                }
                 let (tx, cancelled) = {
                     let st = state.lock().await;
                     match &st.current {
@@ -577,7 +635,7 @@ async fn route_frame(bytes: &[u8], state: &Mutex<SessionState>) -> Result<()> {
                 if let Some(tx) = tx
                     && !cancelled
                 {
-                    let _ = tx.try_send(samples);
+                    let _ = tx.try_send(out);
                 }
             }
         }

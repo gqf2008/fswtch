@@ -143,27 +143,14 @@ impl Orchestrator {
             .as_ref()
             .filter(|c| !c.api.volcano_api_key.is_empty())
             .map(|c| {
-                // Pipeline is fixed at 16 kHz. The configured server sample rate is
-                // honored up to 16 kHz; a higher rate would need resampling (not yet
-                // implemented), so clamp + warn to avoid a rate mismatch that would
-                // garble playback.
-                let tts_sr = std::cmp::min(
-                    c.api.volcano_tts_sample_rate,
-                    crate::audio_dsp::PIPELINE_SAMPLE_RATE,
-                );
-                if c.api.volcano_tts_sample_rate > crate::audio_dsp::PIPELINE_SAMPLE_RATE {
-                    tracing::warn!(
-                        "volcano_tts_sample_rate={} > pipeline {}; requesting {} (24k resample TBD)",
-                        c.api.volcano_tts_sample_rate,
-                        crate::audio_dsp::PIPELINE_SAMPLE_RATE,
-                        tts_sr,
-                    );
-                }
+                // Honor the configured server output rate; the TTS driver resamples
+                // down to the 16 kHz pipeline rate with FreeSWITCH's native
+                // `switch_resample` (see `tts::driver_loop`).
                 VolcanoBidirectionalSession::new(
                     c.api.volcano_api_key.clone(),
                     c.api.volcano_resource_id.clone(),
                     c.api.volcano_speaker.clone(),
-                    tts_sr,
+                    c.api.volcano_tts_sample_rate,
                     uuid.clone(),
                 )
             });
