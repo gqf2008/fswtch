@@ -43,9 +43,20 @@ use crate::voice_core::Config;
 /// token cost on long calls).
 const MAX_HISTORY: usize = 20;
 
-/// Volcano TTS resource id (speaker family). Hard-coded to match the
-/// reference project; a future config field can override this.
-const VOLCANO_RESOURCE_ID: &str = "seed-tts-2.0";
+/// Builds the full chat-completions URL from a configured base URL.
+///
+/// `voice_seat.yaml`'s `llm_url` is the API base (e.g.
+/// `https://ark.cn-beijing.volces.com/api/v3`); the OpenAI-compatible endpoint
+/// is `{base}/chat/completions`. If the configured value already ends with the
+/// path, it is used verbatim.
+fn chat_completions_url(base: &str) -> String {
+    let trimmed = base.trim_end_matches('/');
+    if trimmed.ends_with("/chat/completions") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/chat/completions")
+    }
+}
 
 /// A single message in the LLM conversation history.
 ///
@@ -130,12 +141,29 @@ impl Orchestrator {
     pub fn new(uuid: String, config: Option<Config>, ai_speaking: Arc<AtomicBool>) -> Self {
         let tts_session = config
             .as_ref()
-            .filter(|c| !c.ai.tts_api_key.is_empty() && !c.ai.tts_endpoint.is_empty())
+            .filter(|c| !c.api.volcano_api_key.is_empty())
             .map(|c| {
+                // Pipeline is fixed at 16 kHz. The configured server sample rate is
+                // honored up to 16 kHz; a higher rate would need resampling (not yet
+                // implemented), so clamp + warn to avoid a rate mismatch that would
+                // garble playback.
+                let tts_sr = std::cmp::min(
+                    c.api.volcano_tts_sample_rate,
+                    crate::audio_dsp::PIPELINE_SAMPLE_RATE,
+                );
+                if c.api.volcano_tts_sample_rate > crate::audio_dsp::PIPELINE_SAMPLE_RATE {
+                    tracing::warn!(
+                        "volcano_tts_sample_rate={} > pipeline {}; requesting {} (24k resample TBD)",
+                        c.api.volcano_tts_sample_rate,
+                        crate::audio_dsp::PIPELINE_SAMPLE_RATE,
+                        tts_sr,
+                    );
+                }
                 VolcanoBidirectionalSession::new(
-                    c.ai.tts_api_key.clone(),
-                    VOLCANO_RESOURCE_ID.to_string(),
-                    c.ai.tts_endpoint.clone(),
+                    c.api.volcano_api_key.clone(),
+                    c.api.volcano_resource_id.clone(),
+                    c.api.volcano_speaker.clone(),
+                    tts_sr,
                     uuid.clone(),
                 )
             });
@@ -143,7 +171,7 @@ impl Orchestrator {
         // Seed the conversation with the system prompt when configured.
         let mut conversation = Vec::new();
         if let Some(cfg) = config.as_ref()
-            && let Some(prompt) = cfg.ai.system_prompt.as_ref()
+            && let Some(prompt) = cfg.system_prompt.as_ref()
             && !prompt.is_empty()
         {
             conversation.push(ChatMessage::text("system", prompt.clone()));
@@ -220,21 +248,11 @@ impl Orchestrator {
         // ── Stage 1: perception (audio → multimodal LLM message) ────────
         let wav = encode_wav(&audio, PIPELINE_SAMPLE_RATE);
         let b64 = base64::engine::general_purpose::STANDARD.encode(&wav);
-        let audio_url = format!("data:audio/wav;base64,{b64}");
 
-        // Live message for THIS turn: multimodal (audio + prompt). Not stored.
-        let live_user = ChatMessage::text("user", format!("{audio_url}\n请识别并回复这段语音内容"));
-        // Cheap history placeholder for the user audio turn. Replaced below if
-        // the model returns its own ASR transcript.
-        let user_placeholder = ChatMessage::text("user", "[用户语音]".to_string());
-
-        // Snapshot history + append the live message for the LLM call only.
-        let messages = {
-            let hist = self.conversation.lock().clone();
-            let mut v = hist;
-            v.push(live_user);
-            v
-        };
+        // The current-turn audio is passed out-of-band (not appended to history)
+        // so the LLM call can render it as OpenAI multimodal `input_audio`. The
+        // history snapshot stays text-only.
+        let messages = self.conversation.lock().clone();
 
         if self.is_cancelled() {
             tracing::info!("Orchestrator: cancelled before LLM call");
@@ -242,7 +260,7 @@ impl Orchestrator {
         }
 
         // ── Stage 2: LLM call with tools ────────────────────────────────
-        let (tool_calls, inline_text) = match self.call_llm_with_tools(&messages).await {
+        let (tool_calls, inline_text) = match self.call_llm_with_tools(&messages, &b64).await {
             Ok(pair) => pair,
             Err(e) => {
                 tracing::error!("Orchestrator LLM call failed for {}: {}", self.uuid, e);
@@ -347,7 +365,7 @@ impl Orchestrator {
         // User turn: prefer the model's ASR transcript; fall back to placeholder.
         let user_for_history = match &asr {
             Some(asr_text) if !asr_text.is_empty() => ChatMessage::text("user", asr_text.clone()),
-            _ => user_placeholder,
+            _ => ChatMessage::text("user", "[用户语音]".to_string()),
         };
         self.push_message(user_for_history);
 
@@ -464,35 +482,55 @@ impl Orchestrator {
     /// as a `speak`).
     ///
     /// The HTTP call targets an OpenAI-compatible `/chat/completions` endpoint
-    /// (configurable via `config.ai.llm_endpoint`). When no config/endpoint is
+    /// (URL built from `config.api.llm_url`). When no config/endpoint is
     /// present, or the request fails, it degrades to a canned response that
     /// echoes a `speak` tool call — this keeps the pipeline exercisable without
     /// a live backend while preserving the tool-calling structure.
     async fn call_llm_with_tools(
         &self,
         messages: &[ChatMessage],
+        live_audio_b64: &str,
     ) -> Result<(Vec<ToolCall>, String)> {
         let Some(cfg) = self.config.as_ref() else {
             return Ok(self.canned_response(messages));
         };
-        if cfg.ai.llm_endpoint.is_empty() || cfg.ai.llm_api_key.is_empty() {
+        if cfg.api.llm_url.is_empty() || cfg.api.llm_key.is_empty() {
             return Ok(self.canned_response(messages));
         }
 
-        let body = serde_json::json!({
-            "model": cfg.ai.llm_model,
-            "messages": messages.iter().map(|m| serde_json::json!({
-                "role": m.role,
-                "content": m.content,
-            })).collect::<Vec<_>>(),
+        // Render messages: history (text) + the current-turn audio as an
+        // OpenAI-compatible multimodal `input_audio` part.
+        let mut messages_json: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+            .collect();
+        messages_json.push(serde_json::json!({
+            "role": "user",
+            "content": [
+                { "type": "input_audio", "input_audio": { "data": live_audio_b64, "format": "wav" } },
+                { "type": "text", "text": "请识别并回复这段语音内容" },
+            ],
+        }));
+
+        let mut body = serde_json::json!({
+            "model": cfg.api.llm_model,
+            "messages": messages_json,
             "tools": tool_definitions(),
             "tool_choice": "auto",
         });
+        if let Some(t) = cfg.api.llm_temperature {
+            body["temperature"] = serde_json::json!(t);
+        }
+        if let Some(m) = cfg.api.llm_max_tokens {
+            body["max_tokens"] = serde_json::json!(m);
+        }
+        tracing::debug!("LLM request body: {}", body);
 
+        let url = chat_completions_url(&cfg.api.llm_url);
         let client = reqwest::Client::new();
         let resp = client
-            .post(&cfg.ai.llm_endpoint)
-            .bearer_auth(&cfg.ai.llm_api_key)
+            .post(&url)
+            .bearer_auth(&cfg.api.llm_key)
             .json(&body)
             .timeout(std::time::Duration::from_secs(30))
             .send()

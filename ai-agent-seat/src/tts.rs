@@ -74,6 +74,9 @@ struct SessionInner {
     api_key: String,
     resource_id: String,
     speaker: String,
+    /// TTS server output sample rate (Hz). Audio is resampled down to the 16 kHz
+    /// pipeline rate before being handed to `CallState::tts_accum`.
+    server_sample_rate: u32,
     call_uuid: String,
     send_mutex: Mutex<()>,
     state: Arc<Mutex<SessionState>>,
@@ -84,19 +87,27 @@ struct SessionInner {
 
 impl VolcanoBidirectionalSession {
     /// Build a session for the given credentials + speaker, bound to the
-    /// call UUID. The UUID is used for BOTH `session_id` and `section_id`
-    /// (cross-turn correlation). The connect happens later in [`start`] or
-    /// lazily in [`synthesize`].
-    pub fn new(api_key: String, resource_id: String, speaker: String, call_uuid: String) -> Self {
+    /// call UUID. `server_sample_rate` is the rate the Volcano server emits
+    /// (e.g. 24000); the pipeline resamples it to 16 kHz. The UUID is used for
+    /// BOTH `session_id` and `section_id` (cross-turn correlation). The connect
+    /// happens later in [`start`] or lazily in [`synthesize`].
+    pub fn new(
+        api_key: String,
+        resource_id: String,
+        speaker: String,
+        server_sample_rate: u32,
+        call_uuid: String,
+    ) -> Self {
         tracing::debug!(
-            "Volcano TTS session constructed: call_uuid={} (session_id=section_id=call_uuid)",
-            call_uuid
+            "Volcano TTS session constructed: call_uuid={} sr={} (session_id=section_id=call_uuid)",
+            call_uuid, server_sample_rate,
         );
         Self {
             inner: Arc::new(SessionInner {
                 api_key,
                 resource_id,
                 speaker,
+                server_sample_rate,
                 call_uuid,
                 send_mutex: Mutex::new(()),
                 state: Arc::new(Mutex::new(SessionState {
@@ -269,7 +280,7 @@ impl VolcanoBidirectionalSession {
                 "speaker": self.inner.speaker,
                 "audio_params": {
                     "format": "pcm",
-                    "sample_rate": 16000,
+                    "sample_rate": self.inner.server_sample_rate,
                 },
                 "section_id": self.inner.call_uuid,
             }
@@ -332,7 +343,7 @@ impl VolcanoBidirectionalSession {
                 "speaker": self.inner.speaker,
                 "audio_params": {
                     "format": "pcm",
-                    "sample_rate": 16000,
+                    "sample_rate": self.inner.server_sample_rate,
                 },
             }
         });

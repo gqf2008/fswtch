@@ -43,10 +43,15 @@ fswtch::module_exports! {
 }
 
 fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::ModuleBuilder> {
-    // Initialize tracing subscriber for logging
+    // Initialize tracing subscriber for logging. Output to stderr: FreeSWITCH
+    // daemonizes (closes stdout) so a plain `fmt()` subscriber writing stdout
+    // would vanish; stderr survives and is captured by `freeswitch -nf` / shell
+    // redirection. (A future tracing→`switch_log_printf` bridge will route
+    // these into the FreeSWITCH log system.)
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+        .try_init();
 
     tracing::info!("Loading ai_agent_seat module");
 
@@ -55,6 +60,19 @@ fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::Modul
         && let Err(e) = config::load(&config_path)
     {
         tracing::warn!("Failed to load config from {}: {}", config_path, e);
+    }
+    // Confirm config actually loaded (tracing → stderr; visible with `freeswitch -nf`).
+    if let Some(cfg) = config::get() {
+        tracing::info!(
+            "config loaded: pipeline={} llm_model={} llm_url={} volcano_speaker={} volcano_sr={}",
+            cfg.api.pipeline_mode,
+            cfg.api.llm_model,
+            cfg.api.llm_url,
+            cfg.api.volcano_speaker,
+            cfg.api.volcano_tts_sample_rate,
+        );
+    } else {
+        tracing::warn!("no config loaded — orchestrator will use canned responses");
     }
 
     // Start tokio runtime (LLM HTTP + Volcano TTS WebSocket).
