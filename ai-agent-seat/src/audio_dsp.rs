@@ -86,30 +86,8 @@ impl SampleRateConverter {
 /// `session_ptr` must be a valid, non-null FreeSWITCH session pointer obtained from a live
 /// `fswtch::Session` (or equivalent). The caller must ensure the session remains valid for the
 /// duration of this call.
-pub unsafe fn get_codec_rate(session_ptr: *mut fswtch::sys::switch_core_session_t) -> u32 {
-    if session_ptr.is_null() {
-        return 8000;
-    }
-
-    // SAFETY: `session_ptr` is a live session pointer per the caller's contract.
-    let codec_ptr = unsafe { fswtch::sys::switch_core_session_get_read_codec(session_ptr) };
-    if codec_ptr.is_null() {
-        return 8000;
-    }
-
-    // SAFETY: `codec_ptr` is non-null and points at the session's read codec, which is live
-    // for the session's lifetime.
-    let codec = unsafe { &*codec_ptr };
-
-    // `switch_codec_t.implementation` is a pointer to `switch_codec_implementation_t`; the
-    // implementation struct holds `actual_samples_per_second` directly (no `read_impl` layer).
-    let implementation_ptr = codec.implementation;
-    if implementation_ptr.is_null() {
-        return 8000;
-    }
-
-    // SAFETY: `implementation_ptr` is non-null and owned by the codec (populated by FreeSWITCH
-    // during codec initialization).
-    let implementation = unsafe { &*implementation_ptr };
-    implementation.actual_samples_per_second
+/// Returns the session's read-codec sample rate (Hz), defaulting to `8000`
+/// when no codec is set. Thin wrapper over `fswtch::Session::read_sample_rate`.
+pub fn get_codec_rate(session: &fswtch::Session) -> u32 {
+    session.read_sample_rate()
 }

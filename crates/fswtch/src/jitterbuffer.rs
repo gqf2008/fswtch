@@ -177,7 +177,7 @@ impl JitterBuffer {
                     line!() as _,
                 )
             };
-            return Err(SwitchError(status));
+            return Err(SwitchError(crate::Status::from_raw(status)));
         }
         let raw = NonNull::new(jb).ok_or(SwitchError(GENERR))?;
 
@@ -199,17 +199,17 @@ impl JitterBuffer {
     /// Queues a complete RTP packet (header + payload) into the buffer.
     ///
     /// `len` is the *total* number of meaningful bytes in `packet` (header plus payload),
-    /// which FreeSWITCH uses to size internal copies. The packet struct is borrowed for the
-    /// call only; it is copied into the buffer.
+    /// which FreeSWITCH uses to size internal copies. The packet is borrowed for the call only;
+    /// it is copied into the buffer.
     ///
     /// Wraps `switch_jb_put_packet`.
-    pub fn put_packet(&self, packet: &sys::switch_rtp_packet_t, len: usize) -> Result<()> {
-        // SAFETY: `self.raw` is a live buffer; `packet` is a shared reference to a valid
-        // struct for the duration of the call (read-only access from C).
+    pub fn put_packet(&self, packet: &crate::RtpPacket<'_>, len: usize) -> Result<()> {
+        // SAFETY: `self.raw` is a live buffer; `packet.as_ptr()` is a valid pointer to a
+        // `switch_rtp_packet_t` borrowed for the duration of the call (read-only access from C).
         let status = unsafe {
             sys::switch_jb_put_packet(
                 self.raw.as_ptr(),
-                packet as *const sys::switch_rtp_packet_t as *mut sys::switch_rtp_packet_t,
+                packet.as_ptr(),
                 len,
             )
         };

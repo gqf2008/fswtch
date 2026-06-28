@@ -545,14 +545,13 @@ async fn route_frame(bytes: &[u8], state: &Mutex<SessionState>) -> Result<()> {
 
             {
                 let st = state.lock().await;
-                if let Some(task) = &st.current {
-                    if !task
+                if let Some(task) = &st.current
+                    && !task
                         .first_chunk_emitted
                         .swap(true, std::sync::atomic::Ordering::Relaxed)
-                    {
-                        let ms = task.start.elapsed().as_millis() as f64;
-                        tracing::info!(target: "pipeline", "Volcano TTS 首Chunk: {:.1}ms", ms);
-                    }
+                {
+                    let ms = task.start.elapsed().as_millis() as f64;
+                    tracing::info!(target: "pipeline", "Volcano TTS 首Chunk: {:.1}ms", ms);
                 }
             }
 
@@ -603,54 +602,15 @@ fn parse_pcm_le(bytes: &[u8]) -> Vec<i16> {
 
 // ── TTS signal + helpers (consumed by the orchestrator) ───────────────
 
-use tokio::sync::mpsc;
-
-use crate::audio_dsp::PIPELINE_SAMPLE_RATE;
-
-/// Maximum number of TTS chunks buffered in the channel.
+/// Maximum number of raw PCM chunks buffered between the Volcano session and
+/// the orchestrator's forwarder task.
 const TTS_CHANNEL_CAPACITY: usize = 64;
 
-/// Size (in 16 kHz mono i16 samples) of each chunk pushed to the media bug.
-/// 320 samples = 20 ms at 16 kHz.
-const TTS_CHUNK_SAMPLES: usize = 320;
+/// Size (in 16 kHz mono i16 samples) of each chunk pushed into the TTS
+/// accumulator. 320 samples = 20 ms at 16 kHz.
+pub const TTS_CHUNK_SAMPLES: usize = 320;
 
-/// Signals crossing the orchestrator → media-bug boundary for TTS playback.
-///
-/// The orchestrator owns the producer end (`mpsc::Sender<TtsSignal>`); the
-/// media bug drains the receiver and either plays back PCM (`Chunk`) or flushes
-/// its buffer (`ClearBuffer`, on barge-in).
-#[derive(Debug)]
-pub enum TtsSignal {
-    /// A chunk of 16 kHz mono i16 PCM to play toward the caller.
-    Chunk(Vec<i16>),
-    /// Barge-in: drop any buffered TTS audio immediately.
-    ClearBuffer,
-}
-
-/// Returns the sample rate TTS audio is produced at (16 kHz).
-pub fn tts_sample_rate() -> u32 {
-    PIPELINE_SAMPLE_RATE
-}
-
-/// Split a flat PCM sample buffer into 20 ms (320-sample) chunks wrapped in
-/// [`TtsSignal::Chunk`], and send them sequentially on `tts_tx`.
-///
-/// The orchestrator calls this to forward the raw `Vec<i16>` audio it receives
-/// from [`VolcanoBidirectionalSession::synthesize`] into the media-bug channel
-/// (which expects 320-sample chunks).
-pub async fn forward_pcm_chunked(tts_tx: &mpsc::Sender<TtsSignal>, audio: Vec<i16>) {
-    let mut start = 0;
-    while start < audio.len() {
-        let end = (start + TTS_CHUNK_SAMPLES).min(audio.len());
-        let chunk = audio[start..end].to_vec();
-        if tts_tx.send(TtsSignal::Chunk(chunk)).await.is_err() {
-            return;
-        }
-        start = end;
-    }
-}
-
-/// Capacity of the TTS channel (orchestrator → media bug).
+/// Capacity of the raw-PCM channel (Volcano session → forwarder task).
 pub fn tts_channel_capacity() -> usize {
     TTS_CHANNEL_CAPACITY
 }

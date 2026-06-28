@@ -1,20 +1,20 @@
 use std::{ffi::c_char, ptr::NonNull};
 
 use crate::{
-    GENERR, Result, StaticCStr, Status, SwitchError,
+    GENERR, Result, StaticCStr, SwitchError,
     sys::{self},
 };
 
 // Callback type aliases for interfaces whose fields are inline `Option<fn>` (no bindgen typedef).
 pub type ChatSendFn =
-    Option<unsafe extern "C" fn(message_event: *mut sys::switch_event_t) -> Status>;
+    Option<unsafe extern "C" fn(message_event: *mut sys::switch_event_t) -> sys::switch_status_t>;
 pub type ManagementFn = Option<
     unsafe extern "C" fn(
         relative_oid: *mut c_char,
         action: sys::switch_management_action_t,
         data: *mut c_char,
         datalen: sys::switch_size_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type LimitIncrFn = Option<
     unsafe extern "C" fn(
@@ -23,14 +23,14 @@ pub type LimitIncrFn = Option<
         resource: *const c_char,
         max: std::os::raw::c_int,
         interval: std::os::raw::c_int,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type LimitReleaseFn = Option<
     unsafe extern "C" fn(
         session: *mut sys::switch_core_session_t,
         realm: *const c_char,
         resource: *const c_char,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type LimitUsageFn = Option<
     unsafe extern "C" fn(
@@ -39,37 +39,37 @@ pub type LimitUsageFn = Option<
         rcount: *mut u32,
     ) -> std::os::raw::c_int,
 >;
-pub type LimitResetFn = Option<unsafe extern "C" fn() -> Status>;
+pub type LimitResetFn = Option<unsafe extern "C" fn() -> sys::switch_status_t>;
 pub type LimitStatusFn = Option<unsafe extern "C" fn() -> *mut c_char>;
 pub type LimitIntervalResetFn =
-    Option<unsafe extern "C" fn(realm: *const c_char, resource: *const c_char) -> Status>;
-pub type TimerInitFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
-pub type TimerNextFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
-pub type TimerStepFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
-pub type TimerSyncFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
+    Option<unsafe extern "C" fn(realm: *const c_char, resource: *const c_char) -> sys::switch_status_t>;
+pub type TimerInitFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
+pub type TimerNextFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
+pub type TimerStepFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
+pub type TimerSyncFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
 pub type TimerCheckFn = Option<
-    unsafe extern "C" fn(arg1: *mut sys::switch_timer_t, arg2: sys::switch_bool_t) -> Status,
+    unsafe extern "C" fn(arg1: *mut sys::switch_timer_t, arg2: sys::switch_bool_t) -> sys::switch_status_t,
 >;
-pub type TimerDestroyFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> Status>;
+pub type TimerDestroyFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
 pub type FileOpenFn = Option<
-    unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, file_path: *const c_char) -> Status,
+    unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, file_path: *const c_char) -> sys::switch_status_t,
 >;
-pub type FileCloseFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t) -> Status>;
+pub type FileCloseFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t) -> sys::switch_status_t>;
 pub type FileTruncateFn =
-    Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, offset: i64) -> Status>;
+    Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, offset: i64) -> sys::switch_status_t>;
 pub type FileReadFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_file_handle_t,
         data: *mut std::ffi::c_void,
         len: *mut sys::switch_size_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type FileWriteFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_file_handle_t,
         data: *mut std::ffi::c_void,
         len: *mut sys::switch_size_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type SpeechOpenFn = Option<
     unsafe extern "C" fn(
@@ -78,20 +78,20 @@ pub type SpeechOpenFn = Option<
         rate: std::os::raw::c_int,
         channels: std::os::raw::c_int,
         flags: *mut sys::switch_speech_flag_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type SpeechCloseFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_speech_handle_t,
         flags: *mut sys::switch_speech_flag_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type SpeechFeedTtsFn = Option<
     unsafe extern "C" fn(
         sh: *mut sys::switch_speech_handle_t,
         text: *mut c_char,
         flags: *mut sys::switch_speech_flag_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type SpeechReadTtsFn = Option<
     unsafe extern "C" fn(
@@ -99,7 +99,7 @@ pub type SpeechReadTtsFn = Option<
         data: *mut std::ffi::c_void,
         datalen: *mut sys::switch_size_t,
         flags: *mut sys::switch_speech_flag_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type AsrOpenFn = Option<
     unsafe extern "C" fn(
@@ -108,22 +108,22 @@ pub type AsrOpenFn = Option<
         rate: std::os::raw::c_int,
         dest: *const c_char,
         flags: *mut sys::switch_asr_flag_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type AsrLoadGrammarFn = Option<
     unsafe extern "C" fn(
         ah: *mut sys::switch_asr_handle_t,
         grammar: *const c_char,
         name: *const c_char,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type AsrUnloadGrammarFn =
-    Option<unsafe extern "C" fn(ah: *mut sys::switch_asr_handle_t, name: *const c_char) -> Status>;
+    Option<unsafe extern "C" fn(ah: *mut sys::switch_asr_handle_t, name: *const c_char) -> sys::switch_status_t>;
 pub type AsrCloseFn = Option<
     unsafe extern "C" fn(
         ah: *mut sys::switch_asr_handle_t,
         flags: *mut sys::switch_asr_flag_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type AsrFeedFn = Option<
     unsafe extern "C" fn(
@@ -131,7 +131,7 @@ pub type AsrFeedFn = Option<
         data: *mut std::ffi::c_void,
         len: std::os::raw::c_uint,
         flags: *mut sys::switch_asr_flag_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type DirectoryOpenFn = Option<
     unsafe extern "C" fn(
@@ -139,34 +139,34 @@ pub type DirectoryOpenFn = Option<
         source: *mut c_char,
         dsn: *mut c_char,
         passwd: *mut c_char,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type DirectoryCloseFn =
-    Option<unsafe extern "C" fn(dh: *mut sys::switch_directory_handle_t) -> Status>;
+    Option<unsafe extern "C" fn(dh: *mut sys::switch_directory_handle_t) -> sys::switch_status_t>;
 pub type DirectoryQueryFn = Option<
     unsafe extern "C" fn(
         dh: *mut sys::switch_directory_handle_t,
         base: *mut c_char,
         query: *mut c_char,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type DirectoryNextFn =
-    Option<unsafe extern "C" fn(dh: *mut sys::switch_directory_handle_t) -> Status>;
+    Option<unsafe extern "C" fn(dh: *mut sys::switch_directory_handle_t) -> sys::switch_status_t>;
 pub type DirectoryNextPairFn = Option<
     unsafe extern "C" fn(
         dh: *mut sys::switch_directory_handle_t,
         var: *mut *mut c_char,
         val: *mut *mut c_char,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type DbHandleNewFn = Option<
     unsafe extern "C" fn(
         database_interface_options: sys::switch_cache_db_database_interface_options_t,
         dih: *mut *mut sys::switch_database_interface_handle_t,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 pub type DbHandleDestroyFn =
-    Option<unsafe extern "C" fn(dih: *mut *mut sys::switch_database_interface_handle_t) -> Status>;
+    Option<unsafe extern "C" fn(dih: *mut *mut sys::switch_database_interface_handle_t) -> sys::switch_status_t>;
 pub type DbExecDetailedFn = Option<
     unsafe extern "C" fn(
         file: *const c_char,
@@ -175,7 +175,7 @@ pub type DbExecDetailedFn = Option<
         dih: *mut sys::switch_database_interface_handle_t,
         sql: *const c_char,
         err: *mut *mut c_char,
-    ) -> Status,
+    ) -> sys::switch_status_t,
 >;
 
 #[derive(Copy, Clone)]
@@ -224,7 +224,7 @@ impl Module {
             *const c_char,
             *mut sys::switch_core_session_t,
             *mut sys::switch_stream_handle_t,
-        ) -> Status,
+        ) -> sys::switch_status_t,
     ) -> Result<ApiInterface> {
         let name = name.into_static_cstr()?;
         let description = description.into_static_cstr()?;
@@ -275,7 +275,7 @@ impl Module {
     pub fn add_chat_application(
         self,
         info: ApplicationInfo,
-        function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> Status,
+        function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> sys::switch_status_t,
     ) -> Result<ChatApplicationInterface> {
         let strings = info.into_cstrings()?;
         let application = create_interface::<sys::switch_chat_application_interface_t>(
@@ -301,6 +301,7 @@ impl Module {
         self,
         name: impl StaticCStr,
         io_routines: *mut sys::switch_io_routines_t,
+        state_handler: *mut sys::switch_state_handler_table_t,
     ) -> Result<EndpointInterface> {
         let name = name.into_static_cstr()?;
         let endpoint = create_interface::<sys::switch_endpoint_interface_t>(
@@ -309,11 +310,15 @@ impl Module {
         )?;
 
         // SAFETY: `endpoint` is a valid interface allocation returned by FreeSWITCH. `name` has a
-        // static lifetime, and the caller supplies module-owned I/O routine storage.
+        // static lifetime, and the caller supplies module-owned I/O routine storage and state
+        // handler table. FreeSWITCH's state machine (`switch_core_session_run`) asserts
+        // `state_handler != NULL`, so the caller MUST provide a non-null table (all-NULL
+        // callbacks are valid — each `on_*` NULL entry is treated as "no-op success").
         unsafe {
             let endpoint_ref = endpoint.as_ptr();
             (*endpoint_ref).interface_name = name.as_ptr();
             (*endpoint_ref).io_routines = io_routines;
+            (*endpoint_ref).state_handler = state_handler;
         }
 
         Ok(EndpointInterface { raw: endpoint })
@@ -693,7 +698,7 @@ impl ModuleBuilder {
             *const c_char,
             *mut sys::switch_core_session_t,
             *mut sys::switch_stream_handle_t,
-        ) -> Status,
+        ) -> sys::switch_status_t,
     ) -> Result<Self> {
         self.module.add_api(name, description, syntax, function)?;
         Ok(self)
@@ -711,7 +716,7 @@ impl ModuleBuilder {
     pub fn chat_application(
         self,
         info: ApplicationInfo,
-        function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> Status,
+        function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> sys::switch_status_t,
     ) -> Result<Self> {
         self.module.add_chat_application(info, function)?;
         Ok(self)
@@ -721,8 +726,9 @@ impl ModuleBuilder {
         self,
         name: impl StaticCStr,
         io_routines: *mut sys::switch_io_routines_t,
+        state_handler: *mut sys::switch_state_handler_table_t,
     ) -> Result<Self> {
-        self.module.add_endpoint(name, io_routines)?;
+        self.module.add_endpoint(name, io_routines, state_handler)?;
         Ok(self)
     }
 

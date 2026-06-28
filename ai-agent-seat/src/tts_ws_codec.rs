@@ -103,74 +103,55 @@ impl Default for MsgTypeFlagBits {
 }
 
 /// Version bits (high nibble of header byte 0).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum VersionBits {
+    #[default]
     Version1 = 1,
     Version2 = 2,
     Version3 = 3,
     Version4 = 4,
 }
 
-impl Default for VersionBits {
-    fn default() -> Self {
-        VersionBits::Version1
-    }
-}
-
 /// Header-size bits (low nibble of header byte 0); value `n` means a
 /// `4 * n` byte fixed header.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum HeaderSizeBits {
+    #[default]
     HeaderSize4 = 1,
     HeaderSize8 = 2,
     HeaderSize12 = 3,
     HeaderSize16 = 4,
 }
 
-impl Default for HeaderSizeBits {
-    fn default() -> Self {
-        HeaderSizeBits::HeaderSize4
-    }
-}
-
 /// Serialization method (high nibble of header byte 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum SerializationBits {
     Raw = 0,
+    #[default]
     JSON = 0b1,
     Thrift = 0b11,
     Custom = 0b1111,
 }
 
-impl Default for SerializationBits {
-    fn default() -> Self {
-        SerializationBits::JSON
-    }
-}
-
 /// Compression method (low nibble of header byte 2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
 pub enum CompressionBits {
+    #[default]
     None = 0,
     Gzip = 0b1,
     Custom = 0b1111,
 }
 
-impl Default for CompressionBits {
-    fn default() -> Self {
-        CompressionBits::None
-    }
-}
-
 /// Event type enumeration. Values are `i32` to match the Python `IntEnum`
 /// and the on-wire `>i` (signed 32-bit big-endian) encoding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(i32)]
 pub enum EventType {
+    #[default]
     None = 0,
 
     // 1 ~ 49 Upstream Connection events
@@ -233,12 +214,6 @@ pub enum EventType {
     TranslationSubtitleStart = 653,
     TranslationSubtitleResponse = 654,
     TranslationSubtitleEnd = 655,
-}
-
-impl Default for EventType {
-    fn default() -> Self {
-        EventType::None
-    }
 }
 
 impl EventType {
@@ -565,7 +540,7 @@ impl Message {
 
         let header_size_bytes = 4 * self.header_size.as_u8() as usize;
         let padding = header_size_bytes.saturating_sub(out.len());
-        out.extend(std::iter::repeat(0u8).take(padding));
+        out.extend(std::iter::repeat_n(0u8, padding));
 
         // --- Writers (verbatim order from _get_writers) ---
 

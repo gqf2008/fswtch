@@ -165,10 +165,10 @@ where
     // SAFETY: `session` is live and `state` remains allocated until close or failure cleanup.
     let status = call_ffi!(add_media_bug::<H>(session, config, state.cast(), &mut bug));
 
-    if status != crate::SUCCESS {
+    if status != crate::SUCCESS.raw() {
         // SAFETY: FreeSWITCH did not take ownership on failure.
         call_ffi!(drop(Box::from_raw(state)));
-        return Err(SwitchError(status));
+        return Err(SwitchError(crate::Status::from_raw(status)));
     }
 
     let Some(raw) = NonNull::new(bug) else {
@@ -427,6 +427,85 @@ impl<'a> MediaFrameMut<'a> {
             bytes.as_mut_ptr().cast::<i16>(),
             bytes.len() / size_of::<i16>(),
         )))
+    }
+
+    // ── Frame field accessors for endpoint read_frame implementations ──────
+    //
+    // FreeSWITCH's `switch_frame_t` distinguishes `buflen` (the capacity of the
+    // data buffer in bytes) from `datalen` (the actual payload length). When
+    // FreeSWITCH hands a fresh frame to an endpoint's `read_frame` callback,
+    // `datalen` may be 0 even though `buflen` holds the real capacity; a
+    // `read_frame` implementation must write PCM into `data` and then set
+    // `datalen`/`samples` to the amounts it produced. These accessors let
+    // safe code do that without touching `unsafe`.
+
+    /// The frame's `samples` field — the number of PCM samples the codec
+    /// expects in this frame (e.g. 160 for 8 kHz / 20 ms).
+    pub fn samples_field(&self) -> u32 {
+        // SAFETY: `self.raw` is a live frame.
+        call_ffi!(self.raw.as_ref().samples)
+    }
+
+    /// The frame's `buflen` field — the capacity of `data` in bytes.
+    pub fn buflen_field(&self) -> u32 {
+        // SAFETY: `self.raw` is a live frame.
+        call_ffi!(self.raw.as_ref().buflen)
+    }
+
+    /// The frame's `datalen` field — the current payload length in bytes.
+    pub fn datalen_field(&self) -> u32 {
+        // SAFETY: `self.raw` is a live frame.
+        call_ffi!(self.raw.as_ref().datalen)
+    }
+
+    /// Sets the frame's `datalen` (actual payload bytes). Use after writing
+    /// PCM so FreeSWITCH knows how much data the frame carries.
+    pub fn set_datalen(&mut self, bytes: u32) {
+        // SAFETY: `self.raw` is a live frame we may mutate.
+        call_ffi!(self.raw.as_mut().datalen = bytes);
+    }
+
+    /// Sets the frame's `samples` (actual PCM sample count). Use after writing
+    /// PCM so FreeSWITCH's codec layer agrees with the payload length.
+    pub fn set_samples(&mut self, samples: u32) {
+        // SAFETY: `self.raw` is a live frame we may mutate.
+        call_ffi!(self.raw.as_mut().samples = samples);
+    }
+
+    /// Returns a mutable i16 PCM slice sized for one codec frame of output,
+    /// using `samples` and `buflen` to derive the capacity (not `datalen`,
+    /// which may be 0 on a fresh frame). Sets `datalen` to the byte length of
+    /// the returned slice so `read_frame` callers only need to fill it.
+    ///
+    /// Returns `None` when `data` is null, `samples` is 0, or the buffer is
+    /// too small / mis-aligned for i16.
+    pub fn pcm_i16_output(&mut self) -> Option<&mut [i16]> {
+        // SAFETY: `self.raw` is a live frame.
+        let frame = call_ffi!(self.raw.as_ref());
+        if frame.data.is_null() {
+            return None;
+        }
+        let samples = frame.samples;
+        let buflen = frame.buflen;
+        if samples == 0 || buflen == 0 {
+            return None;
+        }
+        // i16 count: no more than the codec's expected samples, and no more
+        // than the buffer can hold.
+        let i16_cap = (samples as usize).min((buflen as usize) / std::mem::size_of::<i16>());
+        if i16_cap == 0 {
+            return None;
+        }
+        let data_ptr = frame.data.cast::<i16>();
+        if !(data_ptr as usize).is_multiple_of(std::mem::align_of::<i16>()) {
+            return None;
+        }
+        // Set datalen so downstream sees the payload length.
+        call_ffi!(self.raw.as_mut().datalen = (i16_cap * std::mem::size_of::<i16>()) as u32);
+        // SAFETY: `data_ptr` is a live, non-null, i16-aligned buffer of at
+        // least `i16_cap` elements (derived from `buflen`); uniquely borrowed
+        // through this mutable frame wrapper.
+        Some(call_ffi!(slice::from_raw_parts_mut(data_ptr, i16_cap)))
     }
 }
 

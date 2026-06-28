@@ -37,3 +37,31 @@ where
         }
     }
 }
+
+/// Run `f` under a panic guard, returning [`fswtch::Status`].
+///
+/// Like [`catch_fs`] but specialized for I/O callbacks that return a
+/// `switch_status_t` (which does not implement `Default`). On a panic the
+/// status is [`fswtch::FALSE`] ("false" / non-success) so FreeSWITCH treats the
+/// frame as not-produced and continues, rather than unwinding into the media
+/// loop and crashing the process.
+pub fn catch_fs_status<F>(f: F) -> fswtch::Status
+where
+    F: FnOnce() -> fswtch::Status,
+{
+    match panic::catch_unwind(AssertUnwindSafe(f)) {
+        Ok(s) => s,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<&'static str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic>".to_string());
+            fswtch::log_error(
+                "ai_agent_seat",
+                format!("panic caught at FS boundary (downgrading to FALSE): {msg}"),
+            );
+            fswtch::FALSE
+        }
+    }
+}

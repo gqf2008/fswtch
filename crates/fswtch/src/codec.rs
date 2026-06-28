@@ -156,7 +156,7 @@ impl Drop for Codec {
         // SAFETY: `self.raw` is a live, initialized codec owned by this wrapper. `destroy` releases
         // the codec's module-level resources; the box allocation is freed immediately after.
         let status = unsafe { sys::switch_core_codec_destroy(self.raw.as_ptr()) };
-        if status != crate::SUCCESS {
+        if status != crate::SUCCESS.raw() {
             crate::log_error("codec", "codec destroy returned non-success status");
         }
         // SAFETY: `self.raw` was produced by `Box::into_raw` in `new`; it is now reclaimed.

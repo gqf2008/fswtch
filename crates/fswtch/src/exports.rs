@@ -23,7 +23,22 @@ macro_rules! module_exports {
             $crate::sys::switch_loadable_module_function_table_t {
                 switch_api_version: $crate::sys::SWITCH_API_VERSION as _,
                 load: Some($load),
-                shutdown: $shutdown,
+                shutdown: {
+                    // Trampoline: the user supplies `shutdown` as
+                    // `Option<extern "C" fn() -> fswtch::Status>`; FreeSWITCH's function table
+                    // wants `Option<extern "C" fn() -> sys::switch_status_t>`. We bridge the
+                    // newtype here so module authors write `-> fswtch::Status` and never touch
+                    // `sys` at the FFI boundary.
+                    extern "C" fn __fswtch_shutdown_wrap() -> $crate::sys::switch_status_t {
+                        // `let` (not `const`) so fn-item → fn-pointer coercion applies.
+                        let user: Option<extern "C" fn() -> $crate::Status> = $shutdown;
+                        match user {
+                            Some(f) => f().raw(),
+                            None => $crate::sys::switch_status_t::SWITCH_STATUS_FALSE,
+                        }
+                    }
+                    Some(__fswtch_shutdown_wrap)
+                },
                 runtime: $runtime,
                 flags: 0,
             };

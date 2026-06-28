@@ -15,12 +15,36 @@ use std::ptr::NonNull;
 
 use crate::{Result, SwitchError, cstring, status_to_result, strdup_to_string, sys};
 
-/// The image formats recognized by FreeSWITCH's image layer (`switch_img_fmt_t`, an alias of
+/// The image format used by FreeSWITCH's image layer (`switch_img_fmt_t`, an alias of
 /// libvpx's `vpx_img_fmt_t`).
 ///
-/// Re-exported verbatim from the bindgen bindings so callers can name the value they need
-/// (e.g. [`sys::vpx_img_fmt_VPX_IMG_FMT_I420`]) without re-importing `sys` themselves.
-pub type ImageFormat = sys::switch_img_fmt_t;
+/// Newtype wrapper so callers cannot mix it with other `u32` flags. Only the formats
+/// FreeSWITCH's image layer actually produces are exposed as associated constants;
+/// `from_raw` covers any other `vpx_img_fmt_*` value.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ImageFormat(pub sys::switch_img_fmt_t);
+
+impl ImageFormat {
+    /// No format (sentinel for an uninitialised image).
+    pub const NONE: Self = Self(sys::vpx_img_fmt_VPX_IMG_FMT_NONE);
+    /// 8-bit YUV 4:2:0 — the format FreeSWITCH's video layer produces for H.26x codecs.
+    pub const I420: Self = Self(sys::vpx_img_fmt_VPX_IMG_FMT_I420);
+    /// 16-bit YUV 4:2:0.
+    pub const I42016: Self = Self(sys::vpx_img_fmt_VPX_IMG_FMT_I42016);
+
+    /// The raw `switch_img_fmt_t` value, for FFI.
+    #[inline]
+    pub const fn raw(self) -> sys::switch_img_fmt_t {
+        self.0
+    }
+
+    /// Wraps a raw format value (e.g. any `sys::vpx_img_fmt_*` constant).
+    #[inline]
+    pub const fn from_raw(v: sys::switch_img_fmt_t) -> Self {
+        Self(v)
+    }
+}
 
 /// An 8-bit-per-channel RGBA color, matching FreeSWITCH's `switch_rgb_color_t`.
 ///
@@ -255,7 +279,7 @@ impl Image {
     pub fn alloc(fmt: ImageFormat, width: u32, height: u32, align: u32) -> Result<Self> {
         // SAFETY: A null `img` argument requests a fresh allocation, which is the owned path we
         // want. The returned pointer is NULL on allocation failure.
-        let raw = unsafe { sys::switch_img_alloc(std::ptr::null_mut(), fmt, width, height, align) };
+        let raw = unsafe { sys::switch_img_alloc(std::ptr::null_mut(), fmt.raw(), width, height, align) };
         // SAFETY: `raw` is NULL on failure; otherwise it is a live owned image.
         unsafe { Self::from_raw(raw) }.ok_or(SwitchError(crate::GENERR))
     }
@@ -275,7 +299,7 @@ impl Image {
     /// Returns the image's pixel format.
     pub fn format(&self) -> ImageFormat {
         // SAFETY: `self.raw` is a live image; `fmt` is a plain field read.
-        unsafe { (*self.raw.as_ptr()).fmt }
+        unsafe { ImageFormat::from_raw((*self.raw.as_ptr()).fmt) }
     }
 
     /// Adjusts the image's viewport — the visible rectangle of the underlying buffer — without
@@ -469,7 +493,7 @@ impl Image {
             sys::switch_img_from_raw(
                 &mut raw,
                 data.as_ptr().cast_mut().cast(),
-                fmt,
+                fmt.raw(),
                 width as i32,
                 height as i32,
             )
@@ -658,7 +682,7 @@ impl CachedImage<'_> {
     /// The cached image's pixel format.
     pub fn format(&self) -> ImageFormat {
         // SAFETY: `self.raw` is a live image; `fmt` is a plain field read.
-        unsafe { (*self.raw.as_ptr()).fmt }
+        unsafe { ImageFormat::from_raw((*self.raw.as_ptr()).fmt) }
     }
 }
 

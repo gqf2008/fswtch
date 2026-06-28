@@ -13,6 +13,194 @@ macro_rules! call_ffi {
     }};
 }
 
+// ── EventType ────────────────────────────────────────────────────────────
+
+/// FreeSWITCH event type (`switch_event_types_t`). A single-valued enum — pass to
+/// [`Event::new`]/[`EventBinder::bind`] by value and read back with [`raw`](Self::raw).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct EventType(pub sys::switch_event_types_t);
+
+impl EventType {
+    pub const CUSTOM: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CUSTOM);
+    pub const CLONE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CLONE);
+    pub const CHANNEL_CREATE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CREATE);
+    pub const CHANNEL_DESTROY: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_DESTROY);
+    pub const CHANNEL_STATE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_STATE);
+    pub const CHANNEL_CALLSTATE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CALLSTATE);
+    pub const CHANNEL_ANSWER: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_ANSWER);
+    pub const CHANNEL_HANGUP: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_HANGUP);
+    pub const CHANNEL_HANGUP_COMPLETE: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_HANGUP_COMPLETE);
+    pub const CHANNEL_EXECUTE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_EXECUTE);
+    pub const CHANNEL_EXECUTE_COMPLETE: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_EXECUTE_COMPLETE);
+    pub const CHANNEL_HOLD: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_HOLD);
+    pub const CHANNEL_UNHOLD: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_UNHOLD);
+    pub const CHANNEL_BRIDGE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_BRIDGE);
+    pub const CHANNEL_UNBRIDGE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_UNBRIDGE);
+    pub const CHANNEL_PROGRESS: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_PROGRESS);
+    pub const CHANNEL_PROGRESS_MEDIA: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_PROGRESS_MEDIA);
+    pub const CHANNEL_OUTGOING: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_OUTGOING);
+    pub const CHANNEL_PARK: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_PARK);
+    pub const CHANNEL_UNPARK: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_UNPARK);
+    pub const CHANNEL_APPLICATION: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_APPLICATION);
+    pub const CHANNEL_ORIGINATE: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_ORIGINATE);
+    pub const CHANNEL_UUID: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_UUID);
+    pub const API: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_API);
+    pub const LOG: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_LOG);
+    pub const INBOUND_CHAN: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_INBOUND_CHAN);
+    pub const OUTBOUND_CHAN: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_OUTBOUND_CHAN);
+    pub const STARTUP: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_STARTUP);
+    pub const SHUTDOWN: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_SHUTDOWN);
+    pub const PUBLISH: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_PUBLISH);
+    pub const UNPUBLISH: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_UNPUBLISH);
+    pub const TALK: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_TALK);
+    pub const NOTALK: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_NOTALK);
+    pub const SESSION_CRASH: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_SESSION_CRASH);
+    pub const MODULE_LOAD: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_MODULE_LOAD);
+    pub const MODULE_UNLOAD: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_MODULE_UNLOAD);
+    pub const DTMF: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_DTMF);
+    pub const MESSAGE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_MESSAGE);
+    pub const PRESENCE_IN: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_PRESENCE_IN);
+    pub const NOTIFY_IN: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_NOTIFY_IN);
+    pub const PRESENCE_OUT: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_PRESENCE_OUT);
+    pub const PRESENCE_PROBE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_PRESENCE_PROBE);
+    pub const MESSAGE_WAITING: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_MESSAGE_WAITING);
+    pub const MESSAGE_QUERY: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_MESSAGE_QUERY);
+    pub const ROSTER: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_ROSTER);
+    pub const CODEC: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CODEC);
+    pub const BACKGROUND_JOB: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_BACKGROUND_JOB);
+    pub const DETECTED_SPEECH: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_DETECTED_SPEECH);
+    pub const DETECTED_TONE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_DETECTED_TONE);
+    pub const PRIVATE_COMMAND: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_PRIVATE_COMMAND);
+    pub const HEARTBEAT: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_HEARTBEAT);
+    pub const TRAP: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_TRAP);
+    pub const ADD_SCHEDULE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_ADD_SCHEDULE);
+    pub const DEL_SCHEDULE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_DEL_SCHEDULE);
+    pub const EXE_SCHEDULE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_EXE_SCHEDULE);
+    pub const RE_SCHEDULE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_RE_SCHEDULE);
+    pub const RELOAD_XML: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_RELOADXML);
+    pub const NOTIFY: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_NOTIFY);
+    pub const PHONE_FEATURE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_PHONE_FEATURE);
+    pub const PHONE_FEATURE_SUBSCRIBE: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_PHONE_FEATURE_SUBSCRIBE);
+    pub const SEND_MESSAGE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_SEND_MESSAGE);
+    pub const RECV_MESSAGE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_RECV_MESSAGE);
+    pub const REQUEST_PARAMS: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_REQUEST_PARAMS);
+    pub const CHANNEL_DATA: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_DATA);
+    pub const GENERAL: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_GENERAL);
+    pub const COMMAND: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_COMMAND);
+    pub const SESSION_HEARTBEAT: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_SESSION_HEARTBEAT);
+    pub const CLIENT_DISCONNECTED: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CLIENT_DISCONNECTED);
+    pub const SERVER_DISCONNECTED: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_SERVER_DISCONNECTED);
+    pub const SEND_INFO: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_SEND_INFO);
+    pub const RECV_INFO: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_RECV_INFO);
+    pub const RECV_RTCP_MESSAGE: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_RECV_RTCP_MESSAGE);
+    pub const SEND_RTCP_MESSAGE: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_SEND_RTCP_MESSAGE);
+    pub const CALL_SECURE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CALL_SECURE);
+    pub const NAT: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_NAT);
+    pub const RECORD_START: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_RECORD_START);
+    pub const RECORD_STOP: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_RECORD_STOP);
+    pub const PLAYBACK_START: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_PLAYBACK_START);
+    pub const PLAYBACK_STOP: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_PLAYBACK_STOP);
+    pub const CALL_UPDATE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CALL_UPDATE);
+    pub const FAILURE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_FAILURE);
+    pub const SOCKET_DATA: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_SOCKET_DATA);
+    pub const MEDIA_BUG_START: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_MEDIA_BUG_START);
+    pub const MEDIA_BUG_STOP: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_MEDIA_BUG_STOP);
+    pub const CONFERENCE_DATA_QUERY: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CONFERENCE_DATA_QUERY);
+    pub const CONFERENCE_DATA: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CONFERENCE_DATA);
+    pub const CALL_SETUP_REQ: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CALL_SETUP_REQ);
+    pub const CALL_SETUP_RESULT: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CALL_SETUP_RESULT);
+    pub const CALL_DETAIL: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CALL_DETAIL);
+    pub const DEVICE_STATE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_DEVICE_STATE);
+    pub const TEXT: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_TEXT);
+    pub const SHUTDOWN_REQUESTED: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_SHUTDOWN_REQUESTED);
+    pub const ALL: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_ALL);
+
+    /// The raw `switch_event_types_t` value, for FFI.
+    #[inline]
+    pub const fn raw(self) -> sys::switch_event_types_t {
+        self.0
+    }
+
+    /// Wraps a raw event type returned by FreeSWITCH.
+    #[inline]
+    pub const fn from_raw(v: sys::switch_event_types_t) -> Self {
+        Self(v)
+    }
+
+    /// `true` for `CHANNEL_CREATE`/`CHANNEL_DESTROY` (the channel lifecycle endpoints).
+    #[inline]
+    pub const fn is_lifecycle(self) -> bool {
+        // Compare discriminant ints: `==` on the bindgen enum uses its derive PartialEq,
+        // which is not a `const fn`, so we cast to the discriminant type first.
+        let v = self.0 as u32;
+        v == sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CREATE as u32
+            || v == sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_DESTROY as u32
+    }
+}
+
+impl From<sys::switch_event_types_t> for EventType {
+    fn from(v: sys::switch_event_types_t) -> Self {
+        Self(v)
+    }
+}
+
+// ── Priority ─────────────────────────────────────────────────────────────
+
+/// FreeSWITCH delivery priority (`switch_priority_t`). A single-valued enum — pass to
+/// [`Event::set_priority`] by value.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Priority(pub sys::switch_priority_t);
+
+impl Priority {
+    pub const NORMAL: Self = Self(sys::switch_priority_t_SWITCH_PRIORITY_NORMAL);
+    pub const LOW: Self = Self(sys::switch_priority_t_SWITCH_PRIORITY_LOW);
+    pub const HIGH: Self = Self(sys::switch_priority_t_SWITCH_PRIORITY_HIGH);
+
+    /// The raw `switch_priority_t` value, for FFI.
+    #[inline]
+    pub const fn raw(self) -> sys::switch_priority_t {
+        self.0
+    }
+
+    /// Wraps a raw priority.
+    #[inline]
+    pub const fn from_raw(v: sys::switch_priority_t) -> Self {
+        Self(v)
+    }
+
+    /// `true` for `HIGH` priority.
+    #[inline]
+    pub const fn is_high(self) -> bool {
+        self.0 == sys::switch_priority_t_SWITCH_PRIORITY_HIGH
+    }
+}
+
+impl From<sys::switch_priority_t> for Priority {
+    fn from(v: sys::switch_priority_t) -> Self {
+        Self(v)
+    }
+}
+
 pub struct Event {
     raw: Option<NonNull<sys::switch_event_t>>,
 }
@@ -25,7 +213,7 @@ impl Event {
         let status = unsafe {
             create_event(
                 &mut raw,
-                sys::switch_event_types_t::SWITCH_EVENT_CUSTOM,
+                EventType::CUSTOM,
                 Some(subclass.as_c_str()),
             )
         };
@@ -35,8 +223,8 @@ impl Event {
         })
     }
 
-    /// Creates a non-custom event of the given type (e.g. `SWITCH_EVENT_CHANNEL_CREATE`).
-    pub fn new(event: sys::switch_event_types_t) -> Result<Self> {
+    /// Creates a non-custom event of the given type (e.g. [`EventType::CHANNEL_CREATE`]).
+    pub fn new(event: EventType) -> Result<Self> {
         let mut raw = std::ptr::null_mut();
         // SAFETY: FreeSWITCH initializes `raw` for the event type when the call succeeds.
         let status = unsafe { create_event(&mut raw, event, None) };
@@ -113,11 +301,11 @@ impl Event {
         let mut raw = raw.as_ptr();
         // SAFETY: Ownership of `raw` transfers to FreeSWITCH on successful fire.
         let status = unsafe { fire_event(&mut raw) };
-        if status == crate::SUCCESS {
+        if status == crate::SUCCESS.raw() {
             Ok(())
         } else {
             self.raw = NonNull::new(raw);
-            Err(crate::SwitchError(status))
+            Err(crate::SwitchError(crate::Status::from_raw(status)))
         }
     }
 
@@ -293,14 +481,14 @@ impl Event {
 
     /// Sets the delivery priority of this event.
     ///
-    /// Wraps `switch_event_set_priority`. Pass one of the
-    /// `switch_priority_t_SWITCH_PRIORITY_{NORMAL,LOW,HIGH}` constants.
-    pub fn set_priority(&mut self, priority: sys::switch_priority_t) -> Result<()> {
+    /// Wraps `switch_event_set_priority`. Pass one of the [`Priority`] constants
+    /// ([`Priority::NORMAL`] / [`Priority::LOW`] / [`Priority::HIGH`]).
+    pub fn set_priority(&mut self, priority: Priority) -> Result<()> {
         let Some(raw) = self.raw else {
             return Ok(());
         };
         // SAFETY: `raw` is a live event.
-        let status = unsafe { sys::switch_event_set_priority(raw.as_ptr(), priority) };
+        let status = unsafe { sys::switch_event_set_priority(raw.as_ptr(), priority.raw()) };
         status_to_result(status)
     }
 
@@ -374,13 +562,13 @@ impl Event {
         let status = unsafe {
             sys::switch_event_serialize(raw.as_ptr(), &mut out, crate::switch_bool(encode))
         };
-        if status != crate::SUCCESS {
+        if status != crate::SUCCESS.raw() {
             // FreeSWITCH may have allocated `out` before failing — free it to avoid a leak.
             if !out.is_null() {
                 // SAFETY: `out` is null or a malloc'd C string from FreeSWITCH.
                 unsafe { crate::free_cstr(out) };
             }
-            return Err(crate::SwitchError(status));
+            return Err(crate::SwitchError(crate::Status::from_raw(status)));
         }
         // SAFETY: On success `out` is a malloc'd null-terminated string owned by this call.
         Ok(unsafe { crate::strdup_to_string(out) }.unwrap_or_default())
@@ -570,7 +758,7 @@ impl Event {
 // SAFETY: The caller must provide writable event output storage and, when supplied, a live subclass.
 unsafe fn create_event(
     raw: &mut *mut sys::switch_event_t,
-    event: sys::switch_event_types_t,
+    event: EventType,
     subclass: Option<&CStr>,
 ) -> sys::switch_status_t {
     let create = sys::switch_event_create_subclass_detailed;
@@ -579,7 +767,7 @@ unsafe fn create_event(
         c"Event::create".as_ptr(),
         line!() as _,
         raw,
-        event,
+        event.raw(),
         subclass.map_or(std::ptr::null(), CStr::as_ptr),
     ))
 }
@@ -795,7 +983,7 @@ impl EventBinder {
     /// unregisters the subscription.
     pub fn bind(
         id: impl AsRef<str>,
-        event: sys::switch_event_types_t,
+        event: EventType,
         subclass: Option<&str>,
         callback: sys::switch_event_callback_t,
         user_data: *mut std::ffi::c_void,
@@ -810,7 +998,7 @@ impl EventBinder {
         let status = unsafe {
             sys::switch_event_bind_removable(
                 id.as_ptr(),
-                event,
+                event.raw(),
                 subclass
                     .as_ref()
                     .map_or(std::ptr::null(), |subclass| subclass.as_ptr()),
@@ -853,7 +1041,7 @@ impl Drop for EventBinder {
 /// callback (see [`EventBinder`] docs).
 pub fn bind_permanent(
     id: impl AsRef<str>,
-    event: sys::switch_event_types_t,
+    event: EventType,
     subclass: Option<&str>,
     callback: sys::switch_event_callback_t,
     user_data: *mut std::ffi::c_void,
@@ -867,7 +1055,7 @@ pub fn bind_permanent(
     let status = unsafe {
         sys::switch_event_bind(
             id.as_ptr(),
-            event,
+            event.raw(),
             subclass
                 .as_ref()
                 .map_or(std::ptr::null(), |subclass| subclass.as_ptr()),
@@ -1080,24 +1268,24 @@ impl Drop for EventXml {
 /// Returns the canonical name of an event type, or `None` when the type is unknown.
 ///
 /// Wraps `switch_event_name`. The returned string is static storage owned by FreeSWITCH.
-pub fn event_name(event_type: sys::switch_event_types_t) -> Option<&'static str> {
+pub fn event_name(event_type: EventType) -> Option<&'static str> {
     // SAFETY: `switch_event_name` returns either a static C string or NULL; it reads no caller
     // state and performs no allocation.
-    let ptr = unsafe { sys::switch_event_name(event_type) };
+    let ptr = unsafe { sys::switch_event_name(event_type.raw()) };
     // SAFETY: The pointer is null or a static null-terminated C string.
     unsafe { crate::borrowed_cstr_to_str(ptr) }
 }
 
-/// Parses a canonical event name into its `switch_event_types_t` value.
+/// Parses a canonical event name into an [`EventType`].
 ///
 /// Wraps `switch_name_event`. Returns `None` when the name does not match a known event type.
-pub fn name_event(name: impl AsRef<str>) -> Option<sys::switch_event_types_t> {
+pub fn name_event(name: impl AsRef<str>) -> Option<EventType> {
     let name = cstring(name).ok()?;
     let mut out: sys::switch_event_types_t = sys::switch_event_types_t::SWITCH_EVENT_CUSTOM;
     // SAFETY: `name` is a valid C string; `out` is writable output storage.
     let status = unsafe { sys::switch_name_event(name.as_ptr(), &mut out) };
-    if status == crate::SUCCESS {
-        Some(out)
+    if status == crate::SUCCESS.raw() {
+        Some(EventType::from_raw(out))
     } else {
         None
     }
@@ -1109,5 +1297,49 @@ pub fn name_event(name: impl AsRef<str>) -> Option<sys::switch_event_types_t> {
 pub fn event_running() -> bool {
     // SAFETY: `switch_event_running` takes no arguments and performs a read-only check.
     let status = unsafe { sys::switch_event_running() };
-    status == crate::SUCCESS
+    status == crate::SUCCESS.raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_type_round_trip() {
+        // from_raw(raw()) is the identity, and the CHANNEL_CREATE discriminant matches the
+        // underlying C enum value (2) exactly — proving the newtype is a transparent wrapper.
+        assert_eq!(
+            EventType::from_raw(EventType::CHANNEL_CREATE.raw()),
+            EventType::CHANNEL_CREATE
+        );
+        assert_eq!(
+            EventType::from_raw(EventType::HEARTBEAT.raw()),
+            EventType::HEARTBEAT
+        );
+        assert_eq!(
+            EventType::CHANNEL_CREATE.raw(),
+            sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CREATE
+        );
+    }
+
+    #[test]
+    fn event_type_lifecycle_predicate() {
+        // Only the two channel lifecycle endpoints are flagged by is_lifecycle().
+        assert!(EventType::CHANNEL_CREATE.is_lifecycle());
+        assert!(EventType::CHANNEL_DESTROY.is_lifecycle());
+        assert!(!EventType::HEARTBEAT.is_lifecycle());
+        assert!(!EventType::ALL.is_lifecycle());
+    }
+
+    #[test]
+    fn priority_high_predicate() {
+        // is_high() is true only for HIGH; the three single-valued variants are distinct.
+        assert!(Priority::HIGH.is_high());
+        assert!(!Priority::NORMAL.is_high());
+        assert!(!Priority::LOW.is_high());
+        assert_eq!(
+            Priority::from_raw(sys::switch_priority_t_SWITCH_PRIORITY_LOW),
+            Priority::LOW
+        );
+    }
 }

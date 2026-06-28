@@ -18,9 +18,15 @@ use std::ptr::NonNull;
 use crate::pool::Pool;
 use crate::sys::{
     self, switch_frame_t, switch_io_flag_t, switch_memory_pool_t, switch_payload_t, switch_port_t,
-    switch_rtp_flag_t, switch_rtp_t,
+    switch_rtp_flag_t, switch_rtp_hdr_t, switch_rtp_packet_t, switch_rtp_t,
 };
 use crate::{GENERR, Result, SwitchError, cstring, status_to_result};
+
+/// Capacity, in bytes, of the inline `body` payload buffer in `switch_rtp_packet_t`.
+///
+/// Mirrors `[c_char; 16396usize]` from the bindgen layout. Used by [`RtpPacket::payload`] to cap
+/// the slice it hands out so a caller-supplied length can never read past the inline storage.
+pub const RTP_PACKET_BODY_CAPACITY: usize = 16396;
 
 /// Number of flag slots FreeSWITCH reserves for an RTP session (`SWITCH_RTP_FLAG_INVALID`).
 const RTP_FLAG_COUNT: usize = 50;
@@ -355,6 +361,130 @@ pub fn request_port(ip: impl AsRef<str>) -> Result<switch_port_t> {
     Ok(port)
 }
 
+/// A borrowed view over a FreeSWITCH RTP packet (`switch_rtp_packet_t`).
+///
+/// `switch_rtp_packet_t` bundles a fixed RTP header ([`sys::switch_rtp_hdr_t`]) with an inline
+/// 16 KB body buffer (the media payload) plus optional extension pointers. The struct does *not*
+/// record its own payload length — that travels alongside it as a separate `len` byte count (e.g.
+/// in `switch_jb_put_packet`), so callers must track it. [`RtpPacket`] therefore borrows the
+/// struct for the lifetime `'a` of whatever owns it (the jitter buffer, an [`Rtp`] read path,
+/// a caller's stack frame) and exposes safe accessors for the header and the inline body.
+///
+/// The handle is `Copy` because it is a non-owning borrow; the `'a` lifetime ties it to the
+/// underlying storage. Reach the unwrapped struct via [`RtpPacket::as_ptr`] for code paths that
+/// need fields not yet wrapped.
+///
+/// Created with [`RtpPacket::from_raw`] (from a C pointer) or
+/// [`RtpPacket::from_ref`] (from an existing `&switch_rtp_packet_t`).
+#[derive(Copy, Clone)]
+pub struct RtpPacket<'a> {
+    raw: NonNull<switch_rtp_packet_t>,
+    _lt: PhantomData<&'a ()>,
+}
+
+impl<'a> RtpPacket<'a> {
+    /// Wraps a raw `switch_rtp_packet_t *` for borrowed access.
+    ///
+    /// # Safety
+    ///
+    /// `raw` must be null or point to a live `switch_rtp_packet_t` whose storage remains valid for
+    /// the lifetime `'a`. The returned handle borrows the struct without owning it.
+    pub unsafe fn from_raw(raw: *mut switch_rtp_packet_t) -> Option<Self> {
+        NonNull::new(raw).map(|raw| Self {
+            raw,
+            _lt: PhantomData,
+        })
+    }
+
+    /// Borrows an existing `switch_rtp_packet_t` by reference. Convenient when the struct is
+    /// already on the Rust side (e.g. a `Default` value used in [`crate::JitterBuffer`] I/O).
+    pub fn from_ref(raw: &'a switch_rtp_packet_t) -> Self {
+        // SAFETY: `raw` is a shared reference to a live value valid for `'a`; casting it to a
+        // pointer and re-wrapping in `NonNull` preserves that borrow.
+        Self {
+            // SAFETY: a `&T` is always non-null.
+            raw: unsafe { NonNull::new_unchecked(raw as *const _ as *mut switch_rtp_packet_t) },
+            _lt: PhantomData,
+        }
+    }
+
+    /// The underlying `switch_rtp_packet_t *`. Escape hatch for unwrapped packet features.
+    #[inline]
+    pub fn as_ptr(self) -> *mut switch_rtp_packet_t {
+        self.raw.as_ptr()
+    }
+
+    /// Read-only access to the fixed RTP header.
+    ///
+    /// The header is a bindgen bitfield unit; callers needing the raw bitfields (version, marker,
+    /// padding, CSRC count, etc.) can read them through the returned reference's bindgen-generated
+    /// accessors (`version`, `pt`, `seq`, `ts`, `ssrc`, ...).
+    #[inline]
+    pub fn header(self) -> &'a switch_rtp_hdr_t {
+        // SAFETY: `self.raw` points to a live packet valid for `'a`. We form the shared borrow to
+        // the `header` field via `addr_of!` then reborrow it as `&'a`, so no exclusive aliasing of
+        // the surrounding struct can occur.
+        unsafe { &*std::ptr::addr_of!((*self.raw.as_ptr()).header) }
+    }
+
+    /// The RTP version field (bits 0-1 of the first byte; `2` for RFC 3550 RTP).
+    #[inline]
+    pub fn version(self) -> u32 {
+        self.header().version()
+    }
+
+    /// The RTP payload-type field (7 bits; selects the codec, e.g. `0` PCMU, `8` PCMA).
+    #[inline]
+    pub fn payload_type(self) -> u32 {
+        self.header().pt()
+    }
+
+    /// The marker bit (`1` typically marks the first packet of a talkspurt or video frame).
+    #[inline]
+    pub fn marker(self) -> bool {
+        self.header().m() != 0
+    }
+
+    /// The 16-bit RTP sequence number.
+    #[inline]
+    pub fn seq(self) -> u16 {
+        self.header().seq() as u16
+    }
+
+    /// The 32-bit RTP timestamp.
+    #[inline]
+    pub fn timestamp(self) -> u32 {
+        self.header().ts()
+    }
+
+    /// The 32-bit synchronisation source (SSRC) identifier.
+    #[inline]
+    pub fn ssrc(self) -> u32 {
+        self.header().ssrc()
+    }
+
+    /// A slice over the inline `body` payload buffer, truncated to the first `len` bytes.
+    ///
+    /// `len` is the payload byte count the caller is tracking separately (the struct has no
+    /// embedded length field). `len` is clamped to the inline buffer capacity
+    /// ([`RTP_PACKET_BODY_CAPACITY`]) so a malformed length can never read past the struct.
+    ///
+    /// Note: this is the *inline* body only. Extension bodies referenced by `ebody` are not
+    /// exposed here — use [`RtpPacket::as_ptr`] to reach them.
+    pub fn payload(self, len: usize) -> &'a [u8] {
+        let take = len.min(RTP_PACKET_BODY_CAPACITY);
+        // SAFETY: `self.raw` points to a live packet valid for `'a`. We read `body` via
+        // `addr_of!` to avoid forming an intermediate reference; the `body` array is a fixed
+        // `[c_char; 16396]` field inside the struct and `take` is clamped to the array length, so
+        // the slice stays within bounds. `c_char` is `i8` on these targets and the cast to `u8`
+        // is sound.
+        unsafe {
+            let body = std::ptr::addr_of!((*self.raw.as_ptr()).body) as *const c_char as *const u8;
+            std::slice::from_raw_parts(body, take)
+        }
+    }
+}
+
 #[cfg(all(test, feature = "live_fs"))]
 mod tests {
     use super::*;
@@ -392,5 +522,67 @@ mod tests {
     fn switch_bool_maps_both_directions() {
         assert_eq!(switch_bool(true), sys::switch_bool_t_SWITCH_TRUE);
         assert_eq!(switch_bool(false), sys::switch_bool_t_SWITCH_FALSE);
+    }
+}
+
+#[cfg(test)]
+mod packet_tests {
+    use super::*;
+
+    fn filled_packet(seq: u16, ts: u32, pt: u32, marker: bool, ssrc: u32) -> switch_rtp_packet_t {
+        let mut pkt = switch_rtp_packet_t::default();
+        pkt.header.set_version(2);
+        pkt.header.set_pt(pt);
+        pkt.header.set_m(u32::from(marker));
+        pkt.header.set_seq(seq as _);
+        pkt.header.set_ts(ts as _);
+        pkt.header.set_ssrc(ssrc as _);
+        pkt
+    }
+
+    #[test]
+    fn from_ref_reads_header_fields() {
+        let raw = filled_packet(0x1234, 0xCAFEBABE, 8, true, 0xDEAD_BEEF);
+        let pkt = RtpPacket::from_ref(&raw);
+        assert_eq!(pkt.version(), 2);
+        assert_eq!(pkt.payload_type(), 8);
+        assert!(pkt.marker());
+        assert_eq!(pkt.seq(), 0x1234);
+        assert_eq!(pkt.timestamp(), 0xCAFEBABE);
+        assert_eq!(pkt.ssrc(), 0xDEAD_BEEF);
+    }
+
+    #[test]
+    fn from_raw_null_returns_none() {
+        // SAFETY: null is explicitly permitted by the `from_raw` contract.
+        let none = unsafe { RtpPacket::from_raw(std::ptr::null_mut()) };
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn payload_slice_is_clamped_and_reads_bytes() {
+        let mut raw = filled_packet(1, 100, 0, false, 1);
+        // Stuff a recognisable 4-byte payload; keep the rest zero. `body` is `[c_char; N]`.
+        raw.body[0] = b'F' as c_char;
+        raw.body[1] = b'S' as c_char;
+        raw.body[2] = b'W' as c_char;
+        raw.body[3] = b'T' as c_char;
+
+        let pkt = RtpPacket::from_ref(&raw);
+        // Asking for the actual payload length returns exactly those bytes.
+        assert_eq!(pkt.payload(4), b"FSWT");
+        // Asking for more than the buffer holds is clamped to the inline capacity, not panicked.
+        let clamped = pkt.payload(usize::MAX);
+        assert_eq!(clamped.len(), RTP_PACKET_BODY_CAPACITY);
+        assert_eq!(&clamped[..4], b"FSWT");
+        // Asking for zero bytes yields an empty slice.
+        assert!(pkt.payload(0).is_empty());
+    }
+
+    #[test]
+    fn as_ptr_points_at_the_underlying_struct() {
+        let raw = filled_packet(7, 7, 7, false, 7);
+        let pkt = RtpPacket::from_ref(&raw);
+        assert_eq!(pkt.as_ptr() as *const _, &raw as *const _);
     }
 }

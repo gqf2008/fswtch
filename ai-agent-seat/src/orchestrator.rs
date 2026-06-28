@@ -4,15 +4,16 @@
 //! data URI and sent to the LLM as a multimodal user message; the LLM replies
 //! with text and/or tool calls. TTS is a `speak` tool: when the LLM calls
 //! `speak(text)`, the orchestrator synthesizes the text via
-//! [`VolcanoBidirectionalSession`] and pushes the resulting 16 kHz i16 PCM to
-//! the media-bug channel as [`TtsSignal::Chunk`] chunks. Other tools
-//! (`hangup`, `send_dtmf`, `transfer`) are placeholders wired through the
-//! [`CallControl`] trait when available.
+//! [`VolcanoBidirectionalSession`] and pushes the resulting 16 kHz i16 PCM
+//! directly into [`crate::io::CallState::tts_accum`] (the global DashMap entry
+//! keyed by the call UUID). The `read_frame` I/O callback drains that
+//! accumulator toward the caller.
 //!
-//! The orchestrator is owned by [`crate::actor::CallActorImpl`] and driven on
-//! the module's tokio/actix runtime. It is intentionally free of actix types
-//! so it can be unit-tested in isolation and so the actor layer stays a thin
-//! adapter.
+//! The orchestrator is owned by [`crate::io::CallState`] (an `Arc` clone is
+//! stored there at init time) and driven on the module's tokio runtime by the
+//! `write_frame` callback, which spawns [`Self::process_speech_segment`] when
+//! VAD detects end of speech. It is intentionally free of actix / channel
+//! types so it can be unit-tested in isolation.
 //!
 //! # Conversation history
 //!
@@ -30,12 +31,12 @@ use std::sync::{
 
 use anyhow::{Context, Result};
 use base64::Engine;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::audio_dsp::PIPELINE_SAMPLE_RATE;
-use crate::call_core::CallControl;
-use crate::tts::{TtsSignal, VolcanoBidirectionalSession, forward_pcm_chunked};
+use crate::call_core::{CallControl, control};
+use crate::io::CALLS;
+use crate::tts::VolcanoBidirectionalSession;
 use crate::voice_core::Config;
 
 /// Maximum conversation history entries kept for LLM context (capped to limit
@@ -98,9 +99,10 @@ pub struct ToolExecutionResult {
 
 /// The Orchestrator owns the per-call pipeline state.
 ///
-/// Constructed cheaply (sync) at call-answer time; the Volcano WS connect is
-/// deferred to [`start_tts`](Self::start_tts) (or lazy on first `synthesize`).
-/// Cloning is NOT intended — the actor holds the single instance.
+/// Constructed cheaply (sync) at call-init time (first `write_frame`); the
+/// Volcano WS connect is deferred to [`start_tts`](Self::start_tts) (or lazy on
+/// first `synthesize`). Cloning is cheap (Arc inner); the `CallState` stores
+/// an `Arc<Orchestrator>`.
 pub struct Orchestrator {
     uuid: String,
     config: Option<Config>,
@@ -108,23 +110,24 @@ pub struct Orchestrator {
     conversation: parking_lot::Mutex<Vec<ChatMessage>>,
     /// Volcano bidirectional TTS session (None when no TTS config).
     tts_session: Option<VolcanoBidirectionalSession>,
-    /// Producer end of the media-bug TTS channel.
-    tts_tx: mpsc::Sender<TtsSignal>,
     /// Barge-in / mid-pipeline cancellation flag. Set by `cancel_current`;
     /// the pipeline checks it between stages.
     cancel_token: Arc<AtomicBool>,
+    /// AI-speaking flag, shared (Arc-clone) with [`crate::io::CallState`].
+    /// Set while TTS is playing so the write-leg VAD can detect barge-in.
+    ai_speaking: Arc<AtomicBool>,
     /// Optional call-control handle for executing `hangup`/`send_dtmf`/`transfer`
-    /// tools. Wired by the actor when it has a live [`CallControl`].
+    /// tools. Defaults to the FFI-backed singleton; overridable for tests.
     control: parking_lot::Mutex<Option<Arc<dyn CallControl>>>,
 }
 
 impl Orchestrator {
     /// Construct an orchestrator for one call.
     ///
-    /// `tts_tx` is the producer end of the channel the media bug drains; TTS
-    /// audio is pushed there as [`TtsSignal::Chunk`]. The Volcano session is
-    /// built from `config` when TTS credentials are present.
-    pub fn new(uuid: String, config: Option<Config>, tts_tx: mpsc::Sender<TtsSignal>) -> Self {
+    /// `ai_speaking` is the shared flag stored in [`crate::io::CallState`] so
+    /// the write-leg VAD can observe barge-in while TTS plays. The Volcano
+    /// session is built from `config` when TTS credentials are present.
+    pub fn new(uuid: String, config: Option<Config>, ai_speaking: Arc<AtomicBool>) -> Self {
         let tts_session = config
             .as_ref()
             .filter(|c| !c.ai.tts_api_key.is_empty() && !c.ai.tts_endpoint.is_empty())
@@ -151,8 +154,8 @@ impl Orchestrator {
             config,
             conversation: parking_lot::Mutex::new(conversation),
             tts_session,
-            tts_tx,
             cancel_token: Arc::new(AtomicBool::new(false)),
+            ai_speaking,
             control: parking_lot::Mutex::new(None),
         }
     }
@@ -168,11 +171,16 @@ impl Orchestrator {
         &self.uuid
     }
 
+    /// A clone of the shared AI-speaking flag.
+    pub fn ai_speaking_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.ai_speaking)
+    }
+
     /// Eagerly establish the Volcano WS connection + first session.
     ///
-    /// Intended to be called at call-answer time (spawned on the runtime by
-    /// the actor). Idempotent + race-safe (delegated to the session). Errors
-    /// are logged but do NOT poison the session — `synthesize` lazy-retries.
+    /// Intended to be called at call-init time (spawned on the runtime).
+    /// Idempotent + race-safe (delegated to the session). Errors are logged
+    /// but do NOT poison the session — `synthesize` lazy-retries.
     pub async fn start_tts(&self) -> Result<()> {
         if let Some(session) = &self.tts_session {
             if let Err(e) = session.start().await {
@@ -182,7 +190,7 @@ impl Orchestrator {
                 );
                 return Err(e);
             }
-            tracing::info!("Orchestrator start_tts: Volcano WS connected at answer time");
+            tracing::info!("Orchestrator start_tts: Volcano WS connected at init time");
         } else {
             tracing::debug!("Orchestrator start_tts: no TTS session configured");
         }
@@ -262,24 +270,24 @@ impl Orchestrator {
         for tc in &tool_calls {
             match tc.name.as_str() {
                 "speak" => {
-                    if let Some(text) = extract_string_arg(&tc.arguments, "text") {
-                        if !text.is_empty() {
-                            if !result.reply.is_empty() {
-                                result.reply.push(' ');
-                            }
-                            result.reply.push_str(&text);
+                    if let Some(text) = extract_string_arg(&tc.arguments, "text")
+                        && !text.is_empty()
+                    {
+                        if !result.reply.is_empty() {
+                            result.reply.push(' ');
                         }
+                        result.reply.push_str(&text);
                     }
                     // The model may also return its transcript of the user's
                     // speech as an `asr` argument on `speak`.
-                    if let Some(asr) = extract_string_arg(&tc.arguments, "asr") {
-                        if !asr.is_empty() {
-                            result.asr = Some(result.asr.take().map_or(asr.clone(), |mut s| {
-                                s.push(' ');
-                                s.push_str(&asr);
-                                s
-                            }));
-                        }
+                    if let Some(asr) = extract_string_arg(&tc.arguments, "asr")
+                        && !asr.is_empty()
+                    {
+                        result.asr = Some(result.asr.take().map_or(asr.clone(), |mut s| {
+                            s.push(' ');
+                            s.push_str(&asr);
+                            s
+                        }));
                     }
                 }
                 "hangup" => {
@@ -311,7 +319,7 @@ impl Orchestrator {
             transfer,
         } = result;
 
-        // Synthesize the reply (if any) and stream it to the media bug.
+        // Synthesize the reply (if any) and push it to the TTS accumulator.
         if !reply.is_empty() && !self.is_cancelled() {
             self.synthesize_and_play(&reply).await;
         }
@@ -319,26 +327,19 @@ impl Orchestrator {
         // Execute call-control side effects (after TTS so hangup doesn't tear
         // down the media path before the goodbye reaches the caller).
         if hangup || dtmf.is_some() || transfer.is_some() {
-            if let Some(control) = self.control.lock().clone() {
-                if let Some(digits) = &dtmf {
-                    if let Err(e) = control.send_dtmf(&self.uuid, digits) {
-                        tracing::warn!("Orchestrator send_dtmf failed: {e}");
-                    }
-                }
-                if let Some(dest) = &transfer {
-                    if let Err(e) = control.transfer(&self.uuid, dest) {
-                        tracing::warn!("Orchestrator transfer failed: {e}");
-                    }
-                }
-                if hangup {
-                    if let Err(e) = control.hangup(&self.uuid) {
-                        tracing::warn!("Orchestrator hangup failed: {e}");
-                    }
-                }
-            } else {
-                tracing::warn!(
-                    "Orchestrator: LLM requested call-control tool but no CallControl wired"
-                );
+            let control = self.control.lock().clone().unwrap_or_else(control);
+            if let Some(digits) = &dtmf
+                && let Err(e) = control.send_dtmf(&self.uuid, digits)
+            {
+                tracing::warn!("Orchestrator send_dtmf failed: {e}");
+            }
+            if let Some(dest) = &transfer
+                && let Err(e) = control.transfer(&self.uuid, dest)
+            {
+                tracing::warn!("Orchestrator transfer failed: {e}");
+            }
+            if hangup && let Err(e) = control.hangup(&self.uuid) {
+                tracing::warn!("Orchestrator hangup failed: {e}");
             }
         }
 
@@ -360,34 +361,36 @@ impl Orchestrator {
 
     /// Barge-in: interrupt the current pipeline turn.
     ///
-    /// Sets the cancel flag (observed between stages) and pushes a
-    /// [`TtsSignal::ClearBuffer`] so the media bug drops any buffered TTS
-    /// audio immediately. Idempotent.
+    /// Sets the cancel flag (observed between stages) and clears the
+    /// [`crate::io::CallState::tts_accum`] so `read_frame` stops playing the
+    /// interrupted TTS immediately. Idempotent.
     pub fn cancel_current(&self) {
         self.cancel_token.store(true, Ordering::SeqCst);
+        self.ai_speaking.store(false, Ordering::Relaxed);
         tracing::info!("Orchestrator: barge-in (cancel_current) for {}", self.uuid);
-        // Tell the media bug to flush its TTS playback buffer. try_send: this
-        // runs from the actix arbiter; if the channel is full/closed we just
-        // log — the cancel flag still guards the pipeline.
-        let _ = self.tts_tx.try_send(TtsSignal::ClearBuffer);
+        // Flush the TTS accumulator in the DashMap entry.
+        if let Some(mut state) = CALLS.get_mut(&self.uuid) {
+            state.value_mut().clear_tts();
+        }
     }
 
     /// Full teardown on hangup / call end.
     ///
     /// Clears the conversation history and the cancel flag so a reused
-    /// orchestrator (should the actor ever be re-bound) starts clean. The
+    /// orchestrator (should the call state ever be re-bound) starts clean. The
     /// Volcano WS session tears itself down on drop.
     pub fn full_hangup_reset(&self) {
         self.conversation.lock().clear();
         self.cancel_token.store(false, Ordering::SeqCst);
+        self.ai_speaking.store(false, Ordering::Relaxed);
     }
 
     /// Synthesize `text` via the Volcano session and forward the PCM to the
-    /// media-bug channel in 320-sample [`TtsSignal::Chunk`]s.
+    /// [`crate::io::CallState::tts_accum`] in 320-sample chunks.
     ///
     /// No-op (logged) when no TTS session is configured. Uses a fresh
     /// [`CancellationToken`] per call; barge-in cancels via `cancel_current`'s
-    /// `ClearBuffer`, and the session's own 10s timeout guards against hangs.
+    /// accumulator flush, and the session's own 10s timeout guards against hangs.
     async fn synthesize_and_play(&self, text: &str) {
         let Some(session) = &self.tts_session else {
             tracing::warn!(
@@ -398,16 +401,33 @@ impl Orchestrator {
             return;
         };
 
+        // Mark the AI as speaking so the write-leg VAD can detect barge-in.
+        self.ai_speaking.store(true, Ordering::Relaxed);
+
         let cancel = CancellationToken::new();
         // Bridge: VolcanoBidirectionalSession sends Vec<i16> audio chunks; we
-        // re-chunk them into 320-sample TtsSignal::Chunk for the media bug.
+        // re-chunk them into 320-sample pushes into the TTS accumulator.
         let (raw_tx, mut raw_rx) =
             tokio::sync::mpsc::channel::<Vec<i16>>(crate::tts::tts_channel_capacity());
-        let tts_tx = self.tts_tx.clone();
-        // Forwarder task: raw PCM → 320-sample TtsSignal::Chunk.
+        let uuid = self.uuid.clone();
+        let ai_speaking = Arc::clone(&self.ai_speaking);
+        // Forwarder task: raw PCM → 320-sample pushes into tts_accum.
         let fwd = tokio::spawn(async move {
             while let Some(audio) = raw_rx.recv().await {
-                forward_pcm_chunked(&tts_tx, audio).await;
+                // Re-chunk into 320-sample slices and push directly to the
+                // DashMap entry. Each chunk is pushed under the RefMut guard.
+                let mut start = 0;
+                while start < audio.len() {
+                    let end = (start + crate::tts::TTS_CHUNK_SAMPLES).min(audio.len());
+                    let chunk = &audio[start..end];
+                    if let Some(mut state) = CALLS.get_mut(&uuid) {
+                        state.value_mut().push_tts(chunk);
+                    } else {
+                        // Call gone (hung up mid-synthesis) — stop forwarding.
+                        return;
+                    }
+                    start = end;
+                }
             }
         });
 
@@ -429,6 +449,12 @@ impl Orchestrator {
         }
         // Wait for the forwarder to drain any in-flight chunks.
         let _ = fwd.await;
+        // AI finished speaking (unless cancelled mid-flight, in which case
+        // cancel_current already cleared the flag).
+        self.ai_speaking.store(false, Ordering::Relaxed);
+        // Keep `ai_speaking` referenced so clippy doesn't flag it as unused
+        // (it's already shared via Arc in CallState).
+        drop(ai_speaking);
     }
 
     /// Call the LLM with the conversation + tool definitions.
@@ -658,6 +684,7 @@ fn extract_string_arg(arguments_json: &str, field: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::io::CallState;
 
     #[test]
     fn encode_wav_header_is_valid() {
@@ -713,29 +740,35 @@ mod tests {
 
     #[tokio::test]
     async fn process_speech_segment_discards_empty_audio() {
-        let (tx, _rx) = mpsc::channel::<TtsSignal>(8);
-        let orch = Orchestrator::new("test".to_string(), None, tx);
+        let orch = Orchestrator::new("test".to_string(), None, Arc::new(AtomicBool::new(false)));
         assert!(orch.process_speech_segment(Vec::new()).await.is_none());
     }
 
     #[test]
-    fn cancel_current_sets_flag_and_sends_clear() {
-        let (tx, mut rx) = mpsc::channel::<TtsSignal>(8);
-        let orch = Orchestrator::new("test".to_string(), None, tx);
+    fn cancel_current_sets_flag_and_clears_accum() {
+        // Insert a CallState for the test UUID so cancel_current can flush it.
+        let uuid = "test_cancel";
+        let mut state = CallState::new(uuid.to_string(), 16_000, None).expect("CallState::new");
+        state.push_tts(&[1, 2, 3, 4]);
+        CALLS.insert(uuid.to_string(), state);
+        let orch = Orchestrator::new(uuid.to_string(), None, Arc::new(AtomicBool::new(false)));
         assert!(!orch.is_cancelled());
         orch.cancel_current();
         assert!(orch.is_cancelled());
-        // ClearBuffer should have been sent.
-        match rx.try_recv() {
-            Ok(TtsSignal::ClearBuffer) => {}
-            other => panic!("expected ClearBuffer, got {:?}", other),
+        // Accumulator should have been flushed. Drop the borrow before remove
+        // so we don't hold a read-lock on the shard DashMap::remove must
+        // write-lock (DashMap shards are lock-per-shard; same-shard r/w
+        // deadlocks single-threaded).
+        {
+            let state = CALLS.get(uuid).unwrap();
+            assert!(state.tts_accum.is_empty());
         }
+        CALLS.remove(uuid);
     }
 
     #[test]
     fn push_message_enforces_history_cap() {
-        let (tx, _rx) = mpsc::channel::<TtsSignal>(8);
-        let orch = Orchestrator::new("test".to_string(), None, tx);
+        let orch = Orchestrator::new("test".to_string(), None, Arc::new(AtomicBool::new(false)));
         for i in 0..(MAX_HISTORY + 5) {
             orch.push_message(ChatMessage::text("user", format!("msg{i}")));
         }

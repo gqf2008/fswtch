@@ -1,5 +1,12 @@
 //! FreeSWITCH event subscription — receive external `CUSTOM voice_seat::command`
-//! events and dispatch them to the matching CallActor by UUID.
+//! events and execute control actions on the matching call by UUID.
+//!
+//! In the Endpoint-module design there are no actix actors to dispatch to.
+//! This module binds to the `voice_seat::command` CUSTOM event and, for each
+//! inbound event, checks [`crate::call_core::is_live_call`] for the UUID, then
+//! invokes the [`CallControl`](crate::call_core::CallControl) singleton
+//! ([`crate::control::FfiControl`]) directly: `Action: hangup` →
+//! [`CallControl::hangup`], `Action: send_dtmf` → [`CallControl::send_dtmf`].
 //!
 //! This crate uses [`fswtch::EventBinder`] — the RAII guard returned by
 //! [`fswtch::EventBinder::bind`] — together with the [`fswtch::event_callback!`]
@@ -13,20 +20,14 @@
 //!   Unique-ID: <uuid>  Action: <op>  [Digits: <digits>]
 //! ```
 //!
-//! - `Action: hangup`     → [`HangupCall`](crate::call_core::HangupCall) (stop the actor / end the call)
-//! - `Action: send_dtmf`  → [`SendDtmf`](crate::call_core::SendDtmf)  (requires `Digits` header)
+//! - `Action: hangup`     → [`CallControl::hangup`](crate::call_core::CallControl::hangup)
+//! - `Action: send_dtmf`  → [`CallControl::send_dtmf`](crate::call_core::CallControl::send_dtmf) (requires `Digits` header)
 //! - `<other>`            → warning log, no-op (extensible: add a match arm)
 //!
 //! Send from `fs_cli` / an ESL connection / the control plane:
 //! ```text
 //! fs_cli -x "sendevent CUSTOM 'voice_seat::command' Unique-ID: <uuid> Action: hangup"
 //! ```
-//!
-//! Dispatch is fire-and-forget: the callback looks up the CallActor via
-//! [`registry().get(uuid)`](crate::call_core::registry) and `do_send`s an actix
-//! message. `do_send` from an arbitrary FS event thread is safe — actix `Addr`
-//! is `Send + Sync` and the message queues into the actor's mailbox on the
-//! module's actix System.
 //!
 //! The callback runs on an FS event-delivery thread, so it is wrapped in
 //! [`boundary::catch_fs`] so a panic degrades to "drop this event" instead of
@@ -37,7 +38,7 @@ use std::sync::{Mutex, OnceLock};
 use fswtch::{EventBinder, Result, sys};
 
 use crate::boundary;
-use crate::call_core::{HangupCall, SendDtmf, registry};
+use crate::call_core::{control, is_live_call};
 
 /// The CUSTOM subclass name events are bound to.
 const SUBCLASS: &str = "voice_seat::command";
@@ -51,14 +52,13 @@ const BIND_ID: &str = "ai_agent_seat";
 /// [`unbind()`] can take the guard out and drop it — `OnceLock` only hands out
 /// shared references and cannot release its contents, but a `Mutex<Option<T>>`
 /// lets us swap the guard to `None` at shutdown, triggering its `Drop` (which
-/// calls `switch_event_unbind`). Mirrors the `Mutex<Option<Runtime>>` pattern
-/// used in [`crate::actor`] for the tokio runtime.
+/// calls `switch_event_unbind`).
 ///
 /// `EventBinder` owns a `NonNull<switch_event_node_t>`, which is not `Send` by
 /// default (raw pointers aren't). It is safe to move between threads here: the
 /// guard only swaps in/out under the `Mutex`, and FreeSWITCH invokes the
 /// callback on its own event-delivery thread regardless of which thread holds
-/// the Rust handle. See the reference module for the same pattern.
+/// the Rust handle.
 static BINDER: OnceLock<Mutex<Option<SendBinder>>> = OnceLock::new();
 
 /// `EventBinder` wrapper that is `Send` for static storage. See [`BINDER`] docs.
@@ -72,11 +72,11 @@ fn slot() -> &'static Mutex<Option<SendBinder>> {
 
 /// Bind to `CUSTOM voice_seat::command` events.
 ///
-/// Call from `do_module_load` AFTER `actor::start_runtime()` so a fast event
-/// can't race a pending actix System. Stores the [`EventBinder`] guard in the
-/// slot so [`unbind()`] can drop (and thus unbind) it later. Returns an error if
-/// `fswtch::EventBinder::bind` fails, or if [`bind()`] was already called (the
-/// existing subscription is left untouched in that case).
+/// Call from `do_module_load` AFTER [`crate::actor::start_runtime`] so a fast
+/// event can't race a pending runtime. Stores the [`EventBinder`] guard in the
+/// slot so [`unbind()`] can drop (and thus unbind) it later. Returns an error
+/// if `fswtch::EventBinder::bind` fails, or if [`bind()`] was already called
+/// (the existing subscription is left untouched in that case).
 pub fn bind() -> Result<()> {
     let mut guard = slot().lock().unwrap();
     if guard.is_some() {
@@ -86,7 +86,7 @@ pub fn bind() -> Result<()> {
 
     let binder = EventBinder::bind(
         BIND_ID,
-        sys::switch_event_types_t::SWITCH_EVENT_CUSTOM,
+        fswtch::EventType::CUSTOM,
         Some(SUBCLASS),
         Some(on_command),
         std::ptr::null_mut(),
@@ -99,10 +99,10 @@ pub fn bind() -> Result<()> {
 
 /// Unbind from `CUSTOM voice_seat::command` events.
 ///
-/// Call from `switch_module_shutdown` BEFORE `actor::stop_runtime()` — prevents
-/// an in-flight event callback from entering unloaded code. Dropping the
-/// [`EventBinder`] guard calls `switch_event_unbind`. No-op if [`bind()`] was
-/// never called or already unbound.
+/// Call from `switch_module_shutdown` BEFORE [`crate::actor::stop_runtime`] —
+/// prevents an in-flight event callback from entering unloaded code. Dropping
+/// the [`EventBinder`] guard calls `switch_event_unbind`. No-op if [`bind()`]
+/// was never called or already unbound.
 pub fn unbind() {
     let taken = slot().lock().unwrap().take();
     if taken.is_some() {
@@ -126,22 +126,22 @@ fswtch::event_callback! {
             };
             let action = event.header("Action").unwrap_or_default();
 
-            let Some(addr) = registry().get(&uuid) else {
+            if !is_live_call(&uuid) {
                 tracing::debug!(
-                    "voice_seat::command {} for {}: no active CallActor",
+                    "voice_seat::command {} for {}: no active call",
                     action,
                     uuid
                 );
                 return;
-            };
+            }
 
+            let control = control();
             match action.as_str() {
                 "hangup" => {
                     tracing::info!("voice_seat::command hangup → {}", uuid);
-                    addr.do_send(HangupCall {
-                        uuid: uuid.clone(),
-                        cause: None,
-                    });
+                    if let Err(e) = control.hangup(&uuid) {
+                        tracing::warn!("voice_seat::command hangup failed for {uuid}: {e}");
+                    }
                 }
                 "send_dtmf" => {
                     let digits = event.header("Digits").unwrap_or_default();
@@ -157,11 +157,9 @@ fswtch::event_callback! {
                         digits,
                         uuid
                     );
-                    addr.do_send(SendDtmf {
-                        uuid: uuid.clone(),
-                        digits,
-                        duration_ms: None,
-                    });
+                    if let Err(e) = control.send_dtmf(&uuid, &digits) {
+                        tracing::warn!("voice_seat::command send_dtmf failed for {uuid}: {e}");
+                    }
                 }
                 other => {
                     tracing::warn!(

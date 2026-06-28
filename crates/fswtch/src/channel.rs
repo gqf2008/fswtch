@@ -1,8 +1,134 @@
 use std::ptr::NonNull;
 
-use crate::caller::CallerProfile;
+use crate::caller::{CallerExtension, CallerProfile};
 use crate::command::{borrowed_cstr_to_str, borrowed_cstr_to_string, strdup_to_string};
-use crate::{Cause, Event, Result, cstring, status_to_result, sys};
+use crate::{
+    CallDirection, Cause, ChannelState, Event, Result, cstring, status_to_result, sys,
+};
+
+/// FreeSWITCH channel flag bitset (`switch_channel_flag_t`).
+///
+/// A newtype over the raw `u32` bitset so callers cannot mix it with other flag types.
+/// Only the most common flags are exposed as associated constants; the remaining ~170
+/// `CF_*` values are reachable via [`ChannelFlag::from_raw`] with the corresponding
+/// `sys::switch_channel_flag_t_CF_*` constant (e.g.
+/// `ChannelFlag::from_raw(sys::switch_channel_flag_t_CF_PROXY_MODE)`).
+///
+/// Combine with `|`, test with [`contains`](Self::contains) — matches the `IoFlags` /
+/// `OriginateFlag` pattern.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct ChannelFlag(pub sys::switch_channel_flag_t);
+
+impl ChannelFlag {
+    pub const ANSWERED: Self = Self(sys::switch_channel_flag_t_CF_ANSWERED);
+    pub const AUDIO: Self = Self(sys::switch_channel_flag_t_CF_AUDIO);
+    pub const BRIDGED: Self = Self(sys::switch_channel_flag_t_CF_BRIDGED);
+    pub const LEG_HOLDING: Self = Self(sys::switch_channel_flag_t_CF_LEG_HOLDING);
+    pub const HOLD: Self = Self(sys::switch_channel_flag_t_CF_HOLD);
+    pub const TRANSFER: Self = Self(sys::switch_channel_flag_t_CF_TRANSFER);
+    pub const REDIRECTION: Self = Self(sys::switch_channel_flag_t_CF_REDIRECT);
+    pub const VIDEO: Self = Self(sys::switch_channel_flag_t_CF_VIDEO);
+    pub const VIDEO_PAUSE_READ: Self = Self(sys::switch_channel_flag_t_CF_VIDEO_PAUSE_READ);
+    pub const VIDEO_PAUSE_WRITE: Self = Self(sys::switch_channel_flag_t_CF_VIDEO_PAUSE_WRITE);
+    pub const TEXT: Self = Self(sys::switch_channel_flag_t_CF_TEXT_ACTIVE);
+    pub const TEXT_PASSIVE: Self = Self(sys::switch_channel_flag_t_CF_TEXT_PASSIVE);
+    pub const ACCEPT_CNG: Self = Self(sys::switch_channel_flag_t_CF_ACCEPT_CNG);
+    pub const EARLY_MEDIA: Self = Self(sys::switch_channel_flag_t_CF_EARLY_MEDIA);
+    pub const MEDIA_SET: Self = Self(sys::switch_channel_flag_t_CF_MEDIA_SET);
+    pub const ORIGINATOR: Self = Self(sys::switch_channel_flag_t_CF_ORIGINATOR);
+    pub const ORIGINATING: Self = Self(sys::switch_channel_flag_t_CF_ORIGINATING);
+    pub const BREAK: Self = Self(sys::switch_channel_flag_t_CF_BREAK);
+    pub const BLOCK_STATE: Self = Self(sys::switch_channel_flag_t_CF_BLOCK_STATE);
+    pub const BROADCAST: Self = Self(sys::switch_channel_flag_t_CF_BROADCAST);
+    pub const DROP_DTMF: Self = Self(sys::switch_channel_flag_t_CF_DROP_DTMF);
+    pub const CONFERENCE: Self = Self(sys::switch_channel_flag_t_CF_CONFERENCE);
+    pub const CONTROLLED: Self = Self(sys::switch_channel_flag_t_CF_CONTROLLED);
+    pub const PROXY_MODE: Self = Self(sys::switch_channel_flag_t_CF_PROXY_MODE);
+    pub const PROXY_MEDIA: Self = Self(sys::switch_channel_flag_t_CF_PROXY_MEDIA);
+    pub const TRACKED: Self = Self(sys::switch_channel_flag_t_CF_TRACKED);
+
+    /// The raw bitset value, for FFI.
+    #[inline]
+    pub const fn bits(self) -> sys::switch_channel_flag_t {
+        self.0
+    }
+
+    /// Wraps a raw `switch_channel_flag_t` (e.g. a `CF_*` constant not exposed above).
+    #[inline]
+    pub const fn from_raw(v: sys::switch_channel_flag_t) -> Self {
+        Self(v)
+    }
+
+    /// Returns `true` when every bit set in `flag` is also set in `self`. `NONE` (=0)
+    /// contains only itself.
+    #[inline]
+    pub const fn contains(self, flag: Self) -> bool {
+        if flag.0 == 0 {
+            self.0 == 0
+        } else {
+            (self.0 & flag.0) == flag.0
+        }
+    }
+}
+
+impl std::ops::BitOr for ChannelFlag {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for ChannelFlag {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+/// FreeSWITCH channel call-state (`switch_channel_callstate_t`).
+///
+/// A finer-grained call-progress view than [`ChannelState`]. This is a single-value enum
+/// (the `CCS_*` constants run `0..=8`); pass [`raw`](Self::raw) across the FFI boundary and
+/// wrap returned values with [`from_raw`](Self::from_raw).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct CallState(pub sys::switch_channel_callstate_t);
+
+impl CallState {
+    pub const DOWN: Self = Self(sys::switch_channel_callstate_t_CCS_DOWN);
+    pub const DIALING: Self = Self(sys::switch_channel_callstate_t_CCS_DIALING);
+    pub const RINGING: Self = Self(sys::switch_channel_callstate_t_CCS_RINGING);
+    pub const EARLY: Self = Self(sys::switch_channel_callstate_t_CCS_EARLY);
+    pub const ACTIVE: Self = Self(sys::switch_channel_callstate_t_CCS_ACTIVE);
+    pub const HELD: Self = Self(sys::switch_channel_callstate_t_CCS_HELD);
+    pub const RING_WAIT: Self = Self(sys::switch_channel_callstate_t_CCS_RING_WAIT);
+    pub const HANGUP: Self = Self(sys::switch_channel_callstate_t_CCS_HANGUP);
+    pub const UNHELD: Self = Self(sys::switch_channel_callstate_t_CCS_UNHELD);
+
+    /// The raw `switch_channel_callstate_t` value, for FFI.
+    #[inline]
+    pub const fn raw(self) -> sys::switch_channel_callstate_t {
+        self.0
+    }
+
+    /// Wraps a raw call-state returned by FreeSWITCH.
+    #[inline]
+    pub const fn from_raw(v: sys::switch_channel_callstate_t) -> Self {
+        Self(v)
+    }
+
+    /// `true` for any call-state at or past `HANGUP` (the call is coming down).
+    #[inline]
+    pub const fn is_down(self) -> bool {
+        self.0 >= sys::switch_channel_callstate_t_CCS_HANGUP
+    }
+}
+
+impl From<sys::switch_channel_callstate_t> for CallState {
+    fn from(v: sys::switch_channel_callstate_t) -> Self {
+        Self(v)
+    }
+}
 
 /// A borrowed handle to a FreeSWITCH channel — the per-call state machine, variable store, and
 /// caller-profile owner.
@@ -76,15 +202,15 @@ impl Channel {
     }
 
     /// The channel's current state (`CS_*`).
-    pub fn state(self) -> sys::switch_channel_state_t {
+    pub fn state(self) -> ChannelState {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_get_state(self.raw.as_ptr()) }
+        ChannelState::from_raw(unsafe { sys::switch_channel_get_state(self.raw.as_ptr()) })
     }
 
     /// The hangup cause recorded on the channel.
     pub fn cause(self) -> Cause {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_get_cause(self.raw.as_ptr()) }
+        Cause::from_raw(unsafe { sys::switch_channel_get_cause(self.raw.as_ptr()) })
     }
 
     /// The caller profile attached to this channel.
@@ -96,76 +222,85 @@ impl Channel {
     }
 
     /// Returns `true` when `flag` (`CF_*`) is set on the channel.
-    pub fn test_flag(self, flag: sys::switch_channel_flag_t) -> bool {
+    pub fn test_flag(self, flag: ChannelFlag) -> bool {
         // SAFETY: `self.raw` is a live channel.
-        let set = unsafe { sys::switch_channel_test_flag(self.raw.as_ptr(), flag) };
+        let set = unsafe { sys::switch_channel_test_flag(self.raw.as_ptr(), flag.bits()) };
         set != 0
     }
 
     /// Blocks the caller until the channel reaches `want` state. A null `other_channel` is passed so
     /// only this channel's own state is awaited.
-    pub fn wait_for_state(self, want: sys::switch_channel_state_t) {
+    pub fn wait_for_state(self, want: ChannelState) {
         // SAFETY: `self.raw` is a live channel; a null `other_channel` is permitted.
         unsafe {
-            sys::switch_channel_wait_for_state(self.raw.as_ptr(), std::ptr::null_mut(), want)
+            sys::switch_channel_wait_for_state(self.raw.as_ptr(), std::ptr::null_mut(), want.raw())
         };
     }
 
     /// Requests a state transition. Returns the resulting state.
-    pub fn set_state(self, state: sys::switch_channel_state_t) -> sys::switch_channel_state_t {
+    pub fn set_state(self, state: ChannelState) -> ChannelState {
         // SAFETY: `self.raw` is a live channel; source strings are static C strings.
-        unsafe {
+        let r = unsafe {
             sys::switch_channel_perform_set_state(
                 self.raw.as_ptr(),
                 c"fswtch-rs".as_ptr(),
                 c"Channel::set_state".as_ptr(),
                 line!() as _,
-                state,
+                state.raw(),
             )
-        }
+        };
+        ChannelState::from_raw(r)
     }
 
     /// Hangs up the channel with the given cause. Returns the resulting state.
-    pub fn hangup(self, cause: Cause) -> sys::switch_channel_state_t {
+    pub fn hangup(self, cause: Cause) -> ChannelState {
         // SAFETY: `self.raw` is a live channel; source strings are static C strings.
-        unsafe {
+        let r = unsafe {
             sys::switch_channel_perform_hangup(
                 self.raw.as_ptr(),
                 c"fswtch-rs".as_ptr(),
                 c"Channel::hangup".as_ptr(),
                 line!() as _,
-                cause,
+                cause.raw(),
             )
-        }
+        };
+        ChannelState::from_raw(r)
     }
 
     // ----- State / call-state / direction / timing ---------------------------
 
     /// The channel's "running" state — the state the state machine is currently executing, which may
     /// lag behind [`state`](Self::state) during a transition.
-    pub fn running_state(self) -> sys::switch_channel_state_t {
+    pub fn running_state(self) -> ChannelState {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_get_running_state(self.raw.as_ptr()) }
+        ChannelState::from_raw(unsafe { sys::switch_channel_get_running_state(self.raw.as_ptr()) })
     }
 
-    /// The channel's call-state (`CC_*`), a finer-grained call-progress view than
+    /// The channel's call-state (`CCS_*`), a finer-grained call-progress view than
     /// [`state`](Self::state).
-    pub fn callstate(self) -> sys::switch_channel_callstate_t {
+    pub fn callstate(self) -> CallState {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_get_callstate(self.raw.as_ptr()) }
+        CallState::from_raw(unsafe { sys::switch_channel_get_callstate(self.raw.as_ptr()) })
     }
 
     /// Sets a state flag (`CF_*`) on the channel without transitioning state.
-    pub fn set_state_flag(self, flag: sys::switch_channel_flag_t) {
+    pub fn set_state_flag(self, flag: ChannelFlag) {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_set_state_flag(self.raw.as_ptr(), flag) };
+        unsafe { sys::switch_channel_set_state_flag(self.raw.as_ptr(), flag.bits()) };
     }
 
     /// Registers a state-handler table for this channel. Returns the number of state handlers now
     /// registered.
     ///
-    /// `table` is a raw pointer to a `switch_state_handler_table_t` (typically produced by a
-    /// module's state-handler constructor). It must remain valid for the channel's lifetime.
+    /// # Advanced (raw FFI escape hatch)
+    ///
+    /// `table` is a raw `switch_state_handler_table_t` pointer that the caller constructs
+    /// themselves (with their own `on_init`/`on_routing`/… callbacks). fswtch's
+    /// [`crate::StateHandlerTable`] only produces all-NULL tables for endpoint registration
+    /// ([`crate::StateHandlerTable::new_null`]); it cannot build a custom-callback table, so this
+    /// method intentionally exposes the raw `sys` type rather than wrapping it — the same
+    /// "escape hatch" convention as [`Channel::as_ptr`]. `table` must remain valid for the
+    /// channel's lifetime.
     pub fn add_state_handler(self, table: *const sys::switch_state_handler_table_t) -> i32 {
         // SAFETY: `self.raw` is a live channel; `table` is null or a valid handler table per the
         // caller's contract.
@@ -174,7 +309,10 @@ impl Channel {
 
     /// Removes a previously-registered state-handler table from this channel.
     ///
-    /// `table` must point to the same table earlier passed to [`add_state_handler`](Self::add_state_handler).
+    /// # Advanced (raw FFI escape hatch)
+    ///
+    /// See [`add_state_handler`](Self::add_state_handler) — `table` is a raw
+    /// `switch_state_handler_table_t` pointer (the same one earlier passed to `add_state_handler`).
     pub fn clear_state_handler(self, table: *const sys::switch_state_handler_table_t) {
         // SAFETY: `self.raw` is a live channel; `table` is null or a previously-registered table.
         unsafe { sys::switch_channel_clear_state_handler(self.raw.as_ptr(), table) };
@@ -213,16 +351,16 @@ impl Channel {
         if ptr.is_null() { None } else { Some(ptr) }
     }
 
-    /// The logical call direction of this channel (`SWITCH_CALL_DIRECTION_*`).
-    pub fn direction(self) -> sys::switch_call_direction_t {
+    /// The logical call direction of this channel.
+    pub fn direction(self) -> CallDirection {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_direction(self.raw.as_ptr()) }
+        CallDirection::from_raw(unsafe { sys::switch_channel_direction(self.raw.as_ptr()) })
     }
 
-    /// Overrides the channel's call direction (`SWITCH_CALL_DIRECTION_*`).
-    pub fn set_direction(self, direction: sys::switch_call_direction_t) {
+    /// Overrides the channel's call direction.
+    pub fn set_direction(self, direction: CallDirection) {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_set_direction(self.raw.as_ptr(), direction) };
+        unsafe { sys::switch_channel_set_direction(self.raw.as_ptr(), direction.raw()) };
     }
 
     /// Records the current wall-clock time onto the channel's timetable as the bridge timestamp.
@@ -373,6 +511,46 @@ impl Channel {
         unsafe { sys::switch_channel_set_caller_profile(self.raw.as_ptr(), profile.as_ptr()) };
     }
 
+    /// Sets the channel's display name (e.g. `"ai_agent"`). FreeSWITCH logs and CDRs use this.
+    pub fn set_name(self, name: &str) -> Result<()> {
+        let name = cstring(name)?;
+        // SAFETY: `self.raw` is a live channel; `name` is a valid C string for the call.
+        let status = unsafe { sys::switch_channel_set_name(self.raw.as_ptr(), name.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Marks the channel as answered (sets `CF_ANSWERED` + transitions call-state to `CC_ACTIVE`).
+    ///
+    /// Endpoints that synthesize an outgoing leg (no real signalling stack) call this from
+    /// `outgoing_channel` so the originator's bridge completes: `switch_ivr_originate` waits for
+    /// the peer channel to be answered before wiring media.
+    pub fn mark_answered(self) -> Result<()> {
+        // SAFETY: `self.raw` is a live channel; static C strings for file/func.
+        let status = unsafe {
+            sys::switch_channel_perform_mark_answered(
+                self.raw.as_ptr(),
+                c"fswtch-rs".as_ptr(),
+                c"Channel::mark_answered".as_ptr(),
+                line!() as _,
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Sets the `CF_AUDIO` flag — tells FreeSWITCH this channel carries audio media (so the
+    /// bridge wires read/write frames through the endpoint's I/O routines).
+    pub fn set_audio_flag(self) {
+        // SAFETY: `self.raw` is a live channel. `switch_channel_set_flag` is a macro in C
+        // (`set_flag_value(.., 1)`); bindgen exposes the underlying `set_flag_value`.
+        unsafe {
+            sys::switch_channel_set_flag_value(
+                self.raw.as_ptr(),
+                sys::switch_channel_flag_t_CF_AUDIO,
+                1,
+            )
+        };
+    }
+
     /// Increments the caller-profile step counter (used to invalidate cached profile views).
     pub fn step_caller_profile(self) {
         // SAFETY: `self.raw` is a live channel.
@@ -430,40 +608,32 @@ impl Channel {
         unsafe { CallerProfile::from_raw(raw) }
     }
 
-    /// Attaches a caller extension to this channel. `extension` is a raw pointer because the crate
-    /// does not yet wrap `switch_caller_extension_t`; it must point to a live caller extension.
+    /// Attaches a caller extension to this channel.
     ///
-    /// # Safety escape hatch
-    ///
-    /// `extension` must be a valid `switch_caller_extension_t` pointer that outlives this call.
-    pub fn set_caller_extension(self, extension: *mut sys::switch_caller_extension_t) {
-        // SAFETY: `self.raw` is a live channel; the caller guarantees `extension` is valid.
-        unsafe { sys::switch_channel_set_caller_extension(self.raw.as_ptr(), extension) };
+    /// `extension` is a borrowed [`CallerExtension`] handle; it must point to a live caller extension
+    /// that outlives this call.
+    pub fn set_caller_extension(self, extension: CallerExtension) {
+        // SAFETY: `self.raw` is a live channel; the caller guarantees the extension handle is valid.
+        unsafe { sys::switch_channel_set_caller_extension(self.raw.as_ptr(), extension.as_ptr()) };
     }
 
-    /// The caller extension attached to this channel, if any.
-    ///
-    /// # Safety escape hatch
-    ///
-    /// Raw pointer to an opaque C struct (`switch_caller_extension_t`); dereference only while this
-    /// `Channel` is live.
-    pub fn caller_extension(self) -> Option<*mut sys::switch_caller_extension_t> {
+    /// The caller extension attached to this channel, if any. The returned handle borrows this
+    /// `Channel`'s storage; use it only while the channel is live.
+    pub fn caller_extension(self) -> Option<CallerExtension> {
         // SAFETY: `self.raw` is a live channel; the returned pointer borrows channel storage.
         let raw = unsafe { sys::switch_channel_get_caller_extension(self.raw.as_ptr()) };
-        if raw.is_null() { None } else { Some(raw) }
+        // SAFETY: `raw` is null or a live caller extension that borrows this channel.
+        unsafe { CallerExtension::from_raw(raw) }
     }
 
     /// The queued caller extension (an extension parked for later execution) on this channel, if
-    /// any.
-    ///
-    /// # Safety escape hatch
-    ///
-    /// Raw pointer to an opaque C struct (`switch_caller_extension_t`); dereference only while this
-    /// `Channel` is live.
-    pub fn queued_extension(self) -> Option<*mut sys::switch_caller_extension_t> {
+    /// any. The returned handle borrows this `Channel`'s storage; use it only while the channel is
+    /// live.
+    pub fn queued_extension(self) -> Option<CallerExtension> {
         // SAFETY: `self.raw` is a live channel; the returned pointer borrows channel storage.
         let raw = unsafe { sys::switch_channel_get_queued_extension(self.raw.as_ptr()) };
-        if raw.is_null() { None } else { Some(raw) }
+        // SAFETY: `raw` is null or a live caller extension that borrows this channel.
+        unsafe { CallerExtension::from_raw(raw) }
     }
 
     /// Masquerades the caller extensions of `orig_channel` onto `new_channel` starting at `offset`.
@@ -643,8 +813,8 @@ impl Channel {
                 len as sys::switch_size_t,
             )
         };
-        if status != crate::SUCCESS {
-            return Err(crate::SwitchError(status));
+        if status != crate::SUCCESS.raw() {
+            return Err(crate::SwitchError(crate::Status::from_raw(status)));
         }
         // The C function NUL-terminates; find the end of the written C string.
         let written = buf.iter().position(|&b| b == 0).unwrap_or(len);
@@ -864,51 +1034,51 @@ impl Channel {
     ///
     /// Wraps `switch_channel_set_flag_value`. FreeSWITCH exposes no zero-argument
     /// `switch_channel_set_flag`; callers wanting the default value of `1` should pass `1` here.
-    pub fn set_flag_value(self, flag: sys::switch_channel_flag_t, value: u32) {
+    pub fn set_flag_value(self, flag: ChannelFlag, value: u32) {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_set_flag_value(self.raw.as_ptr(), flag, value) };
+        unsafe { sys::switch_channel_set_flag_value(self.raw.as_ptr(), flag.bits(), value) };
     }
 
     /// Sets a channel flag (`CF_*`) on this channel and any bridged peer.
     ///
     /// Wraps `switch_channel_set_flag_recursive`.
-    pub fn set_flag_recursive(self, flag: sys::switch_channel_flag_t) {
+    pub fn set_flag_recursive(self, flag: ChannelFlag) {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_set_flag_recursive(self.raw.as_ptr(), flag) };
+        unsafe { sys::switch_channel_set_flag_recursive(self.raw.as_ptr(), flag.bits()) };
     }
 
     /// Sets a channel flag (`CF_*`) on the channel's peer/bridged channel.
     ///
     /// Wraps `switch_channel_set_flag_partner`. Returns `true` when the partner flag was set.
-    pub fn set_flag_partner(self, flag: sys::switch_channel_flag_t) -> bool {
+    pub fn set_flag_partner(self, flag: ChannelFlag) -> bool {
         // SAFETY: `self.raw` is a live channel.
-        let set = unsafe { sys::switch_channel_set_flag_partner(self.raw.as_ptr(), flag) };
+        let set = unsafe { sys::switch_channel_set_flag_partner(self.raw.as_ptr(), flag.bits()) };
         set != 0
     }
 
     /// Clears a channel flag (`CF_*`).
     ///
     /// Wraps `switch_channel_clear_flag`.
-    pub fn clear_flag(self, flag: sys::switch_channel_flag_t) {
+    pub fn clear_flag(self, flag: ChannelFlag) {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_clear_flag(self.raw.as_ptr(), flag) };
+        unsafe { sys::switch_channel_clear_flag(self.raw.as_ptr(), flag.bits()) };
     }
 
     /// Clears a channel flag (`CF_*`) from this channel and any bridged peer.
     ///
     /// Wraps `switch_channel_clear_flag_recursive`.
-    pub fn clear_flag_recursive(self, flag: sys::switch_channel_flag_t) {
+    pub fn clear_flag_recursive(self, flag: ChannelFlag) {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_clear_flag_recursive(self.raw.as_ptr(), flag) };
+        unsafe { sys::switch_channel_clear_flag_recursive(self.raw.as_ptr(), flag.bits()) };
     }
 
     /// Clears a channel flag (`CF_*`) from the channel's peer/bridged channel.
     ///
     /// Wraps `switch_channel_clear_flag_partner`. Returns `true` when the partner flag was
     /// cleared.
-    pub fn clear_flag_partner(self, flag: sys::switch_channel_flag_t) -> bool {
+    pub fn clear_flag_partner(self, flag: ChannelFlag) -> bool {
         // SAFETY: `self.raw` is a live channel.
-        let cleared = unsafe { sys::switch_channel_clear_flag_partner(self.raw.as_ptr(), flag) };
+        let cleared = unsafe { sys::switch_channel_clear_flag_partner(self.raw.as_ptr(), flag.bits()) };
         cleared != 0
     }
 
@@ -916,17 +1086,17 @@ impl Channel {
     ///
     /// Wraps `switch_channel_clear_state_flag`. This is the inverse of
     /// [`set_state_flag`](Self::set_state_flag).
-    pub fn clear_state_flag(self, flag: sys::switch_channel_flag_t) {
+    pub fn clear_state_flag(self, flag: ChannelFlag) {
         // SAFETY: `self.raw` is a live channel.
-        unsafe { sys::switch_channel_clear_state_flag(self.raw.as_ptr(), flag) };
+        unsafe { sys::switch_channel_clear_state_flag(self.raw.as_ptr(), flag.bits()) };
     }
 
     /// Returns `true` when `flag` (`CF_*`) is set on the channel's peer/bridged channel.
     ///
     /// Wraps `switch_channel_test_flag_partner`.
-    pub fn test_flag_partner(self, flag: sys::switch_channel_flag_t) -> bool {
+    pub fn test_flag_partner(self, flag: ChannelFlag) -> bool {
         // SAFETY: `self.raw` is a live channel.
-        let set = unsafe { sys::switch_channel_test_flag_partner(self.raw.as_ptr(), flag) };
+        let set = unsafe { sys::switch_channel_test_flag_partner(self.raw.as_ptr(), flag.bits()) };
         set != 0
     }
 
@@ -1100,7 +1270,7 @@ fn collect_channel_variables(
     // SAFETY: `event` is a null out-param; `populate` (a closure over a live channel) fills it on
     // success. We destroy it below regardless of status.
     let status = populate(&mut event);
-    let result = if status == crate::SUCCESS && !event.is_null() {
+    let result = if status == crate::SUCCESS.raw() && !event.is_null() {
         // SAFETY: `event` is non-null and a valid event populated by FreeSWITCH. We walk the
         // `headers` linked list copying each name/value into owned Rust strings.
         let mut pairs = Vec::new();
@@ -1121,7 +1291,7 @@ fn collect_channel_variables(
         }
         Ok(pairs)
     } else {
-        Err(crate::SwitchError(status))
+        Err(crate::SwitchError(crate::Status::from_raw(status)))
     };
     if !event.is_null() {
         // SAFETY: `event` is non-null and a valid event; `switch_event_destroy` frees it.
@@ -1134,13 +1304,13 @@ fn collect_channel_variables(
 pub fn str_to_cause(name: impl AsRef<str>) -> Result<Cause> {
     let name = cstring(name)?;
     // SAFETY: `name` is a valid C string for the call.
-    Ok(unsafe { sys::switch_channel_str2cause(name.as_ptr()) })
+    Ok(Cause::from_raw(unsafe { sys::switch_channel_str2cause(name.as_ptr()) }))
 }
 
 /// Translates a [`Cause`] into its canonical name. The returned string borrows static storage.
 pub fn cause_to_str(cause: Cause) -> Option<&'static str> {
     // SAFETY: `switch_channel_cause2str` returns a static string literal.
-    let ptr = unsafe { sys::switch_channel_cause2str(cause) };
+    let ptr = unsafe { sys::switch_channel_cause2str(cause.raw()) };
     // SAFETY: `ptr` is null or a static null-terminated string.
     unsafe { borrowed_cstr_to_str(ptr) }
 }
@@ -1172,4 +1342,45 @@ pub fn unbind_device_state_handler(function: sys::switch_device_state_function_t
     // [`bind_device_state_handler`].
     let status = unsafe { sys::switch_channel_unbind_device_state_handler(function) };
     status_to_result(status)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn call_state_round_trip() {
+        // `from_raw(raw(x))` is identity for every variant.
+        for v in [
+            CallState::DOWN,
+            CallState::DIALING,
+            CallState::RINGING,
+            CallState::EARLY,
+            CallState::ACTIVE,
+            CallState::HELD,
+            CallState::RING_WAIT,
+            CallState::HANGUP,
+            CallState::UNHELD,
+        ] {
+            assert_eq!(CallState::from_raw(v.raw()), v);
+        }
+    }
+
+    #[test]
+    fn call_state_distinct_values() {
+        // The bindgen constants are 0..=8 in declaration order; spot-check the boundaries.
+        assert_eq!(CallState::DOWN.raw(), sys::switch_channel_callstate_t_CCS_DOWN);
+        assert_eq!(CallState::ACTIVE.raw(), sys::switch_channel_callstate_t_CCS_ACTIVE);
+        assert_eq!(CallState::UNHELD.raw(), sys::switch_channel_callstate_t_CCS_UNHELD);
+        assert_ne!(CallState::ACTIVE, CallState::HELD);
+    }
+
+    #[test]
+    fn call_state_down_predicate() {
+        // `is_down` holds for `HANGUP` and above; active/early call-progress states are not down.
+        assert!(!CallState::ACTIVE.is_down());
+        assert!(!CallState::EARLY.is_down());
+        assert!(CallState::HANGUP.is_down());
+        assert!(CallState::UNHELD.is_down());
+    }
 }

@@ -1,29 +1,39 @@
 //! AI Agent Seat module for FreeSWITCH.
 //!
-//! This module implements an AI-powered voice agent that handles voice calls
-//! with an audio-native LLM (no separate ASR): caller audio is sent to the LLM
-//! as a multimodal message, and TTS is a `speak` tool the LLM calls. The
-//! [`orchestrator::Orchestrator`] owns the full pipeline (perception → LLM
-//! with tool calling → TTS via `speak`); [`actor::CallActorImpl`] is the thin
-//! actix adapter that wires it to the FreeSWITCH media bug.
+//! This module registers as a FreeSWITCH **endpoint interface** named
+//! `ai_agent`. Inbound calls bridge to `ai_agent/<number>` (e.g.
+//! `ai_agent/1000`); FreeSWITCH then drives the call's media through this
+//! module's [`IoRoutines`](fswtch::IoRoutinesBuilder) table: the
+//! `write_frame` / `read_frame` / `kill_channel` callbacks in [`io`] run on
+//! the media thread at 50 Hz (20 ms frames).
+//!
+//! Pipeline (audio-native LLM, no separate ASR): the caller's audio (arriving
+//! in `write_frame`) is run through VAD; when a speech segment completes, an
+//! orchestrator turn is spawned on the tokio runtime. The orchestrator encodes
+//! the audio as a WAV data URI, sends it to the LLM as a multimodal user
+//! message, and synthesizes the LLM's `speak(text)` tool call via Volcano TTS.
+//! The resulting 16 kHz i16 PCM is pushed into [`io::CallState::tts_accum`],
+//! which `read_frame` drains toward the caller.
+//!
+//! Per-call state ([`io::CallState`]) lives in a global
+//! [`dashmap::DashMap`]([`io::CALLS`]) keyed by session UUID, because the I/O
+//! callbacks receive no `user_data` parameter.
 
 pub mod actor;
 pub mod audio_dsp;
 pub mod boundary;
-pub mod bug;
 pub mod call_core;
 pub mod config;
 pub mod control;
 pub mod event_sub;
+pub mod io;
 pub mod orchestrator;
+pub mod runtime;
 pub mod tts;
 pub mod tts_ws_codec;
 pub mod voice_core;
 
-use fswtch::{ApplicationInfo, Session, attach_media_bug};
-
-use call_core::registry;
-use config::get as get_config;
+use call_core::clear_calls;
 
 fswtch::module_exports! {
     module = ai_agent_seat,
@@ -47,20 +57,31 @@ fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::Modul
         tracing::warn!("Failed to load config from {}: {}", config_path, e);
     }
 
-    // Start tokio runtime + actix System
+    // Start tokio runtime (LLM HTTP + Volcano TTS WebSocket).
     actor::start_runtime();
 
-    // Register the voice_seat dialplan application
-    let app_info = ApplicationInfo::new(
-        "voice_seat",
-        "AI Agent Seat Application",
-        "AI Agent Seat Application",
-        "voice_seat",
-    );
+    // Bind to CUSTOM voice_seat::command events (external control plane).
+    if let Err(e) = event_sub::bind() {
+        tracing::warn!("event_sub::bind failed (continuing): {:?}", e);
+    }
 
-    let module = module.application(app_info, voice_seat_app)?;
+    // Build the I/O routines table: read_frame (drain TTS), write_frame
+    // (VAD + spawn orchestrator), kill_channel (teardown), outgoing_channel
+    // (create the B leg). fswtch's generic trampolines dispatch to
+    // `io::AiAgent` (the `EndpointIoRoutines` impl).
+    let io = fswtch::EndpointIoBuilder::build::<io::AiAgent>()?;
 
-    tracing::info!("ai_agent_seat module loaded successfully");
+    // All-NULL state-handler table: satisfies FreeSWITCH's
+    // `state_handler != NULL` assert in `switch_core_session_run` without
+    // overriding the standard state handlers.
+    let state_handler = fswtch::StateHandlerTable::new_null();
+
+    // Register the endpoint interface. Inbound calls bridge to
+    // `ai_agent/<number>`; FreeSWITCH routes the call's media through the
+    // I/O callbacks above.
+    let module = module.endpoint("ai_agent", io, state_handler)?;
+
+    tracing::info!("ai_agent_seat module loaded successfully (endpoint: ai_agent)");
     Ok(module)
 }
 
@@ -70,74 +91,19 @@ fswtch::module_load! {
     }
 }
 
-// FreeSWITCH application callback for voice_seat.
-//
-// This is called when the dialplan executes the voice_seat application.
-// It attaches a media bug to intercept audio and spawns a CallActor that owns
-// an Orchestrator running the AI pipeline (audio → LLM with tool calling →
-// TTS via the `speak` tool; no separate ASR).
-fswtch::app_callback! {
-    fn voice_seat_app(session, _data) {
-        handle_voice_seat_app(session);
-    }
-}
-
-fn handle_voice_seat_app(session: Option<Session>) {
-    // Every entry from an FS thread is wrapped at the boundary: a panic here
-    // must downgrade to "skip this call", never abort the FS process.
-    boundary::catch_fs(|| {
-        let Some(session) = session else {
-            tracing::error!("voice_seat app called with null session");
-            return;
-        };
-
-        // Session does not expose uuid() directly; read it from the channel.
-        let uuid = session.channel().and_then(|c| c.uuid()).unwrap_or_default();
-        tracing::info!("voice_seat app called for session {}", uuid);
-
-        // Attach media bug with VAD (read/write replace so we can tap and inject).
-        let bug_config = match fswtch::MediaBugConfig::new(
-            "ai_agent_seat",
-            "ai_agent_seat",
-            fswtch::MediaBugFlags::READ_REPLACE | fswtch::MediaBugFlags::WRITE_REPLACE,
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Failed to create MediaBugConfig: {:?}", e);
-                return;
-            }
-        };
-
-        let bug = match bug::VoiceSeatBug::from_session(session, get_config()) {
-            Ok(bug) => bug,
-            Err(e) => {
-                tracing::error!("Failed to create VoiceSeatBug: {}", e);
-                return;
-            }
-        };
-
-        match attach_media_bug(session, bug_config, bug) {
-            Ok(_) => {
-                tracing::info!("Media bug attached for session {}", uuid);
-                // Spawn CallActor on actix System
-                actor::spawn_call_actor(uuid, get_config());
-            }
-            Err(e) => {
-                tracing::error!("Failed to attach media bug: {:?}", e);
-            }
-        }
-    });
-}
-
 /// Module shutdown function.
 pub extern "C" fn switch_module_shutdown() -> fswtch::Status {
     tracing::info!("Shutting down ai_agent_seat module");
 
-    // Stop tokio runtime + actix System
+    // Unbind events first so an in-flight callback can't enter unloaded code.
+    event_sub::unbind();
+
+    // Stop tokio runtime.
     actor::stop_runtime();
 
-    // Clear the registry
-    registry().clear();
+    // Clear the live-call registry + per-call state.
+    clear_calls();
+    io::CALLS.clear();
 
     tracing::info!("ai_agent_seat module shutdown complete");
     fswtch::SUCCESS

@@ -353,7 +353,7 @@ pub fn is_match(subject: &str, expression: &str) -> Result<bool> {
     let e = crate::cstring(expression)?;
     // SAFETY: both pointers are valid null-terminated C strings for the duration of the call.
     let status = unsafe { sys::switch_regex_match(s.as_ptr(), e.as_ptr()) };
-    Ok(status == SUCCESS)
+    Ok(status == SUCCESS.raw())
 }
 
 /// Like [`is_match`] but also reports whether the match was partial.
@@ -366,7 +366,7 @@ pub fn is_match_partial(subject: &str, expression: &str) -> Result<Option<bool>>
     let mut partial: std::os::raw::c_int = 0;
     // SAFETY: both pointers are valid C strings; `partial` is a valid local for the out-value.
     let status = unsafe { sys::switch_regex_match_partial(s.as_ptr(), e.as_ptr(), &mut partial) };
-    if status == SUCCESS {
+    if status == SUCCESS.raw() {
         Ok(Some(partial == 0))
     } else {
         Ok(None)

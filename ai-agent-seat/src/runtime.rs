@@ -1,19 +1,19 @@
-//! actix runtime lifecycle for ai_agent_seat.
+//! Tokio runtime lifecycle for ai_agent_seat.
 //!
-//! The seat runs its AI pipeline as actix actors (`CallActor`) plus detached
-//! tokio tasks (ASR/LLM/TTS HTTP, speech drain). actix 0.13 actors require an
-//! `actix::System` (tokio + `LocalSet` + `Arbiter`); a bare tokio multi-thread
-//! runtime lacks the `LocalSet` so `actix::spawn` panics. So **the module's
-//! runtime IS an `actix::System`**, not a hand-built tokio runtime.
+//! The Endpoint-module design has no actix actors: per-call state lives in a
+//! global [`dashmap::DashMap`] (see [`crate::io`]) and the I/O callbacks run
+//! inline on FreeSWITCH's media thread. The only async surface is the
+//! orchestrator pipeline (LLM HTTP + Volcano TTS WebSocket), which is spawned
+//! onto a single process-global [`tokio::runtime::Runtime`] from the
+//! `write_frame` callback when VAD detects end of speech.
 //!
 //! Lifecycle:
-//! - `start()` (on the FS module-load thread) builds the `SystemRunner` on a
-//!   dedicated driver thread, captures the system `ArbiterHandle` via a oneshot
-//!   channel, then stores it in a global `OnceLock`.
-//! - `spawn()` (callable from any FS media/app thread) targets that
-//!   `ArbiterHandle`; the future lands on the System's runtime.
-//! - `stop()` signals `System::stop()` from inside the arbiter (where
-//!   `System::current()` is valid) and joins the driver thread.
+//! - [`start()`] (on the FS module-load thread) builds a multi-threaded
+//!   `Runtime` and stores it in a global `OnceLock`.
+//! - [`spawn()`] (callable from any FS media thread) hands the future to the
+//!   runtime via `Runtime::spawn` — the future lands on the runtime's worker
+//!   pool, NOT the media thread, so it never blocks the 50 Hz frame loop.
+//! - [`stop()`] shuts the runtime down (module shutdown).
 //!
 //! Storage uses `std::sync::OnceLock` (initialized exactly once at module
 //! load; module load is single-threaded in FreeSWITCH). The inner `Mutex`
@@ -21,124 +21,88 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use actix::{ArbiterHandle, System};
+use tokio::runtime::Runtime;
 
-use fswtch::{SwitchError, GENERR, log_error, log_info, log_warning};
+use fswtch::{GENERR, SwitchError, log_error, log_info, log_warning};
 
 const MODULE: &str = "ai_agent_seat";
-
-/// Bundle of the captured System handle + the driver thread join handle.
-struct SystemRuntime {
-    /// Handle to the System's default Arbiter. Clonable + `Send`; `spawn` on
-    /// it from any thread lands the future on the System's runtime.
-    arbiter: ArbiterHandle,
-    /// The dedicated driver thread running `SystemRunner::run()`. Joined in
-    /// `stop()` after `System::stop()` unblocks `run()`.
-    driver: Option<std::thread::JoinHandle<()>>,
-}
 
 /// Global runtime slot. `OnceLock` gives a `&'static` reference lazily
 /// initialized on first access (module load); the `Mutex<Option<_>>` allows
 /// `stop()` to `take()` the runtime for teardown.
-static SYSTEM: OnceLock<Mutex<Option<SystemRuntime>>> = OnceLock::new();
+static RUNTIME: OnceLock<Mutex<Option<Runtime>>> = OnceLock::new();
 
-fn system_slot() -> &'static Mutex<Option<SystemRuntime>> {
-    SYSTEM.get_or_init(|| Mutex::new(None))
+fn runtime_slot() -> &'static Mutex<Option<Runtime>> {
+    RUNTIME.get_or_init(|| Mutex::new(None))
 }
 
-/// Build the actix `System` and start its driver thread.
+/// Build the tokio `Runtime`.
 ///
-/// Called from `switch_module_load` on the FS module-load thread. Safe to
-/// call again — a double load logs a warning and returns `Ok(())` without
+/// Called from `switch_module_load` on the FS module-load thread. Safe to call
+/// again — a double load logs a warning and returns `Ok(())` without
 /// re-initializing.
 pub fn start() -> fswtch::Result<()> {
-    let mut guard = system_slot().lock().expect("system mutex poisoned");
+    let mut guard = runtime_slot().lock().expect("runtime mutex poisoned");
     if guard.is_some() {
-        log_warning(MODULE, "system already started — ignoring double load");
+        log_warning(MODULE, "runtime already started — ignoring double load");
         return Ok(());
     }
 
-    // The actix `SystemRunner` is bound to a tokio `LocalSet` (thread-local),
-    // so it is NOT `Send` — it cannot move across threads. It must be created
-    // AND driven on the same dedicated thread. Create the System on the driver
-    // thread; pass the `ArbiterHandle` back to the load thread via a oneshot.
-    let (tx, rx) = std::sync::mpsc::channel::<ArbiterHandle>();
-    let driver = std::thread::Builder::new()
-        .name("ai-agent-seat-system".into())
-        .spawn(move || {
-            // Created + driven on THIS thread: `System::new()` builds the
-            // tokio runtime + LocalSet + system Arbiter; `run()` blocks until
-            // `System::stop()`.
-            let runner = System::new();
-            // `Arbiter::current()` is valid here — this thread is in the System
-            // context once the runner is built.
-            let arbiter = actix::Arbiter::current();
-            let _ = tx.send(arbiter);
-            let _ = runner.run();
-        })
-        .map_err(|e| {
-            log_error(
-                MODULE,
-                format!("actix system driver thread spawn failed: {e} — module load aborted"),
-            );
-            SwitchError(GENERR)
-        })?;
-
-    let arbiter = rx.recv().map_err(|e| {
+    let runtime = Runtime::new().map_err(|e| {
         log_error(
             MODULE,
-            format!("actix System init failed on driver thread: {e} — module load aborted"),
+            format!("tokio Runtime creation failed: {e} — module load aborted"),
         );
         SwitchError(GENERR)
     })?;
 
-    log_info(MODULE, "actix System started (driver thread + system Arbiter)");
-    *guard = Some(SystemRuntime {
-        arbiter,
-        driver: Some(driver),
-    });
+    log_info(MODULE, "tokio Runtime started (multi-thread worker pool)");
+    *guard = Some(runtime);
     Ok(())
 }
 
-/// Stop the actix `System` and join the driver thread.
+/// Stop the tokio `Runtime`.
 ///
 /// Called from `switch_module_shutdown` (after FS has torn down channels). No-op
-/// (with a log) if the system was never started or already stopped.
+/// (with a log) if the runtime was never started or already stopped.
 pub fn stop() {
-    let mut taken = system_slot().lock().expect("system mutex poisoned").take();
-    let Some(mut sys) = taken.take() else {
-        log_warning(MODULE, "stop() called but system was not started");
+    let taken = runtime_slot()
+        .lock()
+        .expect("runtime mutex poisoned")
+        .take();
+    let Some(runtime) = taken else {
+        log_warning(MODULE, "stop() called but runtime was not started");
         return;
     };
-
-    // Signal System::stop() from *inside* the arbiter (where System::current()
-    // is valid). This unblocks `SystemRunner::run()` on the driver thread.
-    sys.arbiter.spawn(async {
-        System::current().stop();
-    });
-
-    if let Some(handle) = sys.driver.take() {
-        if let Err(e) = handle.join() {
-            log_warning(MODULE, format!("system driver thread join failed: {e:?}"));
-        }
-    }
-    log_info(MODULE, "actix System stopped");
+    runtime.shutdown_timeout(std::time::Duration::from_secs(5));
+    log_info(MODULE, "tokio Runtime stopped");
 }
 
-/// Spawn a future on the System's Arbiter from an arbitrary (non-actix) thread.
+/// Spawn a future on the tokio runtime from an arbitrary (non-tokio) thread.
 ///
-/// Use case: an FS media/app thread creating a per-call task (e.g. driving an
-/// AI pipeline turn). No-op (with a log) if the system isn't up yet (e.g.
-/// during load races). `ArbiterHandle::spawn` returns only a `bool` acceptance
-/// flag, which we discard — all current callers run detached.
+/// Use case: the `write_frame` I/O callback (on FreeSWITCH's media thread)
+/// launches an orchestrator turn (LLM + TTS). No-op (with a log) if the runtime
+/// isn't up yet (e.g. during load races). The future runs on the runtime's
+/// worker pool, so it never blocks the media thread.
 pub fn spawn<F>(future: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
-    let guard = system_slot().lock().expect("system mutex poisoned");
-    let Some(sys) = guard.as_ref() else {
-        log_error(MODULE, "spawn() called before system start");
+    let guard = runtime_slot().lock().expect("runtime mutex poisoned");
+    let Some(runtime) = guard.as_ref() else {
+        log_error(MODULE, "spawn() called before runtime start");
         return;
     };
-    sys.arbiter.spawn(future);
+    runtime.spawn(future);
+}
+
+/// Returns a handle to the live runtime, if started.
+///
+/// Used by code that needs to construct a `tokio::sync::mpsc::channel` and have
+/// the sender side be backed by a live runtime (the channel itself does not
+/// require a runtime to construct, only to `send`/`recv` across awaits). Kept
+/// for callers that want to `runtime::Handle::block_on` etc.
+pub fn handle() -> Option<tokio::runtime::Handle> {
+    let guard = runtime_slot().lock().expect("runtime mutex poisoned");
+    guard.as_ref().map(|r| r.handle().clone())
 }

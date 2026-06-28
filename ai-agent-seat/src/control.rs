@@ -14,7 +14,7 @@
 //! the orchestrator after it returns.
 
 use anyhow::Result;
-use fswtch::{CAUSE_NORMAL_CLEARING, Event, Session, SessionGuard};
+use fswtch::{Cause, Event, Session, SessionGuard};
 
 use crate::call_core::CallControl;
 
@@ -51,7 +51,7 @@ impl CallControl for FfiControl {
         // lock) lives until the end of the call so the session pointer stays
         // valid for the underlying `switch_channel_perform_hangup`.
         Self::with_session(uuid, "hangup", |session| {
-            session.hangup(CAUSE_NORMAL_CLEARING);
+            session.hangup(Cause::NORMAL_CLEARING);
             Ok(())
         })
     }

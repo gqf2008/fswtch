@@ -37,9 +37,10 @@ mod xml;
 pub use fswtch_sys as sys;
 
 pub use buffer::Buffer;
-pub use caller::CallerProfile;
+pub use caller::{CallerExtension, CallerProfile};
 pub use channel::{
-    Channel, bind_device_state_handler, cause_to_str, str_to_cause, unbind_device_state_handler,
+    CallState, Channel, ChannelFlag, bind_device_state_handler, cause_to_str, str_to_cause,
+    unbind_device_state_handler,
 };
 pub use codec::Codec;
 pub use command::{
@@ -51,19 +52,24 @@ pub use console::{
 };
 pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable, set_variable};
 pub use core_db::{CoreDb, Stmt, StmtRows};
-pub use endpoint::{Dtmf, DtmfSource, Frame, FrameMut, IoFlags, IoRoutinesBuilder, SessionMessage};
+pub use endpoint::{
+    Dtmf, DtmfSource, EndpointIoBuilder, EndpointIoRoutines, EndpointInterfaceRef, Frame,
+    FrameMut, IoFlags, IoRoutinesBuilder, MessageType, OutgoingResult, SessionMessage,
+    StateHandlerTable, request_session,
+};
 pub use estimators::{CusumDetector, KalmanEstimator, is_slow_link};
 pub use event::{
-    Event, EventBinder, EventRef, EventXml, HeaderIter, binary_deserialize, bind_permanent,
-    channel_bind, channel_broadcast, channel_deliver, channel_permission_clear,
-    channel_permission_modify, channel_permission_verify, channel_unbind, event_name,
-    event_running, name_event, unbind_callback,
+    Event, EventBinder, EventType, EventRef, EventXml, HeaderIter, Priority,
+    binary_deserialize, bind_permanent, channel_bind, channel_broadcast, channel_deliver,
+    channel_permission_clear, channel_permission_modify, channel_permission_verify,
+    channel_unbind, event_name, event_running, name_event, unbind_callback,
 };
 pub use ivr::{
-    DigitMachine, DmachineMatch, IvrMenu, IvrMenuConfig, OriginateOutcome, block_dtmf_session,
-    broadcast, broadcast_in_thread, capture_text, check_hold, check_presence_mapping,
-    collect_digits_callback, collect_digits_count, delay_echo, detect_speech,
-    detect_speech_disable_all_grammars, detect_speech_disable_grammar,
+    DigitActionTarget, DigitMachine, DmachineMatch, IvrMenu, IvrMenuConfig, MediaFlag,
+    OriginateOutcome, block_dtmf_session, broadcast, broadcast_in_thread, capture_text,
+    check_hold,
+    check_presence_mapping, collect_digits_callback, collect_digits_count, delay_echo,
+    detect_speech, detect_speech_disable_all_grammars, detect_speech_disable_grammar,
     detect_speech_enable_grammar, detect_speech_init, detect_speech_load_grammar,
     detect_speech_start_input_timers, detect_speech_unload_grammar, displace_session,
     eavesdrop_exec_all, eavesdrop_pop_eavesdropper, generate_json_cdr, generate_xml_cdr, media,
@@ -107,15 +113,15 @@ pub use resample::{
     change_sln_volume_granular, char_to_float, float_to_char, float_to_short, generate_sln_silence,
     merge_sln, mux_channels, short_to_float, swap_linear, unmerge_sln,
 };
-pub use rtp::{Rtp, RtpConfig, request_port};
+pub use rtp::{Rtp, RtpConfig, RtpPacket, request_port};
 pub use scheduler::{
     Task, TaskConfig, TaskFlags, TaskHandle, TaskHandler, cancel_group, spawn, start, stop,
 };
 pub use session::{Session, SessionGuard};
 pub use status::{
-    CAUSE_NO_ANSWER, CAUSE_NO_USER_RESPONSE, CAUSE_NONE, CAUSE_NORMAL_CLEARING,
-    CAUSE_ORIGINATOR_CANCEL, CAUSE_RECOVERY_ON_TIMER_EXPIRE, CAUSE_USER_BUSY, Cause, FALSE, GENERR,
-    Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result, switch_bool,
+    CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallDirection, Cause, ChannelState, OriginateFlag,
+    Result, Status, SwitchError, FALSE, GENERR, SUCCESS, false_on_success, status_to_result,
+    switch_bool,
 };
 pub use stream::{ApiStream, Stream, write_stream_response};
 pub use timer::Timer;
@@ -129,15 +135,21 @@ pub use xml::{XmlConfig, XmlNode};
 #[macro_export]
 macro_rules! api_callback {
     (fn $name:ident($cmd:ident, $session:ident, $stream:ident) $body:block) => {
+        // FFI boundary: returns `sys::switch_status_t` (raw). The user's `$body` runs in an
+        // inner closure that returns `fswtch::Status`; early `return Status::X` inside the
+        // body returns from the closure, and `.raw()` translates it here.
         unsafe extern "C" fn $name(
-            $cmd: *const ::std::ffi::c_char,
-            $session: *mut $crate::sys::switch_core_session_t,
-            $stream: *mut $crate::sys::switch_stream_handle_t,
-        ) -> $crate::Status {
-            let $cmd = unsafe { $crate::command_text($cmd) };
-            let $session = unsafe { $crate::Session::from_raw($session) };
-            let $stream = unsafe { $crate::ApiStream::from_raw($stream) };
-            $body
+            cmd_raw: *const ::std::ffi::c_char,
+            session_raw: *mut $crate::sys::switch_core_session_t,
+            stream_raw: *mut $crate::sys::switch_stream_handle_t,
+        ) -> $crate::sys::switch_status_t {
+            let body = |$cmd: Option<String>, $session: Option<$crate::Session>, $stream: Option<$crate::ApiStream>| -> $crate::Status {
+                $body
+            };
+            let $cmd = unsafe { $crate::command_text(cmd_raw) };
+            let $session = unsafe { $crate::Session::from_raw(session_raw) };
+            let $stream = unsafe { $crate::ApiStream::from_raw(stream_raw) };
+            body($cmd, $session, $stream).raw()
         }
     };
 }
@@ -159,13 +171,18 @@ macro_rules! app_callback {
 #[macro_export]
 macro_rules! chat_callback {
     (fn $name:ident($event:ident, $data:ident) $body:block) => {
+        // See `api_callback!` — FFI boundary returns raw; the body runs in a closure
+        // returning `fswtch::Status`.
         unsafe extern "C" fn $name(
-            $event: *mut $crate::sys::switch_event_t,
-            $data: *const ::std::ffi::c_char,
-        ) -> $crate::Status {
-            let $event = unsafe { $crate::EventRef::from_raw($event) };
-            let $data = unsafe { $crate::command_text($data) };
-            $body
+            event_raw: *mut $crate::sys::switch_event_t,
+            data_raw: *const ::std::ffi::c_char,
+        ) -> $crate::sys::switch_status_t {
+            let body = |$event: $crate::EventRef, $data: Option<String>| -> $crate::Status {
+                $body
+            };
+            let $event = unsafe { $crate::EventRef::from_raw(event_raw) };
+            let $data = unsafe { $crate::command_text(data_raw) };
+            body($event, $data).raw()
         }
     };
 }
@@ -186,19 +203,22 @@ macro_rules! event_callback {
 #[macro_export]
 macro_rules! module_load {
     (fn $name:ident($module:ident) for $module_name:literal $body:block) => {
+        // Returns `sys::switch_status_t` (raw) at the FFI boundary; the user's `$body`
+        // produces `fswtch::Result<ModuleBuilder>`, mapped to a `Status` and unwrapped to
+        // its raw value here.
         unsafe extern "C" fn $name(
             module_interface: *mut *mut $crate::sys::switch_loadable_module_interface_t,
             pool: *mut $crate::sys::switch_memory_pool_t,
-        ) -> $crate::Status {
+        ) -> $crate::sys::switch_status_t {
             let $module =
                 match unsafe { $crate::ModuleBuilder::new(module_interface, pool, $module_name) } {
                     Ok(module) => module,
-                    Err(error) => return error.0,
+                    Err(error) => return error.0.raw(),
                 };
             let result: $crate::Result<$crate::ModuleBuilder> = $body;
             match result {
-                Ok(_) => $crate::SUCCESS,
-                Err(error) => error.0,
+                Ok(_) => $crate::Status::SUCCESS.raw(),
+                Err(error) => error.0.raw(),
             }
         }
     };

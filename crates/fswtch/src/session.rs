@@ -23,6 +23,166 @@ impl Session {
         self.raw.as_ptr()
     }
 
+    /// Spawns the session's state-machine thread (`switch_core_session_thread_launch`).
+    ///
+    /// FreeSWITCH's state machine (`switch_core_session_run`) runs on this thread, driving the
+    /// channel through `CS_NEW` → `CS_INIT` → … transitions. For an outgoing leg created by an
+    /// endpoint's `outgoing_channel` callback, the originator (`switch_ivr_originate`) normally
+    /// calls this itself after the callback returns `CAUSE_SUCCESS` — endpoint authors usually
+    /// do **not** need to call it. It is exposed for endpoints that need to drive a session
+    /// outside the standard originate path.
+    pub fn thread_launch(self) -> Result<()> {
+        // SAFETY: `self.raw` is a live, fully-initialized session. The function checks the
+        // `SSF_THREAD_RUNNING`/`SSF_THREAD_STARTED` flags itself and returns `INUSE`/`FALSE`
+        // on a double-launch, which `status_to_result` maps to `Err`.
+        let status = unsafe { sys::switch_core_session_thread_launch(self.raw.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// The read codec's actual sample rate (Hz). Returns `8000` when no codec is
+    /// set (e.g. before media is negotiated) so callers get a sane default.
+    pub fn read_sample_rate(self) -> u32 {
+        // SAFETY: `self.raw` is a live session. `get_read_codec` returns a
+        // pointer valid for the session's lifetime (or null).
+        let codec = unsafe { sys::switch_core_session_get_read_codec(self.raw.as_ptr()) };
+        if codec.is_null() {
+            return 8000;
+        }
+        // SAFETY: `codec` is non-null and live; `implementation` is a pointer
+        // populated by FreeSWITCH during codec init.
+        let imp = unsafe { (*codec).implementation };
+        if imp.is_null() {
+            return 8000;
+        }
+        // SAFETY: `imp` is non-null and owned by the codec.
+        unsafe { (*imp).actual_samples_per_second }
+    }
+
+    /// The read codec's samples-per-packet (e.g. 160 for 8 kHz / 20 ms L16).
+    /// Returns `160` as a default when no codec is set.
+    pub fn read_samples_per_packet(self) -> u32 {
+        // SAFETY: see `read_sample_rate`.
+        let codec = unsafe { sys::switch_core_session_get_read_codec(self.raw.as_ptr()) };
+        if codec.is_null() {
+            return 160;
+        }
+        let imp = unsafe { (*codec).implementation };
+        if imp.is_null() {
+            return 160;
+        }
+        // SAFETY: `imp` is non-null and owned by the codec.
+        unsafe { (*imp).samples_per_packet }
+    }
+
+    /// Allocates a `switch_codec_t` on the session's pool and initializes it as
+    /// the session's read codec.
+    ///
+    /// `implementation` is the codec module name (e.g. `"L16"`, `"PCMU"`); `rate`
+    /// the sample rate in Hz; `ms` the packetization interval; `channels` the
+    /// channel count. The codec struct lives on the session pool — no `Drop`
+    /// needed, it is reclaimed when the session is destroyed.
+    ///
+    /// Endpoints that synthesize an outgoing leg (no real signalling stack) call
+    /// this from `outgoing_channel` so the bridge has a codec to transcode
+    /// against. Without a read codec, `switch_core_io` hangs the channel up with
+    /// `SWITCH_CAUSE_INCOMPATIBLE_DESTINATION` as soon as media exchange begins.
+    pub fn init_read_codec(
+        self,
+        implementation: impl AsRef<str>,
+        rate: u32,
+        ms: u32,
+        channels: u32,
+    ) -> Result<()> {
+        let codec = self.alloc_codec_on_pool(implementation, rate, ms, channels)?;
+        // SAFETY: `self.raw` is a live session; `codec` is a valid codec struct
+        // allocated on this session's pool. `set_read_codec` stores the pointer
+        // for the session's lifetime (pool-owned, so no dangling on drop).
+        let status =
+            unsafe { sys::switch_core_session_set_read_codec(self.raw.as_ptr(), codec) };
+        status_to_result(status)
+    }
+
+    /// Same as [`init_read_codec`](Self::init_read_codec) but for the write codec.
+    pub fn init_write_codec(
+        self,
+        implementation: impl AsRef<str>,
+        rate: u32,
+        ms: u32,
+        channels: u32,
+    ) -> Result<()> {
+        let codec = self.alloc_codec_on_pool(implementation, rate, ms, channels)?;
+        // SAFETY: see `init_read_codec`.
+        let status =
+            unsafe { sys::switch_core_session_set_write_codec(self.raw.as_ptr(), codec) };
+        status_to_result(status)
+    }
+
+    /// Helper: allocate a zeroed `switch_codec_t` on the session pool and
+    /// initialize it via `switch_core_codec_init_with_bitrate`. Returns a
+    /// pool-owned raw pointer (no `Drop`).
+    fn alloc_codec_on_pool(
+        self,
+        implementation: impl AsRef<str>,
+        rate: u32,
+        ms: u32,
+        channels: u32,
+    ) -> Result<*mut sys::switch_codec_t> {
+        let implementation = cstring(implementation)?;
+        // SAFETY: `self.raw` is a live session; `get_pool` returns its pool.
+        let pool = unsafe { sys::switch_core_session_get_pool(self.raw.as_ptr()) };
+        if pool.is_null() {
+            return Err(crate::SwitchError(crate::GENERR));
+        }
+        // SAFETY: `switch_core_perform_session_alloc` allocates `size` bytes on
+        // the session pool, zeroed/aligned suitably for any struct.
+        let codec = unsafe {
+            sys::switch_core_perform_session_alloc(
+                self.raw.as_ptr(),
+                std::mem::size_of::<sys::switch_codec_t>() as _,
+                c"fswtch-rs".as_ptr(),
+                c"Session::alloc_codec_on_pool".as_ptr(),
+                line!() as _,
+            )
+        };
+        if codec.is_null() {
+            return Err(crate::SwitchError(crate::GENERR));
+        }
+        // SAFETY: `codec` is a freshly pool-allocated buffer of the right size;
+        // zero it before init (matches bindgen's Default). The pool owns it.
+        unsafe { std::ptr::write_bytes::<u8>(codec.cast::<u8>(), 0, std::mem::size_of::<sys::switch_codec_t>()) };
+        // SAFETY: `codec` is a valid, zeroed, pool-owned `switch_codec_t`;
+        // SAFETY: `codec` is a valid, zeroed, pool-owned `switch_codec_t`;
+        // `implementation` is a valid C string; `pool` is this session's pool.
+        //
+        // flags MUST include ENCODE | DECODE: an endpoint's synthesized codec is
+        // bidirectional (the bridge both writes caller audio through it and
+        // reads our TTS through it). With flags=0 the codec module never runs
+        // its decoder/encoder init, and the first transcode attempt fails with
+        // "Codec decoder is not initialized" (switch_core_codec.c:815) →
+        // INCOMPATIBLE_DESTINATION hangup. This matches how mod_loopback's
+        // tech_init initializes its codecs.
+        let codec_flags =
+            sys::switch_codec_flag_enum_t_SWITCH_CODEC_FLAG_ENCODE
+                | sys::switch_codec_flag_enum_t_SWITCH_CODEC_FLAG_DECODE;
+        let status = unsafe {
+            sys::switch_core_codec_init_with_bitrate(
+                codec.cast::<sys::switch_codec_t>(),
+                implementation.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                rate,
+                ms as std::os::raw::c_int,
+                channels as std::os::raw::c_int,
+                0,
+                codec_flags,
+                std::ptr::null(),
+                pool,
+            )
+        };
+        status_to_result(status)?;
+        Ok(codec.cast::<sys::switch_codec_t>())
+    }
+
     pub fn answer(self) -> Result<()> {
         // SAFETY: `self.raw` is a live session pointer provided by FreeSWITCH.
         let channel = unsafe { sys::switch_core_session_get_channel(self.raw.as_ptr()) };

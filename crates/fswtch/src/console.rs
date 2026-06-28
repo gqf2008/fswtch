@@ -186,7 +186,7 @@ impl Drop for CompletionFunc {
         // SAFETY: `self.name` was successfully registered by `new` and is still registered (the
         // guard owns the single registration).
         let status = unsafe { sys::switch_console_del_complete_func(self.name.as_ptr()) };
-        if status != crate::SUCCESS {
+        if status != crate::SUCCESS.raw() {
             // De-registration best-effort in `Drop`; surface failure via the error log rather than
             // panicking.
             crate::log_error(

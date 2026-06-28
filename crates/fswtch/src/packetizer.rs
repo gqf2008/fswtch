@@ -253,12 +253,12 @@ impl Packetizer {
         // `data` / `datalen` / `timestamp` / `seq` / `m` / `payload` fields and writes at
         // most `(*frame).buflen` bytes through `(*frame).data`.
         let status = unsafe { sys::switch_packetizer_read(self.raw.as_ptr(), frame) };
-        if status == SUCCESS {
+        if status == SUCCESS.raw() {
             Ok(true)
-        } else if status == FALSE {
+        } else if status == FALSE.raw() {
             Ok(false)
         } else {
-            Err(SwitchError(status))
+            Err(SwitchError(crate::Status::from_raw(status)))
         }
     }
 }

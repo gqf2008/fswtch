@@ -7,6 +7,120 @@ use std::ffi::c_char;
 use std::mem::MaybeUninit;
 use std::ptr::NonNull;
 
+/// FreeSWITCH media flag bitset (`switch_media_flag_t`), passed to [`media`] / [`nomedia`].
+///
+/// A newtype over the raw `u32` bitset so callers cannot mix it with other flag types. The
+/// underlying enum is `switch_media_flag_enum_t` (`SMF_*`); every variant is a power of two (or
+/// `0` for [`MediaFlag::NONE`]), so this is a bitmask — combine with `|`, test with
+/// [`contains`](Self::contains), matching the [`crate::ChannelFlag`] / [`crate::IoFlags`] pattern.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct MediaFlag(pub sys::switch_media_flag_t);
+
+impl MediaFlag {
+    pub const NONE: Self = Self(sys::switch_media_flag_enum_t_SMF_NONE);
+    pub const REBRIDGE: Self = Self(sys::switch_media_flag_enum_t_SMF_REBRIDGE);
+    pub const ECHO_ALEG: Self = Self(sys::switch_media_flag_enum_t_SMF_ECHO_ALEG);
+    pub const ECHO_BLEG: Self = Self(sys::switch_media_flag_enum_t_SMF_ECHO_BLEG);
+    pub const FORCE: Self = Self(sys::switch_media_flag_enum_t_SMF_FORCE);
+    pub const LOOP: Self = Self(sys::switch_media_flag_enum_t_SMF_LOOP);
+    pub const HOLD_BLEG: Self = Self(sys::switch_media_flag_enum_t_SMF_HOLD_BLEG);
+    pub const IMMEDIATE: Self = Self(sys::switch_media_flag_enum_t_SMF_IMMEDIATE);
+    pub const EXEC_INLINE: Self = Self(sys::switch_media_flag_enum_t_SMF_EXEC_INLINE);
+    pub const PRIORITY: Self = Self(sys::switch_media_flag_enum_t_SMF_PRIORITY);
+    pub const REPLYONLY_A: Self = Self(sys::switch_media_flag_enum_t_SMF_REPLYONLY_A);
+    pub const REPLYONLY_B: Self = Self(sys::switch_media_flag_enum_t_SMF_REPLYONLY_B);
+
+    /// The raw bitset value, for FFI.
+    #[inline]
+    pub const fn bits(self) -> sys::switch_media_flag_t {
+        self.0
+    }
+
+    /// Wraps a raw `switch_media_flag_t` (e.g. an `SMF_*` constant or an OR-ed combination).
+    #[inline]
+    pub const fn from_raw(v: sys::switch_media_flag_t) -> Self {
+        Self(v)
+    }
+
+    /// Returns `true` when every bit set in `flag` is also set in `self`. `NONE` (=0) contains only
+    /// itself.
+    #[inline]
+    pub const fn contains(self, flag: Self) -> bool {
+        if flag.0 == 0 {
+            self.0 == 0
+        } else {
+            (self.0 & flag.0) == flag.0
+        }
+    }
+}
+
+impl std::ops::BitOr for MediaFlag {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for MediaFlag {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+// ── DigitActionTarget ────────────────────────────────────────────────────
+
+/// The leg a [`DigitMachine`]'s matched actions fire against
+/// (`switch_digit_action_target_t`). A single-valued enum — pass to
+/// [`DigitMachine::set_target`] and read back from [`DigitMachine::get_target`].
+///
+/// `SELF` applies the action to the session that owns the machine; `PEER` to its bridged
+/// partner; `BOTH` to both legs.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct DigitActionTarget(pub sys::switch_digit_action_target_t);
+
+impl DigitActionTarget {
+    /// Apply matched actions to the owning session's own leg.
+    pub const SELF: Self = Self(sys::switch_digit_action_target_t_DIGIT_TARGET_SELF);
+    /// Apply matched actions to the bridged peer leg.
+    pub const PEER: Self = Self(sys::switch_digit_action_target_t_DIGIT_TARGET_PEER);
+    /// Apply matched actions to both legs.
+    pub const BOTH: Self = Self(sys::switch_digit_action_target_t_DIGIT_TARGET_BOTH);
+
+    /// The raw `switch_digit_action_target_t` value, for FFI.
+    #[inline]
+    pub const fn raw(self) -> sys::switch_digit_action_target_t {
+        self.0
+    }
+
+    /// Wraps a raw target returned by FreeSWITCH.
+    #[inline]
+    pub const fn from_raw(v: sys::switch_digit_action_target_t) -> Self {
+        Self(v)
+    }
+
+    /// `true` when actions fire against the owning session's own leg (`SELF` or `BOTH`).
+    #[inline]
+    pub const fn is_self(self) -> bool {
+        self.0 == sys::switch_digit_action_target_t_DIGIT_TARGET_SELF
+            || self.0 == sys::switch_digit_action_target_t_DIGIT_TARGET_BOTH
+    }
+
+    /// `true` when actions fire against the bridged peer leg (`PEER` or `BOTH`).
+    #[inline]
+    pub const fn is_peer(self) -> bool {
+        self.0 == sys::switch_digit_action_target_t_DIGIT_TARGET_PEER
+            || self.0 == sys::switch_digit_action_target_t_DIGIT_TARGET_BOTH
+    }
+}
+
+impl From<sys::switch_digit_action_target_t> for DigitActionTarget {
+    fn from(v: sys::switch_digit_action_target_t) -> Self {
+        Self(v)
+    }
+}
+
 /// Records the session's media to `path`. `limit` is the maximum recording length in seconds
 /// (pass `0` for no limit). A null file handle lets FreeSWITCH open `path` itself.
 pub fn record_file(session: Session, path: impl AsRef<str>, limit: u32) -> Result<()> {
@@ -283,7 +397,7 @@ pub fn check_hold(session: Session) -> bool {
     unsafe { sys::switch_ivr_check_hold(session.as_ptr()) };
     session
         .channel()
-        .is_some_and(|ch| ch.test_flag(sys::switch_channel_flag_t_CF_HOLD))
+        .is_some_and(|ch| ch.test_flag(crate::ChannelFlag::HOLD))
 }
 
 /// Broadcasts `path` (a media path or app/arg string) to the channel identified by `uuid`, applying
@@ -496,8 +610,8 @@ pub fn originate_raw(
     status_to_result(status)?;
     Ok(OriginateOutcome {
         peer,
-        cause,
-        cancel_cause,
+        cause: Cause::from_raw(cause),
+        cancel_cause: Cause::from_raw(cancel_cause),
     })
 }
 
@@ -539,21 +653,23 @@ pub fn multi_threaded_bridge_raw(
 }
 
 /// Takes media (pushes the named session into the `CS_CONSUME_MEDIA`/early-media path) on the
-/// channel identified by `uuid`. `flags` is a bitmask of `SMF_*` media flags
-/// (see `sys::switch_media_flag_enum_t_*`).
-pub fn media(uuid: impl AsRef<str>, flags: sys::switch_media_flag_t) -> Result<()> {
+/// channel identified by `uuid`. `flags` is a bitmask of `SMF_*` media flags — combine
+/// [`MediaFlag`] variants with `|` (e.g. `MediaFlag::FORCE | MediaFlag::REBRIDGE`), or pass
+/// [`MediaFlag::NONE`] for the default.
+pub fn media(uuid: impl AsRef<str>, flags: MediaFlag) -> Result<()> {
     let uuid = cstring(uuid)?;
-    // SAFETY: `uuid` is a valid C string for the call; `flags` is passed through unchanged.
-    let status = unsafe { sys::switch_ivr_media(uuid.as_ptr(), flags) };
+    // SAFETY: `uuid` is a valid C string for the call; `flags.bits()` is the raw `switch_media_flag_t`.
+    let status = unsafe { sys::switch_ivr_media(uuid.as_ptr(), flags.bits()) };
     status_to_result(status)
 }
 
 /// Drops media on the channel identified by `uuid` (the inverse of [`media`]). `flags` is a bitmask
-/// of `SMF_*` media flags.
-pub fn nomedia(uuid: impl AsRef<str>, flags: sys::switch_media_flag_t) -> Result<()> {
+/// of `SMF_*` media flags — combine [`MediaFlag`] variants with `|`, or pass
+/// [`MediaFlag::NONE`] for the default.
+pub fn nomedia(uuid: impl AsRef<str>, flags: MediaFlag) -> Result<()> {
     let uuid = cstring(uuid)?;
-    // SAFETY: `uuid` is a valid C string for the call; `flags` is passed through unchanged.
-    let status = unsafe { sys::switch_ivr_nomedia(uuid.as_ptr(), flags) };
+    // SAFETY: `uuid` is a valid C string for the call; `flags.bits()` is the raw `switch_media_flag_t`.
+    let status = unsafe { sys::switch_ivr_nomedia(uuid.as_ptr(), flags.bits()) };
     status_to_result(status)
 }
 
@@ -1353,16 +1469,18 @@ impl DigitMachine {
         status_to_result(status)
     }
 
-    /// Sets the digit-action target (`DIGIT_TARGET_SELF` / `DIGIT_TARGET_PEER` / `DIGIT_TARGET_BOTH`).
-    pub fn set_target(&self, target: sys::switch_digit_action_target_t) {
+    /// Sets the digit-action target ([`DigitActionTarget::SELF`] / [`DigitActionTarget::PEER`] /
+    /// [`DigitActionTarget::BOTH`]).
+    pub fn set_target(&self, target: DigitActionTarget) {
         // SAFETY: `self.raw` is a live machine.
-        unsafe { sys::switch_ivr_dmachine_set_target(self.raw.as_ptr(), target) };
+        unsafe { sys::switch_ivr_dmachine_set_target(self.raw.as_ptr(), target.raw()) };
     }
 
     /// The current digit-action target.
-    pub fn get_target(&self) -> sys::switch_digit_action_target_t {
+    pub fn get_target(&self) -> DigitActionTarget {
         // SAFETY: `self.raw` is a live machine.
-        unsafe { sys::switch_ivr_dmachine_get_target(self.raw.as_ptr()) }
+        let raw = unsafe { sys::switch_ivr_dmachine_get_target(self.raw.as_ptr()) };
+        DigitActionTarget::from_raw(raw)
     }
 
     /// Whether the machine is currently mid-parse (has buffered digits awaiting a terminator).
@@ -1379,5 +1497,85 @@ impl Drop for DigitMachine {
         // yet; `switch_ivr_dmachine_destroy` nulls the out-pointer and is safe to call once.
         let mut raw = self.raw.as_ptr();
         unsafe { sys::switch_ivr_dmachine_destroy(&mut raw) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_flag_raw_roundtrip() {
+        // from_raw/bits is a pure newtype pass-through, so every SMF_* constant survives a round
+        // trip and equals its variant.
+        assert_eq!(MediaFlag::NONE.bits(), sys::switch_media_flag_enum_t_SMF_NONE);
+        assert_eq!(MediaFlag::FORCE.bits(), sys::switch_media_flag_enum_t_SMF_FORCE);
+        assert_eq!(
+            MediaFlag::from_raw(sys::switch_media_flag_enum_t_SMF_PRIORITY).bits(),
+            MediaFlag::PRIORITY.bits()
+        );
+        assert_eq!(
+            MediaFlag::from_raw(sys::switch_media_flag_enum_t_SMF_IMMEDIATE),
+            MediaFlag::IMMEDIATE
+        );
+    }
+
+    #[test]
+    fn media_flag_combine_and_contains() {
+        let f = MediaFlag::FORCE | MediaFlag::REBRIDGE;
+        assert!(f.contains(MediaFlag::FORCE));
+        assert!(f.contains(MediaFlag::REBRIDGE));
+        assert!(!f.contains(MediaFlag::LOOP));
+        // NONE contains only itself; a non-NONE bitset does not contain NONE.
+        assert!(MediaFlag::NONE.contains(MediaFlag::NONE));
+        assert!(!f.contains(MediaFlag::NONE));
+    }
+
+    #[test]
+    fn media_flag_bitor_assign() {
+        let mut f = MediaFlag::ECHO_ALEG;
+        f |= MediaFlag::ECHO_BLEG;
+        assert_eq!(f.bits(), sys::switch_media_flag_enum_t_SMF_ECHO_ALEG | sys::switch_media_flag_enum_t_SMF_ECHO_BLEG);
+        assert!(f.contains(MediaFlag::ECHO_ALEG));
+        assert!(f.contains(MediaFlag::ECHO_BLEG));
+    }
+
+    #[test]
+    fn digit_action_target_raw_roundtrip() {
+        // from_raw/raw is a pure newtype pass-through, so each DIGIT_TARGET_* constant survives a
+        // round trip and equals its variant.
+        assert_eq!(
+            DigitActionTarget::SELF.raw(),
+            sys::switch_digit_action_target_t_DIGIT_TARGET_SELF
+        );
+        assert_eq!(
+            DigitActionTarget::PEER.raw(),
+            sys::switch_digit_action_target_t_DIGIT_TARGET_PEER
+        );
+        assert_eq!(
+            DigitActionTarget::BOTH.raw(),
+            sys::switch_digit_action_target_t_DIGIT_TARGET_BOTH
+        );
+        assert_eq!(
+            DigitActionTarget::from_raw(sys::switch_digit_action_target_t_DIGIT_TARGET_PEER),
+            DigitActionTarget::PEER
+        );
+        assert_eq!(
+            DigitActionTarget::from_raw(sys::switch_digit_action_target_t_DIGIT_TARGET_BOTH).raw(),
+            DigitActionTarget::BOTH.raw()
+        );
+    }
+
+    #[test]
+    fn digit_action_target_predicates() {
+        // SELF targets only the owning leg; PEER only the bridged leg; BOTH targets both.
+        assert!(DigitActionTarget::SELF.is_self());
+        assert!(!DigitActionTarget::SELF.is_peer());
+
+        assert!(DigitActionTarget::PEER.is_peer());
+        assert!(!DigitActionTarget::PEER.is_self());
+
+        assert!(DigitActionTarget::BOTH.is_self());
+        assert!(DigitActionTarget::BOTH.is_peer());
     }
 }
