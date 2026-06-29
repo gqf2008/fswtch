@@ -245,19 +245,46 @@ test ! -f freeswitch/mod_voice_seat/src/ffi.rs && echo "✓ ffi.rs deleted"
 
 ## 残留说明
 
-### `unsafe impl Send/Sync`（可保留，非 FFI）
+### 1. `unsafe { Session::from_raw(ptr) }`（2 处，**固有，不可消除**）
 
-voice-call 若有跨线程传递 `!Send` 资源（如 `switch_resample_t`、event binder 句柄）的需求，会留下 `unsafe impl Send for X`。这是**标记 trait**（标记类型可跨线程），不是 FFI 调用，不引入 FFI 风险，可接受。
+- `aec_vad/mod.rs` — media bug 回调拿裸 `*mut switch_core_session_t`
+- `events.rs` — fire 事件拿裸 session 指针
 
-ai-agent-seat 有两处这样的实现（`SendResample`、`SendBinder`），voice-call 视需求决定是否保留。
+这两处 `unsafe` 是 **Rust 语言对裸指针→wrapper 转换的硬性要求**，不是 fork 缺口。`from_raw(*mut)` 必须是 `unsafe fn`：编译器无法验证裸指针非空/有效/不跨回调用，这个保证只能由调用点上下文给出。
 
-### 唯一未包装的符号
+**fork 不会提供 `from_callback_ptr` 之类的 "safe" 变体** —— 那会把 soundness 责任从调用点（可见、可审）转嫁给 fork 内部（隐藏），一旦 voice-call 在非回调上下文误用就是 UB，比保留 `unsafe` 标记更危险。`unsafe` 标记是给 reviewer 的信号："这里要人审上下文"。
 
-经核对，voice-call 需要的全部 `switch_` 符号 fswtch 都有 safe wrapper，**无缺口**。迁移后下游源码可做到零 `unsafe`/`sys`/`ffi`。
+fork 的价值不是消除这 1 处，是把 voice-call 现状的 **N 处手写 `unsafe sys::` 调用收敛到这 1 处不可避免的 `from_raw`：
+
+```rust
+// 迁移后: 1 处 unsafe (from_raw), 其余全 safe
+let session = unsafe { Session::from_raw(session_ptr) };   // 唯一 unsafe
+let rate = session.read_sample_rate();                     // safe (原 sys:: 调用)
+let uuid = session.uuid();                                 // safe (原 sys:: 调用)
+let channel = session.channel();                           // safe (原 sys:: 调用)
+```
+
+### 2. `extern "C" fn switch_module_shutdown`（**可消除 `unsafe`**）
+
+voice-call 现状写 `unsafe extern "C" fn switch_module_shutdown() -> fswtch::Status`。**`unsafe` 是多余的** —— fork 的 `module_exports!` 宏内部已生成 `extern "C"` trampoline（exports.rs），用户提供的 shutdown 类型是 `Option<extern "C" fn() -> fswtch::Status>`（**无 `unsafe`**）。
+
+```rust
+// 改前 (voice-call 现状, 多余的 unsafe)
+unsafe extern "C" fn switch_module_shutdown() -> fswtch::Status { ... }
+
+// 改后 (fork 宏要求的就是 extern "C", 无 unsafe)
+extern "C" fn switch_module_shutdown() -> fswtch::Status { ... }
+```
+
+`extern "C"` 本身保留（FS module ABI 必需），但 `unsafe` 修饰符删掉。
+
+### 3. `unsafe impl Send/Sync`（如有，可保留）
+
+voice-call 若有跨线程传递 `!Send` 资源（resampler、event binder 句柄）会留下 `unsafe impl Send for X`。这是**标记 trait**（标记类型可跨线程），不是 FFI 调用，不引入 FFI 风险。参考 ai-agent-seat 的 `SendResample`/`SendBinder`。
 
 ## API 稳定性
 
-- fork pin 到 commit `55fa00d`（或 fork 出 voice-call vendor 分支打 tag `voice-seat-v1`）
+- fork pin 到最新 commit（`5e6ad3e` 或之后；或 fork 出 voice-call vendor 分支打 tag `voice-seat-v1`）
 - 两个项目共享 fork 时建议 pin tag 而非 commit hash，避免漂移
 - voice-call 实际用到的 API 面（Session/Channel/Event/Cause/EventBinder）小且稳定，pin tag + 必要时 vendor patch 可行
 
