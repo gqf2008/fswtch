@@ -280,7 +280,11 @@ pub fn init_call(uuid: &str, codec_rate: u32) -> Result<()> {
     use std::sync::Mutex as StdMutex;
     static INIT_LOCK: std::sync::LazyLock<StdMutex<()>> =
         std::sync::LazyLock::new(|| StdMutex::new(()));
-    let _guard = INIT_LOCK.lock().unwrap();
+    // Ignore poison: if a prior init panicked mid-init, the guard is still
+    // usable (we only need mutual exclusion, not lock-internal invariants).
+    // Using `.unwrap()` would poison-chain every subsequent call — one bad
+    // init would break ALL future calls, not just the one that panicked.
+    let _guard = INIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     if CALLS.contains_key(uuid) {
         return Ok(());

@@ -123,6 +123,12 @@ pub struct CallState {
     pub speech_buffer: Vec<i16>,
     /// Staging buffer for accumulating samples into earshot-sized (256) frames.
     pub vad_stage: Vec<i16>,
+    /// Reusable scratch buffer for the 8 kHz → 16 kHz VAD bypass resampler.
+    /// `fswtch::Resample::process` takes `&mut [i16]`, but `frame.pcm_i16()`
+    /// yields `&[i16]` — without this scratch we'd allocate a fresh `Vec` on
+    /// every 20 ms `write_frame` (50 Hz × 1000 calls = 50 k alloc/s). Cleared
+    /// and refilled each frame; capacity stabilizes after the first frame.
+    pub resample_scratch: Vec<i16>,
     /// Silence-timeout in samples (16 kHz). When `current_silence` exceeds
     /// this, the speech segment is considered complete.
     pub silence_samples: u32,
@@ -207,6 +213,7 @@ impl CallState {
             min_speech_rms: vad_config.min_speech_rms,
             speech_buffer: Vec::new(),
             vad_stage: Vec::with_capacity(EARSHOT_FRAME_SIZE),
+            resample_scratch: Vec::new(),
             silence_samples,
             current_silence: 0,
             barge_in_confirm_samples,
@@ -414,12 +421,17 @@ impl EndpointIoRoutines for AiAgent {
         }
 
         // VAD bypass: upsample 8 kHz → 16 kHz for earshot prediction only.
-        // Extend vad_stage directly from the resampler's borrowed output slice
-        // to avoid a per-frame Vec allocation. When no resampling is needed
-        // (rates match), extend directly from the input slice — zero alloc.
+        // VAD bypass: upsample 8 kHz → 16 kHz for earshot prediction only.
+        // Reuse `resample_scratch` instead of allocating a fresh Vec every
+        // frame — `process` takes `&mut [i16]` and reuses the buffer in place,
+        // so we `clear()` + `extend` once per frame. The capacity stabilizes
+        // after the first frame, so this is allocation-free on the steady path.
+        // When no resampling is needed (rates match), extend vad_stage directly
+        // from the input slice — zero alloc.
         if let Some(resampler) = state_mut.resampler.as_ref() {
-            let mut buf = samples.to_vec();
-            let out = resampler.0.process(&mut buf);
+            state_mut.resample_scratch.clear();
+            state_mut.resample_scratch.extend_from_slice(samples);
+            let out = resampler.0.process(&mut state_mut.resample_scratch);
             state_mut.vad_stage.extend_from_slice(out);
         } else {
             state_mut.vad_stage.extend_from_slice(samples);

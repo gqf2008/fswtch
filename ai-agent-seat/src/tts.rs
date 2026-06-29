@@ -315,7 +315,23 @@ impl VolcanoBidirectionalSession {
         ));
         *self.inner.driver_join.lock() = Some(driver);
 
-        self.send_raw(Message::start_connection()).await?;
+        // If start_connection fails, the driver is running but `started_flag`
+        // was never set, so `is_connected()` returns false — yet `cmd_tx` is
+        // `Some`, which `ensure_connected` would mistake for "driver alive" and
+        // skip reconnect, hanging every subsequent synthesize on the 20 s
+        // `wait_for_started` timeout. Clean up on failure so the next attempt
+        // reconnects fresh.
+        if let Err(e) = self.send_raw(Message::start_connection()).await {
+            tracing::warn!("Volcano TTS start_connection send failed; tearing down driver: {e}");
+            // Send Shutdown so the driver exits and closes the WS.
+            let _ = cmd_tx.send(DriverCmd::Shutdown).await;
+            // Drop our references; release_stale_driver_if_any will pick up the
+            // finished JoinHandle on the next connect attempt.
+            *self.inner.cmd_tx.lock() = None;
+            // Detach the JoinHandle (driver is shutting down via the Shutdown cmd).
+            *self.inner.driver_join.lock() = None;
+            return Err(e);
+        }
         Ok(())
     }
 
@@ -595,14 +611,24 @@ async fn driver_loop(
                 Some(Ok(WsMessage::Binary(bytes))) => {
                     match route_frame(&bytes, &state, &mut resampler).await {
                         Ok(Some(pcm)) => {
-                            // Push through `on_audio`. Use Weak::upgrade — the
-                            // SessionInner may be dropped (call ended), in which
-                            // case we skip the push (the WS is shutting down).
-                            if !pcm.is_empty()
-                                && let Some(inner) = inner.upgrade()
-                            {
+                            // Push through `on_audio`. Weak::upgrade fails only
+                            // when SessionInner has been dropped (call ended).
+                            // In that case the Drop impl already sent (or is
+                            // about to send) Shutdown — but if it was lost
+                            // (runtime shutdown aborted the Drop's spawn), the
+                            // driver would otherwise loop forever draining a
+                            // dead connection. Treat upgrade failure as a
+                            // terminal signal and exit so the WS/task don't leak.
+                            if pcm.is_empty() {
+                                // no-op
+                            } else if let Some(inner) = inner.upgrade() {
                                 let mut cb = inner.on_audio.lock();
                                 cb(&pcm);
+                            } else {
+                                tracing::info!(
+                                    "Volcano TTS driver: SessionInner gone, exiting loop"
+                                );
+                                break;
                             }
                         }
                         Ok(None) => {}
