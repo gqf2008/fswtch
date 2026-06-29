@@ -61,11 +61,12 @@ impl CallControl for FfiControl {
     }
 
     fn send_dtmf(&self, uuid: &str, digits: &str) -> Result<()> {
-        // FreeSWITCH's `send_dtmf` dialplan application accepts a digit string
-        // (optionally `@duration_ms`, omitted here). Execute it on the located
-        // session via the safe `execute_application` wrapper.
+        // Send digits directly on the session's media path via
+        // `switch_core_session_send_dtmf_string` (wrapped by `Session::send_dtmf`).
+        // Faster than the `send_dtmf` dialplan app round-trip and reaches the
+        // media layer even outside the dialplan execution context.
         Self::with_session(uuid, "send_dtmf", |session| {
-            Ok(session.execute_application("send_dtmf", digits)?)
+            Ok(session.send_dtmf(digits)?)
         })
     }
 
