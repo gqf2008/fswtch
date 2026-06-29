@@ -264,6 +264,21 @@ impl Session {
         };
         status_to_result(status)
     }
+
+    /// Sends a DTMF digit string (e.g. `"123#"`, `"*"`) on the session's media
+    /// path. Each character must be one of `0-9`, `*`, `#`, or `A-D`.
+    ///
+    /// Wraps `switch_core_session_send_dtmf_string` (the bindgen-generated
+    /// binding, not a hand-written signature) so call-control code no longer
+    /// needs its own `unsafe extern "C"` shim.
+    pub fn send_dtmf(self, digits: impl AsRef<str>) -> Result<()> {
+        let digits = cstring(digits)?;
+        // SAFETY: `self.raw` is a live session; `digits` is a valid C string for the call.
+        let status = unsafe {
+            sys::switch_core_session_send_dtmf_string(self.raw.as_ptr(), digits.as_ptr())
+        };
+        status_to_result(status)
+    }
 }
 
 /// RAII guard for a session looked up by UUID via `switch_core_session_perform_locate`.
