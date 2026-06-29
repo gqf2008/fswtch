@@ -577,7 +577,13 @@ impl EndpointIoRoutines for AiAgent {
                                 tracing::warn!("speech segment for {uuid} dropped: no speech_tx");
                             }
                         }
+                        // shrink_to_fit: drain(..).collect() and the silence
+                        // stretch can transiently grow pre_roll's capacity
+                        // above pre_roll_max. Reclaim it so a momentary frame
+                        // burst doesn't permanently inflate each call's memory
+                        // (×1000 concurrent calls = non-trivial RSS).
                         state_mut.pre_roll.clear();
+                        state_mut.pre_roll.shrink_to_fit();
                         tracing::info!("VAD: speech ENDED for {uuid} — segment sent to actor");
                     }
                 }

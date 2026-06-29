@@ -139,12 +139,20 @@ pub extern "C" fn switch_module_shutdown() -> fswtch::Status {
     // Unbind events first so an in-flight callback can't enter unloaded code.
     event_sub::unbind();
 
-    // Stop tokio runtime.
-    actor::stop_runtime();
-
-    // Clear the live-call registry + per-call state.
+    // Drop per-call state WHILE the tokio runtime is still alive. Each
+    // CallState drop → actor.kill() → CallActor drop → SessionInner::Drop,
+    // and SessionInner::Drop spawns a task to send `finish_session` /
+    // `finish_connection` / `Shutdown` over the WS and await driver_loop exit.
+    // That spawned task needs the runtime to run. If we stopped the runtime
+    // first (the old order), those tasks would be aborted and the WS close
+    // frames never sent — connections left half-open until the server's idle
+    // timeout. Clearing first lets the graceful-close tasks run to completion
+    // during `stop_runtime`'s shutdown_timeout.
     clear_calls();
     io::CALLS.clear();
+
+    // Stop tokio runtime last — drains the Drop tasks spawned above.
+    actor::stop_runtime();
 
     tracing::info!("ai_agent_seat module shutdown complete");
     fswtch::SUCCESS
