@@ -68,12 +68,22 @@ fn rms(frame: &[i16]) -> f32 {
 fn score_frame(
     detector: Option<&mut earshot::Detector>,
     frame: &[i16; EARSHOT_FRAME_SIZE],
+    min_rms: f32,
 ) -> (f32, f32) {
+    // RMS-first gate: the neural predict is ~100-1000x more expensive than the
+    // integer RMS sum. For a 1000-concurrent-call load where most calls are
+    // silent at any moment, skipping predict on sub-threshold frames cuts VAD
+    // CPU by an order of magnitude. The cheap RMS gate is the primary noise
+    // filter anyway — if there's no energy, there's no speech to score.
+    let rms = rms(frame);
+    if rms < min_rms {
+        return (-1.0, rms);
+    }
     let score = match detector {
         Some(d) => d.predict_i16(frame),
         None => -1.0,
     };
-    (score, rms(frame))
+    (score, rms)
 }
 
 /// Per-call state, owned by the global [`CALLS`] map and borrowed by the I/O
@@ -435,7 +445,11 @@ impl EndpointIoRoutines for AiAgent {
                 };
                 state_mut.vad_stage.drain(..EARSHOT_FRAME_SIZE);
 
-                let (score, rms) = score_frame(state_mut.vad.as_mut(), &frame_slice);
+                let (score, rms) = score_frame(
+                    state_mut.vad.as_mut(),
+                    &frame_slice,
+                    state_mut.min_speech_rms,
+                );
                 let is_voiced =
                     score >= BARGE_IN_SCORE_THRESHOLD && rms >= state_mut.min_speech_rms;
 
@@ -473,7 +487,11 @@ impl EndpointIoRoutines for AiAgent {
             };
             state_mut.vad_stage.drain(..EARSHOT_FRAME_SIZE);
 
-            let (score, rms) = score_frame(state_mut.vad.as_mut(), &frame_slice);
+            let (score, rms) = score_frame(
+                state_mut.vad.as_mut(),
+                &frame_slice,
+                state_mut.min_speech_rms,
+            );
             // RMS noise gate: skip frames with low energy regardless of VAD
             // score. This is the primary defense against background noise —
             // speexdsp in the dialplan preprocess reduces noise, and the RMS
@@ -636,6 +654,7 @@ impl EndpointIoRoutines for AiAgent {
 mod tests {
     use ringbuf::traits::{Consumer, Observer, Producer};
     use std::sync::Arc;
+    use crate::io::rms;
 
     /// The ringbuf capacity used in production (from actor::init_call).
     const RINGBUF_CAPACITY: usize = 160000;
@@ -792,5 +811,55 @@ mod tests {
             pre_roll.len(),
             pre_roll.capacity()
         );
+    }
+
+    /// Benchmark earshot VAD predict + RMS throughput on a single core.
+    /// Run: `cargo test -p ai-agent-seat --release -- io::tests::bench_vad_throughput --nocapture --ignored`
+    /// Answers the capacity question: how many concurrent VAD calls can one
+    /// core sustain at 50 Hz (20 ms frames)?
+    #[test]
+    #[ignore]
+    fn bench_vad_throughput() {
+        let mut detector = earshot::Detector::default();
+        // Synthetic 256-sample frame with moderate energy (not silence, so the
+        // RMS gate doesn't skip — measures the full predict path).
+        let frame: [i16; 256] = (0..256)
+            .map(|i| ((i as f32 * 0.5).sin() * 8000.0) as i16)
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        // Warmup
+        for _ in 0..1000 {
+            detector.predict_i16(&frame);
+        }
+
+        const N: usize = 100_000;
+        let t = std::time::Instant::now();
+        let mut acc = 0.0f32;
+        for _ in 0..N {
+            acc += detector.predict_i16(&frame);
+        }
+        let predict_ns = t.elapsed().as_nanos() as f64 / N as f64;
+
+        let t = std::time::Instant::now();
+        for _ in 0..N {
+            std::hint::black_box(rms(&frame));
+        }
+        let rms_ns = t.elapsed().as_nanos() as f64 / N as f64;
+
+        let predicts_per_sec = 1e9 / predict_ns;
+        // At 50 Hz per call, one core handles this many full-predict calls:
+        let calls_per_core_full = predicts_per_sec / 50.0;
+        // Silent calls only pay RMS:
+        let silent_calls_per_core = (1e9 / rms_ns) / 50.0;
+
+        eprintln!("=== VAD benchmark (single core, release) ===");
+        eprintln!("predict_i16: {predict_ns:.0} ns/call  → {predicts_per_sec:.0} predicts/sec");
+        eprintln!("rms (integer): {rms_ns:.0} ns/call");
+        eprintln!("capacity @50Hz/call:");
+        eprintln!("  ALL calls talking (full predict): {calls_per_core_full:.0} calls/core");
+        eprintln!("  silent calls (RMS-gated, predict skipped): {silent_calls_per_core:.0} calls/core");
+        eprintln!("  [acc={acc}]"); // prevent dead-code elim
     }
 }
