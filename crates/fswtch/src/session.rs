@@ -237,6 +237,15 @@ impl Session {
         unsafe { crate::Channel::from_raw(raw) }
     }
 
+    /// The session's UUID (the channel UUID's canonical form for inbound
+    /// sessions). Wraps `switch_core_session_get_uuid`. The returned string
+    /// is borrowed from FreeSWITCH for the call's duration.
+    pub fn uuid(self) -> Option<String> {
+        // SAFETY: `self.raw` is a live session.
+        let ptr = unsafe { sys::switch_core_session_get_uuid(self.raw.as_ptr()) };
+        crate::command::borrowed_cstr_to_string(ptr.cast_const())
+    }
+
     /// Hangs up the session's channel with the given cause.
     pub fn hangup(self, cause: crate::Cause) {
         // SAFETY: `self.raw` is a live session; its channel is live for the session's lifetime.

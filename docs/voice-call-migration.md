@@ -153,6 +153,75 @@ fn hangup(cause: Cause) { ... }
 // 调用: hangup(Cause::NORMAL_CLEARING);
 ```
 
+### E. Resampler 替换（`aec_vad/resample.rs`）
+
+voice-call 手写了 `FsResampler`（`switch_resample_perform_create` / `switch_resample_process` / `switch_resample_destroy` + `(*handle).to` 字段访问）。fork 的 `fswtch::Resample` 已封装全套：
+
+```rust
+// 改后
+use fswtch::Resample;
+
+let mut resampler = Resample::new(from_rate, to_rate, 1, Resample::DEFAULT_QUALITY)?;
+let mut buf: Vec<i16> = samples.to_vec();
+let out: &[i16] = resampler.process(&mut buf);   // 借用内部缓冲，无需手动 to 字段
+// Drop 自动 switch_resample_destroy
+```
+
+删掉 `aec_vad/resample.rs` 整个文件（`FsResampler` + 手写 sys 调用）。
+
+### F. Session/Channel 读取方法
+
+voice-call 在 `aec_vad/mod.rs` 直接 `sys::switch_core_session_get_uuid` / `switch_channel_get_name` / `switch_core_session_get_read_codec`。fork 全有 safe 方法：
+
+| voice-call 手写 (sys::) | fork safe 方法 | 说明 |
+|---|---|---|
+| `switch_core_session_get_uuid(session.as_ptr())` | `Session::uuid()` → `Option<String>` | 本次新增 |
+| `switch_channel_get_name(channel)` | `Channel::name()` → `Option<String>` | 已有 |
+| `switch_core_session_get_read_codec` + 解 `implementation` | `Session::read_sample_rate()` → `u32` | 已有（封装 codec 字段解引用） |
+| `switch_core_session_get_channel(session)` | `Session::channel()` → `Option<Channel>` | 已有 |
+| `switch_channel_event_set_data(channel, event)` | `Channel::event_set_data(&Event)` | 已有 |
+
+### G. 完整 C API → fork wrapper 对照表
+
+voice-call 手写的全部 `switch_` 符号，fork 对应 wrapper（**无缺口**）：
+
+**Session (`fswtch::Session`)：**
+- `switch_core_session_perform_locate` + `_rwunlock` → `Session::locate()` + `SessionGuard`（RAII）
+- `switch_core_session_get_channel` → `Session::channel()`
+- `switch_core_session_get_uuid` → `Session::uuid()` ← **本次新增**
+- `switch_core_session_get_read_codec` + 字段解引用 → `Session::read_sample_rate()`
+- `switch_core_session_send_dtmf_string` → `Session::send_dtmf()`
+- `switch_channel_perform_answer` → `Session::answer()`
+- `switch_channel_perform_hangup` → `Session::hangup()` / `Channel::hangup()`
+
+**Channel (`fswtch::Channel`)：**
+- `switch_channel_get_name` → `Channel::name()`
+- `switch_channel_get_uuid` → `Channel::uuid()`
+- `switch_channel_set_variable_var_check` → `Channel::set_variable()`
+- `switch_channel_get_variable_dup` → `Channel::get_variable()`（TOCTOU-safe strdup）
+- `switch_channel_event_set_data` → `Channel::event_set_data(&Event)`
+
+**Event (`fswtch::Event` / `EventRef` / `EventBinder`)：**
+- `switch_event_create_subclass_detailed` → `Event::create_subclass()`
+- `switch_event_add_header_string` → `Event::add_header()`
+- `switch_event_add_body` → `Event::add_body()`
+- `switch_event_fire_detailed` → `Event::fire()`
+- `switch_event_destroy` → `Event::Drop`（RAII 自动）
+- `switch_event_bind` + `switch_event_unbind` → `EventBinder`（RAII Drop auto-unbind）
+- 事件回调 `on_command` → `event_callback!` 宏
+
+**Resampler (`fswtch::Resample`)：**
+- `switch_resample_perform_create` → `Resample::new()`
+- `switch_resample_process` + `(*handle).to` → `Resample::process()` 返回借用切片
+- `switch_resample_destroy` → `Resample::Drop`
+
+**类型：**
+- `switch_call_cause_t` / `SWITCH_CAUSE_*` → `fswtch::Cause`
+- `switch_channel_t`（手写 opaque）→ `fswtch::Channel`
+- `switch_status_t` → `fswtch::Status` / `Result`
+- `switch_event_types_t` / `SWITCH_EVENT_CUSTOM` → `fswtch::EventType`
+- `SWITCH_EVENT_DETECTED_SPEECH = 47` → `EventType` 枚举或 `EventType::from_raw(47)`
+
 ## 验证迁移完整性
 
 迁移后跑这个检查，确认零残留：
