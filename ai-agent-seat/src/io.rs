@@ -91,7 +91,7 @@ fn score_frame(
 ///
 /// The SPSC ringbuf (`tts_cons`) is the bridge from the TTS driver loop
 /// (async, tokio runtime — sole `Producer` via `on_audio`) to `read_frame`
-/// (sync, FS media thread — sole `Consumer`): the driver pushes 16 kHz i16
+/// (sync, FS media thread — sole `Consumer`): the driver pushes 8 kHz i16
 /// PCM, `read_frame` drains it. A [`DashMap`] entry's `RefMut` gives us the
 /// exclusive borrow `read_frame` needs without a separate lock.
 ///
@@ -138,7 +138,7 @@ pub struct CallState {
     pub barge_in_confirm_samples: u32,
     /// Current barge-in confirmation counter.
     pub barge_in_confirm: u32,
-    /// TTS audio to play toward the caller (16 kHz i16 PCM). Drained by
+    /// TTS audio to play toward the caller (8 kHz i16 PCM). Drained by
     /// `read_frame`; filled by the TTS driver loop via the `on_audio` callback
     /// that owns the ringbuf `Producer`. This is a SPSC ring buffer (driver =
     /// sole producer on the tokio runtime, `read_frame` = sole consumer on the
@@ -304,14 +304,7 @@ impl EndpointIoRoutines for AiAgent {
         let _ = channel.mark_answered();
         channel.set_audio_flag();
 
-        // Initialize read + write codecs (L16 at the loopback's 8 kHz, 20 ms).
-        // Without a read codec, `switch_core_io` hangs the channel up with
-        // Initialize read + write codecs at the PIPELINE rate (16 kHz). The VAD
-        // and TTS paths run at 16 kHz internally, so `read_frame`/`write_frame`
-        // must see 16 kHz PCM — FreeSWITCH's bridge then transcodes/resamples
-        // between this leg (16 kHz L16) and the caller's leg (typically 8 kHz).
-        // (Earlier this used `codec_rate` from the fresh session = 8000, which
-        // mismatched the 16 kHz pipeline PCM and produced wrong-pitch audio.)
+        // Initialize read + write codecs (L16 at the pipeline's 8 kHz, 20 ms).
         if let Err(e) = new_session.init_read_codec("L16", PIPELINE_SAMPLE_RATE, 20, 1) {
             tracing::warn!("outgoing_channel: init_read_codec failed: {e}");
         }

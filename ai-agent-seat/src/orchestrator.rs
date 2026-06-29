@@ -210,9 +210,13 @@ pub async fn turn_pipeline(
         );
     }
 
-    // Call-control side effects (after TTS so hangup doesn't tear down media
-    // before the goodbye reaches the caller).
+    // Call-control side effects. Under fire-and-forget, `synthesize` returned
+    // before the audio played — let any in-flight TTS finish first so the
+    // goodbye reaches the caller before media tears down (hangup/transfer) and
+    // so DTMF doesn't mix with TTS audio. `wait_until_silent` is a no-op if
+    // nothing is speaking.
     if hangup || dtmf.is_some() || transfer.is_some() {
+        wait_until_silent(&ai_speaking, &cancel).await;
         if let Some(digits) = &dtmf
             && let Err(e) = control.send_dtmf(&uuid, digits)
         {
@@ -256,12 +260,17 @@ pub async fn turn_pipeline(
 
 /// Synthesize `text` via the Volcano session. Cancellable.
 ///
-/// PCM is **not** forwarded here anymore: the TTS driver loop (inside the
-/// Volcano session) owns the ringbuf `Producer` via the `on_audio` callback
-/// installed in [`crate::actor::init_call`], and pushes 16 kHz i16 PCM
-/// directly into the SPSC ringbuf that `read_frame` drains. This removes the
-/// old `tokio::spawn(fwd)` forwarder task + the `tts_out` mpsc channel
-/// entirely — `synthesize` just drives the WS and returns.
+/// PCM is **not** forwarded here: the TTS driver loop (inside the Volcano
+/// session) owns the ringbuf `Producer` via the `on_audio` callback installed
+/// in [`crate::actor::init_call`], and pushes 8 kHz i16 PCM directly into the
+/// SPSC ringbuf that `read_frame` drains.
+///
+/// Fire-and-forget: `synthesize` sends `task_request` and returns immediately
+/// — it does NOT wait for the audio to play (call-lifetime Volcano session, one
+/// `task_request` per turn; `finish_session` only at call end). `ai_speaking`
+/// stays `true` here; the driver clears it via `on_turn_end` once the audio
+/// stream goes idle. Media teardown (hangup/transfer) bridges the gap with
+/// [`wait_until_silent`].
 async fn synthesize_and_play(
     session: &VolcanoBidirectionalSession,
     uuid: &str,
@@ -273,14 +282,43 @@ async fn synthesize_and_play(
 
     let synth_cancel = cancel.clone();
     match session.synthesize(text, synth_cancel).await {
-        Ok(completed) => {
-            tracing::info!("turn_pipeline {uuid}: TTS synthesize completed={completed}");
+        Ok(true) => {
+            tracing::info!("turn_pipeline {uuid}: TTS synthesize fired");
+        }
+        Ok(false) => {
+            // Cancelled before the task_request was sent — no audio will play,
+            // so no `on_turn_end` will fire. Clear `ai_speaking` ourselves.
+            tracing::info!("turn_pipeline {uuid}: TTS synthesize cancelled before fire");
+            ai_speaking.store(false, Ordering::Relaxed);
         }
         Err(e) => {
             tracing::error!("turn_pipeline {uuid}: TTS synthesize failed: {e}");
+            // Clear on error so a later `wait_until_silent` doesn't hang waiting
+            // for audio that will never arrive.
+            ai_speaking.store(false, Ordering::Relaxed);
         }
     }
-    ai_speaking.store(false, Ordering::Relaxed);
+}
+
+/// Wait for the current turn's TTS audio to finish playing before tearing down
+/// media. Under fire-and-forget, [`synthesize`] returned before the audio
+/// played; `ai_speaking` is cleared by the driver's `on_turn_end` on
+/// stream-idle. No-op if nothing is speaking (e.g. empty reply, no session).
+/// Bounded by 30s + `cancel` so a stuck driver can't hang the turn forever.
+async fn wait_until_silent(ai_speaking: &AtomicBool, cancel: &CancellationToken) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        // Cancel is terminal — check it first so barge-in/drop doesn't wait a
+        // full poll interval, and so `ai_speaking` stuck-true (no-audio stall)
+        // doesn't pin this past the deadline pointlessly.
+        if cancel.is_cancelled() || std::time::Instant::now() >= deadline {
+            return;
+        }
+        if !ai_speaking.load(Ordering::Relaxed) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 }
 
 /// Shared HTTP client for LLM calls. Reused across turns so the TLS

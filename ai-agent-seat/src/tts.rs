@@ -1,35 +1,45 @@
 //! Volcano bidirectional WebSocket TTS client.
 //!
-//! ONE WebSocket connection per call; ONE session PER TURN (per `synthesize`
-//! call). The connection is established at call-answer time via [`start`]
-//! (idempotent + race-safe) and reused for every turn; if it breaks mid-call
-//! it is released and reconnected on the next `synthesize`. If `start` was
-//! never called or failed, `synthesize` lazily connects on first use.
+//! ONE WebSocket connection + ONE Volcano session per CALL (call-lifetime).
+//! [`start`] (call-answer time) connects the WS, sends `start_connection`, and
+//! opens the session with `start_session` ONCE. Every turn's [`synthesize`]
+//! sends a single `task_request` and returns immediately (fire-and-forget) —
+//! it does NOT send `start_session`/`finish_session` per turn and does NOT
+//! await a server end signal. `finish_session` + `finish_connection` are sent
+//! only at `Drop` (call end).
 //!
 //! `session_id` and `section_id` are BOTH the call UUID (passed in). The
 //! server correlates cross-turn context via `section_id`.
 //!
-//! # Per-turn cycle
+//! # Completion: stream-idle timeout (no server end signal)
 //!
-//! Each `synthesize` call does, on the EXISTING connection:
-//! 1. ensure the connection is up (lazy fallback if `start` was not called)
-//! 2. `start_session` — a NEW session for this turn
-//! 3. `task_request(text)`
-//! 4. `finish_session`
-//! 5. push `AudioOnlyServer` PCM (resampled) to the caller via `on_audio`
-//!    until `SessionFinished`
+//! seed-tts-2.0 sends NO reliable per-task_request end signal in
+//! call-lifetime mode (verified against the real server: no `TTSSentenceEnd`,
+//! no terminal-packet flag — `TTSSentenceEnd` only appears *after*
+//! `finish_session`, which we never send mid-call). So the driver detects
+//! turn completion itself: once no `AudioOnlyServer` frame arrives for
+//! [`TTS_IDLE_TIMEOUT`] after the first chunk, the turn is considered done and
+//! [`on_turn_end`](VolcanoBidirectionalSession::new) fires (the caller uses it
+//! to clear `ai_speaking`, unblocking barge-in). The session stays open.
+//!
+//! # Audio path
+//!
+//! The driver loop pushes each `AudioOnlyServer` PCM chunk (resampled to the
+//! pipeline rate) through the call-wide `on_audio` callback (→ SPSC ringbuf →
+//! `io::read_frame`). One callback for the whole call; the `ActiveTask` slot
+//! only gates whether the current turn is cancelled (barge-in discards).
 //!
 //! # Barge-in
 //!
-//! `CancellationToken` cancels the CURRENT playback only. It does NOT send
-//! `CancelSession` mid-session. On cancel we stop invoking `on_audio` and keep
-//! draining/discarding server audio until `SessionFinished`. `finish_session`
-//! is ALWAYS sent (even on cancel) so the server cleanly closes the session.
+//! [`cancel_current_turn`] sets `ActiveTask.cancelled = true`; the driver then
+//! discards in-flight audio for that turn (keeps draining the server cleanly).
+//! A new turn's `synthesize` overwrites `current` with a fresh task. The
+//! connection + session stay alive either way — only `Drop` tears them down.
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 
@@ -39,6 +49,12 @@ use crate::tts_ws_codec::{EventType, Message, MsgType};
 /// Audio-output callback: the TTS driver invokes this for each resampled PCM
 /// chunk, pushing directly into the caller's playback ringbuf (no mpsc/forwarder).
 pub type OnAudio = Box<dyn FnMut(&[i16]) + Send + 'static>;
+
+/// Turn-completion callback: the driver invokes this once the current turn's
+/// audio stream goes idle (no server audio for [`TTS_IDLE_TIMEOUT`] after the
+/// first chunk). The caller installs a closure that clears `ai_speaking`,
+/// unblocking barge-in detection.
+pub type OnTurnEnd = Box<dyn FnMut() + Send + 'static>;
 
 // Reuse the shared `SendResample` wrapper from `audio_dsp` (also used by the
 // VAD bypass in `io.rs`) — one `unsafe impl Send` in the whole crate.
@@ -52,6 +68,21 @@ const ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection";
 /// Python test verified: 8 kHz + finish_session → TTSSentenceEnd arrives OK.
 const TTS_SERVER_SAMPLE_RATE: u32 = 8000;
 
+/// How long with no `AudioOnlyServer` frame (after the first chunk) before the
+/// driver declares the current turn's audio complete and fires `on_turn_end`.
+/// Must exceed the server's inter-chunk gap (~50-100 ms) and be well under the
+/// 60 s hard net. Tuned conservatively — a mid-utterance pause longer than this
+/// would fire early, but TTS streams continuously within a task_request.
+const TTS_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// How long after a `task_request` with NO audio frame received before the
+/// driver declares the turn complete anyway (bounds a server that accepted the
+/// request but never streamed audio — silent drop / read-path stall). Without
+/// this, `ai_speaking` sticks true forever (the idle timer only arms after the
+/// first chunk). Generous: the server's first-chunk latency is typically
+/// 100-400 ms, so a real reply always arms the idle timer before this fires.
+const TTS_FIRST_AUDIO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Command sent to the driver task that owns the socket.
 enum DriverCmd {
     Send(Message),
@@ -60,24 +91,51 @@ enum DriverCmd {
 
 /// Internal session state shared between the API surface and the driver task.
 struct SessionState {
+    /// `true` once `start_session` is acknowledged (`SessionStarted` observed).
+    /// Reset only on failure / socket death — NOT per turn (the session is
+    /// call-lifetime). `ensure_started` reopens it when this is false.
     started: bool,
+    /// The currently-active turn. Audio frames are routed here unless its
+    /// `cancelled` flag is set. `None` when no turn is active.
     current: Option<ActiveTask>,
 }
 
-/// The active turn's completion signal + cancellation flag.
+/// The active turn's cancellation + completion state.
 struct ActiveTask {
-    done: Arc<Notify>,
     cancelled: bool,
     start: std::time::Instant,
-    first_chunk_emitted: std::sync::atomic::AtomicBool,
+    /// Flips to `true` on the first `AudioOnlyServer` frame for this turn. The
+    /// `swap` return value ("was this the first?") doubles as the first-chunk
+    /// latency log trigger AND arms the idle timer (which must not fire during
+    /// the server's first-chunk latency).
+    first_audio_received: std::sync::atomic::AtomicBool,
+    /// Once `true`, `on_turn_end` has fired for this task; the idle timer must
+    /// not re-fire it. Guards against the deadline being repeatedly met after
+    /// completion (last_audio_at stops updating once the stream is idle).
+    completed: std::sync::atomic::AtomicBool,
+    /// Instant of the last received `AudioOnlyServer` frame for this turn.
+    /// The idle timer fires when `now - last_audio_at >= TTS_IDLE_TIMEOUT`.
+    last_audio_at: parking_lot::Mutex<Option<std::time::Instant>>,
+}
+
+impl ActiveTask {
+    fn new() -> Self {
+        Self {
+            cancelled: false,
+            start: std::time::Instant::now(),
+            first_audio_received: std::sync::atomic::AtomicBool::new(false),
+            completed: std::sync::atomic::AtomicBool::new(false),
+            last_audio_at: parking_lot::Mutex::new(None),
+        }
+    }
 }
 
 /// A bidirectional Volcano TTS session bound to one call.
 ///
 /// Constructed cheaply (sync) with the call UUID; the WebSocket connect +
-/// first `start_session` happen in [`start`](Self::start) (call-answer time)
-/// or lazily on the first `synthesize` if `start` was not called.
-/// Cloning is cheap (Arc inner).
+/// `start_session` happen in [`start`](Self::start) (call-answer time) or
+/// lazily on the first `synthesize` if `start` was not called. Cloning is cheap
+/// (Arc inner).
 #[derive(Clone)]
 pub struct VolcanoBidirectionalSession {
     inner: Arc<SessionInner>,
@@ -98,6 +156,10 @@ struct SessionInner {
     /// callback from an async context (`route_frame` / `driver_loop`) and needs
     /// `&mut`; the lock is held only for the duration of the push (fast).
     on_audio: parking_lot::Mutex<OnAudio>,
+    /// Invoked by the driver loop when the current turn's audio stream goes
+    /// idle (turn complete) — the caller clears `ai_speaking`. Same locking
+    /// rationale as `on_audio`.
+    on_turn_end: parking_lot::Mutex<OnTurnEnd>,
 }
 
 impl VolcanoBidirectionalSession {
@@ -111,12 +173,17 @@ impl VolcanoBidirectionalSession {
     /// (actor) pushes it straight into its ringbuf producer, eliminating the old
     /// `mpsc` indirection. The callback is `FnMut` (held under a short-lived
     /// lock) so it can mutate internal buffer state.
+    ///
+    /// `on_turn_end` is invoked by the driver loop once a turn's audio stream
+    /// goes idle — the caller clears `ai_speaking` so barge-in detection
+    /// resumes.
     pub fn new(
         api_key: String,
         resource_id: String,
         speaker: String,
         call_uuid: String,
         on_audio: OnAudio,
+        on_turn_end: OnTurnEnd,
     ) -> Self {
         tracing::debug!(
             "Volcano TTS session constructed: call_uuid={} (session_id=section_id=call_uuid)",
@@ -137,13 +204,15 @@ impl VolcanoBidirectionalSession {
                 driver_join: parking_lot::Mutex::new(None),
                 started_flag: std::sync::atomic::AtomicBool::new(false),
                 on_audio: parking_lot::Mutex::new(on_audio),
+                on_turn_end: parking_lot::Mutex::new(on_turn_end),
             }),
         }
     }
 
-    /// Eagerly establish the WebSocket connection (NO session — sessions are
-    /// per-turn, created in `synthesize`). Called at call-answer time for
-    /// pre-warming. Idempotent + race-safe.
+    /// Eagerly establish the WebSocket connection AND open the call-lifetime
+    /// session (`start_connection` + `start_session`, once). Called at
+    /// call-answer time for pre-warming. Idempotent + race-safe. If it fails,
+    /// `synthesize` lazy-retries via `ensure_started`.
     pub async fn start(&self) -> Result<()> {
         if self
             .inner
@@ -161,17 +230,22 @@ impl VolcanoBidirectionalSession {
             return Ok(());
         }
         self.release_stale_driver_if_any();
+        // Driver alive but `started_flag` still false → a prior `start()`
+        // connected but hasn't finished opening the session. Await that
+        // in-flight start rather than opening a second one.
         if self.inner.cmd_tx.lock().is_some() {
-            // Driver alive — connection is up.
-            return Ok(());
+            drop(_send_guard);
+            return self.wait_for_started().await;
         }
 
-        // Only connect the WebSocket. No start_session — each synthesize()
-        // turn creates its own session (start_session → task_request →
-        // finish_session). Verified by Python test: the server only sends
-        // TTSSentenceEnd after finish_session; without it, the turn hangs.
+        // Connect + spawn driver + start_connection.
         if let Err(e) = self.connect_and_spawn().await {
             tracing::warn!("Volcano TTS start() connect failed: {e}");
+            return Err(e);
+        }
+        // Open the call-lifetime session ONCE (not per turn).
+        if let Err(e) = self.start_session().await {
+            tracing::warn!("Volcano TTS start() first start_session failed: {e}");
             return Err(e);
         }
         self.inner
@@ -180,33 +254,55 @@ impl VolcanoBidirectionalSession {
         Ok(())
     }
 
-    /// Ensure the WebSocket connection is up (NOT a session — sessions are
-    /// per-turn). Reconnects if the driver died.
-    async fn ensure_connected(&self) -> Result<()> {
-        if self.is_connected() {
+    /// Ensure the WebSocket connection is up + a session is open (call-lifetime
+    /// — the session is opened once and reused; reopened only after a failure /
+    /// socket death reset `started`). Reconnects if the driver died. Used by
+    /// `synthesize` as the lazy fallback when `start` was never called or
+    /// failed, AND to recover after a mid-call socket break. Idempotent under
+    /// `send_mutex`.
+    async fn ensure_started(&self) -> Result<()> {
+        if self.is_started().await {
             return Ok(());
         }
         let _send_guard = self.inner.send_mutex.lock().await;
-        if self.is_connected() {
+        if self.is_started().await {
             return Ok(());
         }
         self.release_stale_driver_if_any();
+        // Driver alive (connection up) but no session open (`started=false`
+        // after the previous socket death / failure) → open one. Under
+        // `send_mutex` no other caller can be mid-`start_session`.
         if self.inner.cmd_tx.lock().is_some() {
-            return Ok(());
+            return self.start_session().await;
         }
+        // No driver at all — connect + open the first session.
         self.connect_and_spawn().await?;
+        self.start_session().await?;
         self.inner
             .started_flag
             .store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
 
-    /// Check if the WebSocket driver is alive (connection up).
-    fn is_connected(&self) -> bool {
-        self.inner
-            .started_flag
-            .load(std::sync::atomic::Ordering::SeqCst)
-            && self.inner.cmd_tx.lock().is_some()
+    /// Check if a Volcano session is currently open (SessionStarted observed,
+    /// not yet torn down).
+    async fn is_started(&self) -> bool {
+        self.inner.state.lock().await.started
+    }
+
+    async fn wait_for_started(&self) -> Result<()> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if self.is_started().await {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(anyhow::anyhow!(
+                    "Volcano TTS start_session timed out waiting for SessionStarted"
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 
     fn release_stale_driver_if_any(&self) {
@@ -225,25 +321,6 @@ impl VolcanoBidirectionalSession {
             self.inner
                 .started_flag
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-        }
-    }
-
-    async fn is_started(&self) -> bool {
-        self.inner.state.lock().await.started
-    }
-
-    async fn wait_for_started(&self) -> Result<()> {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-        loop {
-            if self.is_started().await {
-                return Ok(());
-            }
-            if std::time::Instant::now() >= deadline {
-                return Err(anyhow::anyhow!(
-                    "Volcano TTS start_session timed out waiting for SessionStarted"
-                ));
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     }
 
@@ -316,8 +393,8 @@ impl VolcanoBidirectionalSession {
         *self.inner.driver_join.lock() = Some(driver);
 
         // If start_connection fails, the driver is running but `started_flag`
-        // was never set, so `is_connected()` returns false — yet `cmd_tx` is
-        // `Some`, which `ensure_connected` would mistake for "driver alive" and
+        // was never set, so `is_started()` returns false — yet `cmd_tx` is
+        // `Some`, which `ensure_started` would mistake for "driver alive" and
         // skip reconnect, hanging every subsequent synthesize on the 20 s
         // `wait_for_started` timeout. Clean up on failure so the next attempt
         // reconnects fresh.
@@ -335,10 +412,10 @@ impl VolcanoBidirectionalSession {
         Ok(())
     }
 
+    /// Send `start_session` with the call-stable req_params (speaker, pcm, 8k,
+    /// section_id) and wait for `SessionStarted` (flipped by the driver). Opens
+    /// the call-lifetime session — called once at `start` / on reconnect.
     async fn start_session(&self) -> Result<()> {
-        // Request TTS_SERVER_SAMPLE_RATE (8 kHz) from the server — matches the
-        // pipeline natively, so no resampling is needed. (Verified by Python
-        // test: 8 kHz + finish_session → TTSSentenceEnd arrives correctly.)
         let payload = serde_json::json!({
             "req_params": {
                 "speaker": self.inner.speaker,
@@ -350,11 +427,9 @@ impl VolcanoBidirectionalSession {
             }
         });
         let payload_bytes = serde_json::to_vec(&payload)?;
-        // Reset the session flag BEFORE sending start_session so `wait_for_started`
-        // waits for THIS turn's SessionStarted — not a stale `true` left over
-        // from the previous turn (TTSSentenceEnd notifies `done` but does NOT
-        // reset `started`; only SessionFinished does, and it may not have
-        // arrived yet when the next turn begins).
+        // Reset the started flag BEFORE sending start_session so `wait_for_started`
+        // waits for THIS start's SessionStarted — not a stale `true` left over
+        // from a prior open session.
         {
             let mut st = self.inner.state.lock().await;
             st.started = false;
@@ -377,68 +452,54 @@ impl VolcanoBidirectionalSession {
         Ok(())
     }
 
-    /// Send a `task_request` for `text`, then await the server's audio (which
-    /// the driver loop pushes directly through `on_audio`) until the session
-    /// ends (or `cancel` fires).
+    /// Send a `task_request` for `text` and return immediately (fire-and-forget).
+    /// The driver loop pushes the server's audio through `on_audio` as it
+    /// arrives; `on_turn_end` fires once the stream goes idle.
     ///
-    /// Per-turn session cycle (verified by Python test against the real server):
-    ///   ensure_connected → start_session → task_request → finish_session →
-    ///   wait for TTSSentenceEnd → return.
+    /// Does NOT send `start_session`/`finish_session` (call-lifetime session,
+    /// opened once at [`start`]) and does NOT await a server end signal
+    /// (seed-tts-2.0 sends none in this mode). Serialized by `send_mutex` so
+    /// only one `task_request` is on the wire at a time; concurrent sentence
+    /// tasks queue here.
     ///
-    /// **CRITICAL**: `finish_session` MUST be sent after `task_request`. The
-    /// Volcano server does NOT send `TTSSentenceEnd` without it — the audio
-    /// just streams indefinitely until timeout (verified: both at 8 kHz and
-    /// 16 kHz, with and without finish_session).
-    ///
-    /// Returns `true` if the turn completed normally, `false` if it was
-    /// cancelled (barge-in) — the connection stays alive either way.
-    pub async fn synthesize(
-        &self,
-        text: &str,
-        cancel: tokio_util::sync::CancellationToken,
-    ) -> Result<bool> {
+    /// Returns `Ok(true)` (always, unless the send itself fails) — completion is
+    /// observed asynchronously via `on_turn_end` / [`cancel_current_turn`].
+    pub async fn synthesize(&self, text: &str, cancel: tokio_util::sync::CancellationToken) -> Result<bool> {
         let t_syn = std::time::Instant::now();
         tracing::info!("Volcano TTS synthesize: {} chars", text.chars().count());
 
-        // Ensure the WebSocket connection is up (NOT a session).
-        self.ensure_connected().await?;
+        // Ensure the WebSocket connection is up + the call-lifetime session open.
+        self.ensure_started().await?;
         tracing::info!(
-            "LATENCY TTS {}: ensure_connected = {}ms",
+            "LATENCY TTS {}: ensure_started = {}ms",
             self.inner.call_uuid,
             t_syn.elapsed().as_millis()
         );
 
-        // Serialize: one active turn at a time on this connection.
+        // Serialize: one task_request on the wire at a time. Held only for the
+        // send (not its audio playback) — audio arrives async after we return.
         let _send_guard = self.inner.send_mutex.lock().await;
 
         if cancel.is_cancelled() {
             return Ok(false);
         }
 
-        // ── Per-turn session: start_session → task_request → finish_session ──
-
-        // 1. start_session — opens a fresh session for this turn.
-        let t_sess = std::time::Instant::now();
-        self.start_session().await?;
-        tracing::info!(
-            "LATENCY TTS {}: start_session = {}ms",
-            self.inner.call_uuid,
-            t_sess.elapsed().as_millis()
-        );
-
-        // 2. Install this turn as the active forwarder.
-        let done = Arc::new(Notify::new());
+        // Install this turn as the active forwarder, cancelling any prior turn
+        // still in `current`. A new turn only arrives after the previous turn's
+        // mailbox work finished (mailbox-sequential) and `clear_tts` flushed the
+        // ringbuf — but the server may still be streaming the PREVIOUS turn's
+        // audio (call-lifetime session, no per-turn finish_session). Marking the
+        // old task `cancelled` makes `route_frame` discard those late frames
+        // instead of pushing them into the ringbuf on top of this turn's audio.
         {
             let mut st = self.inner.state.lock().await;
-            st.current = Some(ActiveTask {
-                done: Arc::clone(&done),
-                cancelled: false,
-                start: std::time::Instant::now(),
-                first_chunk_emitted: std::sync::atomic::AtomicBool::new(false),
-            });
+            if let Some(prev) = st.current.as_mut() {
+                prev.cancelled = true;
+            }
+            st.current = Some(ActiveTask::new());
         }
 
-        // 3. task_request — send the text to synthesize.
+        // task_request — send the text to synthesize. session_id == call_uuid.
         let payload = serde_json::json!({
             "req_params": {
                 "text": text,
@@ -462,45 +523,23 @@ impl VolcanoBidirectionalSession {
             return Err(e);
         }
 
-        // 4. finish_session — MUST be sent after task_request. Without it the
-        //    server never sends TTSSentenceEnd (verified by Python test).
-        if let Err(e) = self
-            .send_raw(Message::finish_session(&self.inner.call_uuid))
-            .await
-        {
-            tracing::warn!("Volcano TTS finish_session send failed: {e}");
+        // Fire-and-forget: task_request is on the wire, the driver will push
+        // incoming audio through on_audio. We do NOT wait for a per-sentence end
+        // signal — seed-tts-2.0 sends none in call-lifetime mode. The session
+        // is call-lifetime; finish_session fires only at Drop. Per-turn
+        // completion is signaled to the caller via `on_turn_end` (stream idle).
+        Ok(true)
+    }
+
+    /// Mark the current turn cancelled (barge-in). The driver then discards
+    /// in-flight audio for this turn instead of pushing it through `on_audio`.
+    /// The connection + session stay alive; the next `synthesize` overwrites
+    /// `current` with a fresh task.
+    pub async fn cancel_current_turn(&self) {
+        let mut st = self.inner.state.lock().await;
+        if let Some(t) = st.current.as_mut() {
+            t.cancelled = true;
         }
-
-        // 5. Wait for TTSSentenceEnd (primary) or SessionFinished (safety net).
-        let outcome = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => {
-                {
-                    let mut st = self.inner.state.lock().await;
-                    if let Some(t) = st.current.as_mut() {
-                        t.cancelled = true;
-                    }
-                }
-                let _ = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    done.notified(),
-                ).await;
-                false
-            }
-            // Primary: TTSSentenceEnd or SessionFinished from server.
-            _ = done.notified() => {
-                tracing::info!("Volcano TTS synthesize completed");
-                true
-            }
-            // Hard safety net: 60s absolute max.
-            _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
-                tracing::warn!("Volcano TTS synthesize hard timeout (60s)");
-                true
-            }
-        };
-
-        self.inner.state.lock().await.current = None;
-        Ok(outcome)
     }
 }
 
@@ -513,6 +552,8 @@ impl Drop for SessionInner {
         );
         let attempt = async move {
             if let Some(tx) = &cmd_tx {
+                // Best-effort finish_session (closes the call-lifetime session)
+                // then finish_connection, then Shutdown the driver.
                 let _ = tx
                     .send(DriverCmd::Send(Message::finish_session(&call_uuid)))
                     .await;
@@ -557,7 +598,7 @@ async fn driver_loop(
     use futures::{SinkExt, StreamExt};
     let (mut sink, mut stream) = ws_stream.split();
 
-    // Resample the server's output rate down to the 16 kHz pipeline rate, using
+    // Resample the server's output rate down to the pipeline rate, using
     // FreeSWITCH's native `switch_resample`. One resampler lives for the whole
     // connection; it carries internal state across chunks, so per-turn reset is
     // not needed (the server emits continuous audio within a session).
@@ -576,7 +617,7 @@ async fn driver_loop(
                     "resample init failed ({} -> {}): {:?}; audio will play at wrong rate",
                     server_sample_rate,
                     PIPELINE_SAMPLE_RATE,
-                    e,
+                    e
                 );
                 None
             }
@@ -586,8 +627,59 @@ async fn driver_loop(
     };
 
     loop {
+        // Turn-completion deadline. Two cases, whichever comes first:
+        //  - audio arrived: fire TTS_IDLE_TIMEOUT after the last chunk (stream
+        //    went idle).
+        //  - audio NOT yet arrived: fire TTS_FIRST_AUDIO_TIMEOUT after the
+        //    task_request was sent — bounds a server that accepted the request
+        //    but never streamed audio (silent drop / read-path stall). Without
+        //    this, `ai_speaking` sticks true forever (the idle timer only arms
+        //    after the first chunk).
+        // None only when no active task or the task already completed.
+        let idle_deadline: Option<tokio::time::Instant> = {
+            let st = state.lock().await;
+            st.current.as_ref().and_then(|t| {
+                if t.completed.load(std::sync::atomic::Ordering::Relaxed) {
+                    None
+                } else if t.first_audio_received.load(std::sync::atomic::Ordering::Relaxed) {
+                    t.last_audio_at
+                        .lock()
+                        .map(|at| tokio::time::Instant::from_std(at + TTS_IDLE_TIMEOUT))
+                } else {
+                    Some(tokio::time::Instant::from_std(t.start + TTS_FIRST_AUDIO_TIMEOUT))
+                }
+            })
+        };
+        let idle = match idle_deadline {
+            Some(d) => futures::future::Either::Left(tokio::time::sleep_until(d)),
+            None => futures::future::Either::Right(std::future::pending::<()>()),
+        };
+
         tokio::select! {
             biased;
+            _ = idle => {
+                // Re-check under lock: audio may have arrived between the
+                // deadline firing and this wake. Only fire if still stalled/idle.
+                let still_due = {
+                    let st = state.lock().await;
+                    if let Some(t) = st.current.as_ref() {
+                        !t.completed.load(std::sync::atomic::Ordering::Relaxed)
+                            && if t.first_audio_received.load(std::sync::atomic::Ordering::Relaxed) {
+                                t.last_audio_at.lock().map_or(false, |at| {
+                                    at.elapsed() >= TTS_IDLE_TIMEOUT
+                                })
+                            } else {
+                                t.start.elapsed() >= TTS_FIRST_AUDIO_TIMEOUT
+                            }
+                    } else {
+                        false
+                    }
+                };
+                if still_due {
+                    tracing::info!("Volcano TTS turn complete (idle/no-audio timeout)");
+                    fire_turn_complete(&state, &inner).await;
+                }
+            }
             cmd = cmd_rx.recv() => match cmd {
                 Some(DriverCmd::Send(msg)) => {
                     match msg.marshal() {
@@ -609,7 +701,7 @@ async fn driver_loop(
             },
             frame = stream.next() => match frame {
                 Some(Ok(WsMessage::Binary(bytes))) => {
-                    match route_frame(&bytes, &state, &mut resampler).await {
+                    match route_frame(&bytes, &state, &mut resampler, &inner).await {
                         Ok(Some(pcm)) => {
                             // Push through `on_audio`. Weak::upgrade fails only
                             // when SessionInner has been dropped (call ended).
@@ -656,24 +748,50 @@ async fn driver_loop(
             }
         }
     }
+    // Socket broke / shut down. Mark the session down so the next speak call
+    // reconnects (ensure_started sees started=false + a finished driver), and
+    // fire turn completion so the caller's `on_turn_end` (ai_speaking clear)
+    // runs even if the stream died mid-turn.
     {
         let mut st = state.lock().await;
         st.started = false;
-        if let Some(t) = st.current.as_ref() {
-            t.done.notify_one();
-        }
     }
+    fire_turn_complete(&state, &inner).await;
     tracing::info!("Volcano TTS driver loop exiting");
 }
 
+/// Fire the current turn's completion (idempotent): if `current` exists and
+/// hasn't already fired, swap its `completed` flag and invoke `on_turn_end`.
+/// Called on stream-idle (driver_loop), on server end/failure events
+/// (route_frame), and on socket death (driver exit). `Weak::upgrade` failure
+/// means the call already ended — nothing to fire.
+async fn fire_turn_complete(state: &Mutex<SessionState>, inner: &std::sync::Weak<SessionInner>) {
+    let fire = {
+        let st = state.lock().await;
+        match st.current.as_ref() {
+            Some(t) => !t.completed.swap(true, std::sync::atomic::Ordering::Relaxed),
+            None => false,
+        }
+    };
+    if fire
+        && let Some(inner) = inner.upgrade()
+    {
+        let mut cb = inner.on_turn_end.lock();
+        cb();
+    }
+}
+
 /// Unmarshal one server frame and route it. Returns `Some(pcm)` when the frame
-/// is an `AudioOnlyServer` chunk carrying resampled 16 kHz PCM that the caller
-/// should push through `on_audio`; `None` otherwise (control events, empty
-/// chunks, or cancelled turns).
+/// is an `AudioOnlyServer` chunk carrying resampled pipeline-rate PCM that the
+/// caller should push through `on_audio`; `None` otherwise (control events,
+/// empty chunks, or cancelled turns). Also drives turn-completion: updates
+/// `last_audio_at` on each audio chunk and fires `on_turn_end` on end/failure
+/// events.
 async fn route_frame(
     bytes: &[u8],
     state: &Mutex<SessionState>,
     resampler: &mut Option<SendResample>,
+    inner: &std::sync::Weak<SessionInner>,
 ) -> Result<Option<Vec<i16>>> {
     let msg = Message::unmarshal(bytes).context("Volcano TTS unmarshal failed")?;
     tracing::debug!(
@@ -691,15 +809,18 @@ async fn route_frame(
                 state.lock().await.started = true;
             }
             EventType::SessionFinished => {
-                tracing::info!("Volcano TTS SessionFinished");
-                let notify = {
-                    let mut st = state.lock().await;
-                    st.started = false;
-                    st.current.as_ref().map(|t| Arc::clone(&t.done))
-                };
-                if let Some(n) = notify {
-                    n.notify_one();
-                }
+                // The server ended the session. This is normally only our
+                // Drop's `finish_session`, but the server CAN end it mid-call
+                // (idle timeout, admin reset, protocol error). In that case the
+                // next `synthesize` MUST re-run `start_session` — so reset
+                // `started=false` here. `ensure_started` then reopens on the
+                // next speak (reusing the live connection). Fire turn
+                // completion too so an in-flight turn's `on_turn_end` runs.
+                tracing::info!("Volcano TTS SessionFinished — reopening on next speak");
+                let mut st = state.lock().await;
+                st.started = false;
+                drop(st);
+                fire_turn_complete(state, inner).await;
             }
             EventType::SessionFailed | EventType::ConnectionFailed => {
                 tracing::error!(
@@ -707,32 +828,28 @@ async fn route_frame(
                     msg.error_code,
                     String::from_utf8_lossy(&msg.payload)
                 );
-                let notify = {
-                    let mut st = state.lock().await;
-                    st.started = false;
-                    st.current.as_ref().map(|t| Arc::clone(&t.done))
-                };
-                if let Some(n) = notify {
-                    n.notify_one();
-                }
+                // Failure mid-turn: mark the session down (ensure_started will
+                // reopen on the next speak) + fire turn completion.
+                let mut st = state.lock().await;
+                st.started = false;
+                drop(st);
+                fire_turn_complete(state, inner).await;
             }
             EventType::TTSSentenceStart => {
                 tracing::info!("Volcano TTS TTSSentenceStart");
             }
             EventType::TTSSentenceEnd => {
-                tracing::info!("Volcano TTS TTSSentenceEnd — unblocking synthesize");
-                let notify = {
-                    let st = state.lock().await;
-                    st.current.as_ref().map(|t| Arc::clone(&t.done))
-                };
-                if let Some(n) = notify {
-                    n.notify_one();
-                }
+                // Best-effort early completion: if the server does send
+                // TTSSentenceEnd (it normally doesn't in call-lifetime mode),
+                // fire turn completion immediately rather than waiting for the
+                // idle timeout.
+                tracing::info!("Volcano TTS TTSSentenceEnd — firing turn complete");
+                fire_turn_complete(state, inner).await;
             }
             _ => {
                 // Log every unmatched server event at INFO so we can see what
                 // the server actually returns — essential for diagnosing TTS
-                // timeout (TTSSentenceEnd not arriving).
+                // completion.
                 tracing::info!(
                     "Volcano TTS unhandled event: {:?} code={} payload={}",
                     msg.event,
@@ -742,46 +859,54 @@ async fn route_frame(
             }
         },
         MsgType::AudioOnlyServer => {
+            // One lock: arm/refresh the idle timer on ANY frame (incl. empty
+            // and cancelled — the cancelled turn must still see its
+            // `last_audio_at` advance so its idle timer fires and retires it)
+            // AND read this turn's `cancelled` flag for the push decision. The
+            // `first_audio_received` swap return doubles as the first-chunk
+            // latency trigger.
+            let cancelled = {
+                let st = state.lock().await;
+                match st.current.as_ref() {
+                    Some(task) => {
+                        if !task
+                            .first_audio_received
+                            .swap(true, std::sync::atomic::Ordering::Relaxed)
+                        {
+                            let ms = task.start.elapsed().as_millis() as f64;
+                            tracing::info!("Volcano TTS 首Chunk: {:.1}ms", ms);
+                        }
+                        *task.last_audio_at.lock() = Some(std::time::Instant::now());
+                        task.cancelled
+                    }
+                    None => true, // no active turn → discard
+                }
+            };
+
+            // Discard cancelled / empty frames BEFORE the per-frame alloc — the
+            // server keeps streaming after barge-in (call-lifetime session, no
+            // finish_session), so ~100-250 discarded frames would each allocate
+            // a Vec otherwise.
+            if cancelled || msg.payload.len() < 2 {
+                return Ok(None);
+            }
+
             let samples = parse_pcm_le(&msg.payload);
 
-            {
-                let st = state.lock().await;
-                if let Some(task) = &st.current {
-                    if !task
-                        .first_chunk_emitted
-                        .swap(true, std::sync::atomic::Ordering::Relaxed)
-                    {
-                        let ms = task.start.elapsed().as_millis() as f64;
-                        tracing::info!("Volcano TTS 首Chunk: {:.1}ms", ms);
-                    }
-                }
+            // Resample the server-rate PCM down to the pipeline rate using the
+            // connection-scoped FreeSWITCH resampler. `.to_vec()` copies out of
+            // the resampler's internal buffer before the borrow ends.
+            let out: Vec<i16> = if let Some(r) = resampler.as_ref() {
+                let mut buf = samples;
+                r.0.process(&mut buf).to_vec()
+            } else {
+                samples
+            };
+            if out.is_empty() {
+                return Ok(None);
             }
-
-            if !samples.is_empty() {
-                // Resample the server-rate PCM down to the 16 kHz pipeline rate
-                // using the connection-scoped FreeSWITCH resampler. `.to_vec()`
-                // copies out of the resampler's internal buffer before the borrow ends.
-                let out: Vec<i16> = if let Some(r) = resampler.as_ref() {
-                    let mut buf = samples;
-                    r.0.process(&mut buf).to_vec()
-                } else {
-                    samples
-                };
-                if out.is_empty() {
-                    return Ok(None);
-                }
-                // Hand the chunk to the driver loop (which invokes `on_audio`)
-                // unless the current turn is barge-in cancelled or there is no
-                // active turn. We do NOT push on cancel — the server keeps
-                // streaming and we drain/discarded until SessionFinished.
-                let cancelled = {
-                    let st = state.lock().await;
-                    st.current.as_ref().is_none_or(|t| t.cancelled)
-                };
-                if !cancelled {
-                    return Ok(Some(out));
-                }
-            }
+            // Hand the chunk to the driver loop (which invokes `on_audio`).
+            return Ok(Some(out));
         }
         MsgType::Error => {
             tracing::error!(
@@ -789,13 +914,9 @@ async fn route_frame(
                 msg.error_code,
                 String::from_utf8_lossy(&msg.payload)
             );
-            let notify = {
-                let st = state.lock().await;
-                st.current.as_ref().map(|t| Arc::clone(&t.done))
-            };
-            if let Some(n) = notify {
-                n.notify_one();
-            }
+            // An error mid-session: fire turn completion so the caller's
+            // on_turn_end (ai_speaking clear) runs.
+            fire_turn_complete(state, inner).await;
         }
         _ => {
             tracing::trace!("Volcano TTS unexpected msg_type: {:?}", msg.msg_type);
@@ -812,9 +933,3 @@ fn parse_pcm_le(bytes: &[u8]) -> Vec<i16> {
         .map(|b| i16::from_le_bytes([b[0], b[1]]))
         .collect()
 }
-
-// ── TTS signal + helpers (consumed by the orchestrator) ───────────────
-
-/// Size (in 16 kHz mono i16 samples) of each chunk pushed into the TTS
-/// accumulator. 320 samples = 20 ms at 16 kHz.
-pub const TTS_CHUNK_SAMPLES: usize = 320;

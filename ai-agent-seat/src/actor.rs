@@ -14,9 +14,11 @@
 //! TTS audio flows through an SPSC ringbuf (`ringbuf::HeapRb<i16>`): the TTS
 //! driver loop owns the `Producer` (via the `on_audio` callback handed to the
 //! Volcano session) and pushes PCM directly; `io::read_frame` owns the
-//! `Consumer` and drains it. No forwarder task. Barge-in is a `BargeIn`
-//! message that cancels the current turn's `CancellationToken` and flushes
-//! the consumer.
+//! `Consumer` and drains it. No forwarder task. TTS is fire-and-forget (one
+//! Volcano session per call, one `task_request` per turn) so `turn_pipeline`
+//! returns as soon as the TTS is fired — the mailbox is free during playback,
+//! and a `BargeIn` cancels the in-flight TTS immediately
+//! (`cancel_current_turn` + flush) rather than queueing behind the turn.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -85,12 +87,21 @@ impl CallActor {
             .as_ref()
             .filter(|c| !c.api.volcano_api_key.is_empty())
             .map(|c| {
+                // `on_turn_end`: the driver fires this once a turn's audio
+                // stream goes idle (fire-and-forget completion) — clear
+                // `ai_speaking` so barge-in detection resumes. Barge-in also
+                // clears it directly (see the BargeIn handler).
+                let ai_speaking_for_turn_end = Arc::clone(&ai_speaking);
+                let on_turn_end: crate::tts::OnTurnEnd = Box::new(move || {
+                    ai_speaking_for_turn_end.store(false, Ordering::Relaxed);
+                });
                 VolcanoBidirectionalSession::new(
                     c.api.volcano_api_key.clone(),
                     c.api.volcano_resource_id.clone(),
                     c.api.volcano_speaker.clone(),
                     uuid.clone(),
                     on_audio,
+                    on_turn_end,
                 )
             });
         let mut conversation = Vec::new();
@@ -183,6 +194,15 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
         if audio.is_empty() {
             return;
         }
+        // Arm a FRESH cancel token for this turn. The previous turn's token was
+        // cancelled by a BargeIn (or never, if it finished cleanly); without
+        // re-arming, every turn after the first barge-in would inherit the
+        // cancelled token and short-circuit at `cancel.is_cancelled()` in
+        // turn_pipeline (LLM/TTS skipped → call goes permanently deaf). Matches
+        // voice-call's per-turn `*http_cancel = CancellationToken::new()` +
+        // generation bump. A child token would also work, but a fresh token is
+        // simpler since the old one is dropped with the previous turn task.
+        self.turn_cancel = CancellationToken::new();
         // Clear any leftover TTS audio from the previous turn before starting
         // a new one — prevents audio overlap (old turn's TTS tail + new turn's
         // TTS head mixing in the ringbuf).
@@ -198,13 +218,13 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
             audio.len()
         );
         // Run the turn IN-LINE (mailbox-sequential): the next SpeechSegment or
-        // BargeIn queues in the mailbox until this turn finishes. This prevents
-        // the "each new segment cancels the previous LLM call" storm that
-        // happens when VAD splits a user's utterance into multiple segments
-        // (every >500ms pause). Turns are strictly ordered — no concurrent TTS
-        // mixing, no cancelled-LLM waste. Barge-in latency = current turn's
-        // completion (acceptable for phone AI; instant barge-in needs
-        // pre-emptive mailbox interruption, a future enhancement).
+        // BargeIn queues in the mailbox until this turn's LLM+tool work
+        // finishes. TTS itself is fire-and-forget (returns once `task_request`
+        // is sent), so the mailbox frees up during playback — a `BargeIn` is
+        // processed immediately and cancels the in-flight TTS via
+        // `cancel_current_turn` + `clear_tts`, giving near-instant barge-in.
+        // Mailbox serialization during LLM still prevents the "each new segment
+        // cancels the previous LLM call" storm from VAD splitting an utterance.
         let cancel = self.turn_cancel.clone();
         let tts = self.tts_session.clone();
         let conv_snapshot = self.conversation.lock().clone();
@@ -237,6 +257,12 @@ impl Message<BargeIn> for CallActor {
     async fn handle(&mut self, _msg: BargeIn, _ctx: &mut Context<Self, Self::Reply>) {
         self.turn_cancel.cancel();
         self.ai_speaking.store(false, Ordering::Relaxed);
+        // Tell the TTS driver to discard the in-flight turn's audio (it keeps
+        // draining the server cleanly until the stream goes idle). Without this
+        // the cancelled turn's late audio would still push into the ringbuf.
+        if let Some(session) = &self.tts_session {
+            session.cancel_current_turn().await;
+        }
         if let Some(mut s) = CALLS.get_mut(&self.uuid) {
             s.value_mut().clear_tts();
         }
