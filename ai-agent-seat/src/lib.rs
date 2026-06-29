@@ -69,10 +69,18 @@ fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::Modul
 
     tracing::info!("Loading ai_agent_seat module");
 
-    // Load configuration: env var, then default path.
-    let config_path = std::env::var("VOICE_SEAT_CONFIG").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{home}/.local/etc/freeswitch/voice_seat.yaml")
+    // Load configuration. Resolution order (first hit wins):
+    //   1. VOICE_SEAT_CONFIG env var (explicit override)
+    //   2. <param name="ai_config" value="..."/> from voice_seat.conf.xml
+    //      (read via FreeSWITCH's switch_xml_open_cfg — the standard FS idiom;
+    //      the config is auto-bound from autoload_configs/voice_seat.conf.xml)
+    //   3. ~/.local/etc/freeswitch/voice_seat.yaml (default)
+    // Any failure degrades to the next; none crash the module load.
+    let config_path = std::env::var("VOICE_SEAT_CONFIG").ok().unwrap_or_else(|| {
+        read_ai_config_param_from_xml().unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            format!("{home}/.local/etc/freeswitch/voice_seat.yaml")
+        })
     });
     if let Err(e) = config::load(&config_path) {
         tracing::warn!("Failed to load config from {}: {}", config_path, e);
@@ -190,6 +198,29 @@ impl Visit for FieldCollector {
             let _ = write!(self.0, "{}={:?}", field.name(), value);
         }
     }
+}
+
+/// Read the `<param name="ai_config" value="..."/>` from the module's
+/// FreeSWITCH XML config (`autoload_configs/voice_seat.conf.xml`).
+///
+/// Uses FreeSWITCH's `switch_xml_open_cfg` — the canonical config-read idiom,
+/// safe during `switch_module_load`. Returns `None` on any failure (file not
+/// bound, no `<settings>`, no `ai_config` param) so the caller falls back to
+/// the default path. Never panics.
+fn read_ai_config_param_from_xml() -> Option<String> {
+    use fswtch::{XmlConfig, XmlNode};
+    let xml = XmlConfig::open("voice_seat.conf")?;
+    // `settings()` returns the <settings> node. Its CHILDREN are <param> nodes;
+    // iterate them (not <settings>'s siblings — the earlier bug).
+    let first_param: XmlNode<'_> = xml.settings()?.child("param")?;
+    let mut node = Some(first_param);
+    while let Some(p) = node {
+        if p.attr("name").as_deref() == Some("ai_config") {
+            return p.attr("value");
+        }
+        node = p.next();
+    }
+    None
 }
 
 fn init_tracing() {
