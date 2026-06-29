@@ -40,16 +40,9 @@ use crate::tts_ws_codec::{EventType, Message, MsgType};
 /// chunk, pushing directly into the caller's playback ringbuf (no mpsc/forwarder).
 pub type OnAudio = Box<dyn FnMut(&[i16]) + Send + 'static>;
 
-/// `fswtch::Resample` (`switch_resample_t`) is `!Send` because the underlying C
-/// resampler is not safe under *concurrent* access. A TTS driver task holds one
-/// resampler and runs it single-threaded — tokio's task-migration provides a
-/// happens-before relationship, so exclusive ownership across `.await` points is
-/// sound. We opt into `Send` to satisfy the `tokio::spawn` future bound.
-struct SendResample(fswtch::Resample);
-// SAFETY: the wrapped resampler is only ever touched from the driver task that
-// owns it; it is never shared across threads concurrently. Task migration
-// serializes access via the runtime's synchronization.
-unsafe impl Send for SendResample {}
+// Reuse the shared `SendResample` wrapper from `audio_dsp` (also used by the
+// VAD bypass in `io.rs`) — one `unsafe impl Send` in the whole crate.
+use crate::audio_dsp::SendResample;
 
 /// The Volcano bidirectional TTS WebSocket endpoint.
 const ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection";
@@ -94,53 +87,46 @@ struct SessionInner {
     api_key: String,
     resource_id: String,
     speaker: String,
-    /// TTS server output sample rate. Always 16 kHz — the server does NOT send
-    /// `TTSSentenceEnd` at 8 kHz. Kept as a field for API compatibility; the
-    /// actual server request always uses `TTS_SERVER_SAMPLE_RATE`.
-    #[allow(dead_code)]
-    server_sample_rate: u32,
     call_uuid: String,
     send_mutex: Mutex<()>,
     state: Arc<Mutex<SessionState>>,
     cmd_tx: parking_lot::Mutex<Option<tokio::sync::mpsc::Sender<DriverCmd>>>,
     driver_join: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
     started_flag: std::sync::atomic::AtomicBool,
-    /// Direct audio callback invoked by the driver loop with each resampled PCM
-    /// chunk. Wraps `FnMut` in a `parking_lot::Mutex` because the driver runs
-    /// the callback from an async context (`route_frame` / `driver_loop`) and
-    /// needs `&mut`; the lock is held only for the duration of the push (fast).
+    /// Direct audio callback invoked by the driver loop with each PCM chunk.
+    /// Wraps `FnMut` in a `parking_lot::Mutex` because the driver runs the
+    /// callback from an async context (`route_frame` / `driver_loop`) and needs
+    /// `&mut`; the lock is held only for the duration of the push (fast).
     on_audio: parking_lot::Mutex<OnAudio>,
 }
 
 impl VolcanoBidirectionalSession {
-    /// Build a session for the given credentials + speaker, bound to the
-    /// call UUID. `server_sample_rate` is the rate the Volcano server emits
-    /// (e.g. 24000); the pipeline resamples it to 16 kHz. The UUID is used for
-    /// BOTH `session_id` and `section_id` (cross-turn correlation). The connect
-    /// happens later in [`start`] or lazily in [`synthesize`].
+    /// Build a session for the given credentials + speaker, bound to the call
+    /// UUID. The server always outputs at `TTS_SERVER_SAMPLE_RATE` (8 kHz); the
+    /// UUID is used for BOTH `session_id` and `section_id` (cross-turn
+    /// correlation). The connect happens later in [`start`] or lazily in
+    /// [`synthesize`].
     ///
-    /// `on_audio` is invoked by the driver loop for each resampled 16 kHz PCM
-    /// chunk — the caller (actor) pushes it straight into its ringbuf producer,
-    /// eliminating the old `mpsc` indirection. The callback is `FnMut` (held
-    /// under a short-lived lock) so it can mutate internal buffer state.
+    /// `on_audio` is invoked by the driver loop for each PCM chunk — the caller
+    /// (actor) pushes it straight into its ringbuf producer, eliminating the old
+    /// `mpsc` indirection. The callback is `FnMut` (held under a short-lived
+    /// lock) so it can mutate internal buffer state.
     pub fn new(
         api_key: String,
         resource_id: String,
         speaker: String,
-        server_sample_rate: u32,
         call_uuid: String,
         on_audio: OnAudio,
     ) -> Self {
         tracing::debug!(
-            "Volcano TTS session constructed: call_uuid={} sr={} (session_id=section_id=call_uuid)",
-            call_uuid, server_sample_rate,
+            "Volcano TTS session constructed: call_uuid={} (session_id=section_id=call_uuid)",
+            call_uuid,
         );
         Self {
             inner: Arc::new(SessionInner {
                 api_key,
                 resource_id,
                 speaker,
-                server_sample_rate,
                 call_uuid,
                 send_mutex: Mutex::new(()),
                 state: Arc::new(Mutex::new(SessionState {
@@ -246,7 +232,8 @@ impl VolcanoBidirectionalSession {
         self.inner.state.lock().await.started
     }
 
-    async fn wait_for_started(&self) -> Result<()> {        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    async fn wait_for_started(&self) -> Result<()> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             if self.is_started().await {
                 return Ok(());
@@ -309,11 +296,9 @@ impl VolcanoBidirectionalSession {
         *self.inner.cmd_tx.lock() = Some(cmd_tx.clone());
 
         let state = Arc::clone(&self.inner.state);
-        // Pass TTS_SERVER_SAMPLE_RATE (16 kHz) — the rate the server actually
-        // outputs. The driver_loop creates a resampler from this rate down to
-        // PIPELINE_SAMPLE_RATE (8 kHz). Using the original config value (which
-        // may be 8 kHz) would cause the resampler to be skipped, producing
-        // audio at the wrong speed since the server outputs 16 kHz regardless.
+        // Pass TTS_SERVER_SAMPLE_RATE so driver_loop knows the server's output
+        // rate. When it matches PIPELINE_SAMPLE_RATE (both 8 kHz) no resampler
+        // is created; if they ever differ, driver_loop resamples between them.
         // Pass a WEAK ref — NOT a strong Arc clone. A strong clone creates a
         // reference cycle (driver_loop holds Arc<SessionInner>, SessionInner::Drop
         // sends Shutdown to stop driver_loop) that prevents Drop from ever firing,
@@ -321,7 +306,13 @@ impl VolcanoBidirectionalSession {
         // the cycle: when the actor drops its Arc, strong count → 0, Drop fires,
         // Shutdown is sent, driver_loop exits.
         let inner = Arc::downgrade(&self.inner);
-        let driver = tokio::spawn(driver_loop(ws_stream, cmd_rx, state, TTS_SERVER_SAMPLE_RATE, inner));
+        let driver = tokio::spawn(driver_loop(
+            ws_stream,
+            cmd_rx,
+            state,
+            TTS_SERVER_SAMPLE_RATE,
+            inner,
+        ));
         *self.inner.driver_join.lock() = Some(driver);
 
         self.send_raw(Message::start_connection()).await?;
@@ -329,11 +320,9 @@ impl VolcanoBidirectionalSession {
     }
 
     async fn start_session(&self) -> Result<()> {
-        // IMPORTANT: always request 16 kHz from the TTS server regardless of the
-        // pipeline rate. The Volcano server does NOT send `TTSSentenceEnd` at
-        // 8 kHz — only `TTSSentenceStart` + audio arrive, causing synthesize
-        // to hang until timeout. The driver_loop resamples 16 kHz → pipeline
-        // rate (8 kHz) before pushing to `on_audio`.
+        // Request TTS_SERVER_SAMPLE_RATE (8 kHz) from the server — matches the
+        // pipeline natively, so no resampling is needed. (Verified by Python
+        // test: 8 kHz + finish_session → TTSSentenceEnd arrives correctly.)
         let payload = serde_json::json!({
             "req_params": {
                 "speaker": self.inner.speaker,
@@ -345,6 +334,15 @@ impl VolcanoBidirectionalSession {
             }
         });
         let payload_bytes = serde_json::to_vec(&payload)?;
+        // Reset the session flag BEFORE sending start_session so `wait_for_started`
+        // waits for THIS turn's SessionStarted — not a stale `true` left over
+        // from the previous turn (TTSSentenceEnd notifies `done` but does NOT
+        // reset `started`; only SessionFinished does, and it may not have
+        // arrived yet when the next turn begins).
+        {
+            let mut st = self.inner.state.lock().await;
+            st.started = false;
+        }
         let msg = Message::start_session(payload_bytes, &self.inner.call_uuid);
         self.send_raw(msg).await?;
         self.wait_for_started().await

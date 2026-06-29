@@ -23,7 +23,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 earshot = "1"
 rubato = "0.15"
-mimalloc = "0.1"
+mimalloc = "0.1.52"
 dashmap = "6"
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 tokio-util = "0.7"

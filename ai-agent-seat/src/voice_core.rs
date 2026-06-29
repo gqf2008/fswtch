@@ -56,13 +56,6 @@ pub struct ApiConfig {
     /// Volcano TTS speaker voice id.
     #[serde(default)]
     pub volcano_speaker: String,
-    /// TTS server output sample rate (Hz); resampled to the 16 kHz pipeline internally.
-    #[serde(default = "default_tts_sample_rate")]
-    pub volcano_tts_sample_rate: u32,
-}
-
-fn default_tts_sample_rate() -> u32 {
-    16000
 }
 
 /// VAD configuration.
@@ -74,9 +67,6 @@ pub struct VadConfig {
     /// Silence timeout in milliseconds before considering speech ended.
     #[serde(default)]
     pub silence_timeout_ms: u32,
-    /// Sample rate for VAD processing (typically 16000).
-    #[serde(default)]
-    pub sample_rate: u32,
     /// Minimum RMS energy (linear f32 scale, 0.0-1.0) for a frame to be
     /// considered for speech detection. Frames below this are treated as
     /// silence regardless of VAD score. This is the primary noise gate.
@@ -108,7 +98,6 @@ impl Default for VadConfig {
         Self {
             speech_threshold: 0.5,
             silence_timeout_ms: 500,
-            sample_rate: 16000,
             min_speech_rms: 0.01,
             barge_in_confirm_ms: 80,
             speech_onset_ms: default_speech_onset_ms(),

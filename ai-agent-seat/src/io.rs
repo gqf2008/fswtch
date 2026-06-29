@@ -36,8 +36,8 @@ use std::sync::atomic::Ordering;
 
 use dashmap::DashMap;
 use fswtch::{
-    CallerProfile, EndpointIoRoutines, EndpointInterfaceRef, Frame, FrameMut, OriginateFlag,
-    OutgoingResult, Session, Status, SUCCESS, request_session,
+    CallerProfile, EndpointInterfaceRef, EndpointIoRoutines, Frame, FrameMut, OriginateFlag,
+    OutgoingResult, SUCCESS, Session, Status, request_session,
 };
 // `Consumer` trait is required for `ringbuf::Cons::pop_slice` / `clear`
 // method resolution (they are trait methods, not inherent).
@@ -53,6 +53,28 @@ const EARSHOT_FRAME_SIZE: usize = 256;
 /// echo leakage that FS preprocess AEC didn't fully eliminate — real caller
 /// voice scores >0.8, echo typically 0.5-0.7.
 const BARGE_IN_SCORE_THRESHOLD: f32 = 0.8;
+
+/// RMS energy of a frame, normalized to [0.0, 1.0] (full-scale i16 = 1.0).
+/// Used as the noise gate — frames below `min_speech_rms` are treated as
+/// silence regardless of VAD score. Integer sum-of-squares (i32 squared into
+/// u64) avoids the f64 powi path on the per-frame hot path.
+fn rms(frame: &[i16]) -> f32 {
+    let sum_sq: u64 = frame.iter().map(|&s| (s as i64 * s as i64) as u64).sum();
+    ((sum_sq as f64 / frame.len() as f64).sqrt() / 32768.0) as f32
+}
+
+/// Score one earshot frame: (score, rms). Shared by the barge-in and normal
+/// VAD paths so the predict + RMS computation lives in one place.
+fn score_frame(
+    detector: Option<&mut earshot::Detector>,
+    frame: &[i16; EARSHOT_FRAME_SIZE],
+) -> (f32, f32) {
+    let score = match detector {
+        Some(d) => d.predict_i16(frame),
+        None => -1.0,
+    };
+    (score, rms(frame))
+}
 
 /// Per-call state, owned by the global [`CALLS`] map and borrowed by the I/O
 /// callbacks + the orchestrator's spawned tasks.
@@ -70,7 +92,7 @@ pub struct CallState {
     /// earshot VAD detector (16 kHz). `None` when the pipeline rate is not 16 kHz.
     pub vad: Option<earshot::Detector>,
     /// Upsampler from the session's codec rate to 16 kHz, when they differ.
-    pub(crate) resampler: Option<FsResample>,
+    pub(crate) resampler: Option<SendResample>,
     /// Pre-roll buffer (300 ms at 16 kHz) captured before speech onset.
     pub pre_roll: VecDeque<i16>,
     /// Fixed max size of `pre_roll` (samples). NOT `VecDeque::capacity()`, which
@@ -78,10 +100,6 @@ pub struct CallState {
     pub pre_roll_max: usize,
     /// Whether we are currently inside a speech segment.
     pub in_speech: bool,
-    /// Count of consecutive speech-scoring frames. Speech onset is only
-    /// confirmed when this reaches the onset threshold — prevents
-    /// single-frame noise spikes from triggering a segment.
-    pub consecutive_speech: u32,
     /// Onset accumulator (ms). Increases by frame_ms when score > threshold,
     /// decays by `speech_onset_decay` fraction when score < threshold.
     /// Speech onset fires when accumulator >= `speech_onset_ms`.
@@ -145,7 +163,7 @@ impl CallState {
         // 16 kHz). Only used to feed VAD prediction; speech segment data stays
         // at pipeline rate (8 kHz).
         let resampler = if PIPELINE_SAMPLE_RATE != VAD_SAMPLE_RATE {
-            Some(FsResample(
+            Some(SendResample(
                 fswtch::Resample::new(PIPELINE_SAMPLE_RATE, VAD_SAMPLE_RATE, 1, 1)
                     .map_err(|e| anyhow::anyhow!("VAD resample init: {e:?}"))?,
             ))
@@ -172,7 +190,6 @@ impl CallState {
             pre_roll: VecDeque::with_capacity(pre_roll_size),
             pre_roll_max: pre_roll_size,
             in_speech: false,
-            consecutive_speech: 0,
             onset_accum_ms: 0.0,
             speech_threshold: vad_config.speech_threshold,
             speech_onset_ms: vad_config.speech_onset_ms,
@@ -217,15 +234,9 @@ static WRITE_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
 /// Global `write_frame` invocation counter, for periodic (1/sec) diagnostics.
 static WF_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
 
-/// `fswtch::Resample` (`switch_resample_t`) is `!Send + !Sync`, but a CallState
-/// lives in a global DashMap and is driven from one media thread per call —
-/// exclusive ownership, no concurrent access. We opt into `Send + Sync` so the
-/// DashMap accepts it.
-pub(crate) struct FsResample(fswtch::Resample);
-// SAFETY: the resampler is only ever touched from the single media thread
-// driving a given call's `write_frame`; never shared concurrently.
-unsafe impl Send for FsResample {}
-unsafe impl Sync for FsResample {}
+// The `Send + Sync` resampler wrapper lives in `audio_dsp` (shared with
+// `tts.rs`). The VAD bypass resampler (8 kHz → 16 kHz) is held here.
+use crate::audio_dsp::SendResample;
 
 /// The `ai_agent` endpoint: a unit-struct implementing
 /// [`fswtch::EndpointIoRoutines`]. Behavior is fixed per-type; per-call state
@@ -254,8 +265,7 @@ impl EndpointIoRoutines for AiAgent {
         flags: OriginateFlag,
     ) -> OutgoingResult {
         // Request a new session on our endpoint (null UUID → FS generates one).
-        let Some(new_session) =
-            request_session(endpoint, fswtch::CallDirection::OUTBOUND, flags)
+        let Some(new_session) = request_session(endpoint, fswtch::CallDirection::OUTBOUND, flags)
         else {
             tracing::error!("outgoing_channel: session request failed");
             return OutgoingResult::refused();
@@ -394,12 +404,16 @@ impl EndpointIoRoutines for AiAgent {
         }
 
         // VAD bypass: upsample 8 kHz → 16 kHz for earshot prediction only.
-        let vad_samples: Vec<i16> = if let Some(resampler) = state_mut.resampler.as_ref() {
+        // Extend vad_stage directly from the resampler's borrowed output slice
+        // to avoid a per-frame Vec allocation. When no resampling is needed
+        // (rates match), extend directly from the input slice — zero alloc.
+        if let Some(resampler) = state_mut.resampler.as_ref() {
             let mut buf = samples.to_vec();
-            resampler.0.process(&mut buf).to_vec()
+            let out = resampler.0.process(&mut buf);
+            state_mut.vad_stage.extend_from_slice(out);
         } else {
-            samples.to_vec()
-        };
+            state_mut.vad_stage.extend_from_slice(samples);
+        }
 
         // VAD: accumulate into 256-sample 16 kHz frames and score each.
         // Skip VAD entirely while AI is speaking — the TTS output leaks back
@@ -413,7 +427,6 @@ impl EndpointIoRoutines for AiAgent {
             // Upsample + predict earshot, require sustained voice (config-driven
             // `barge_in_confirm_ms`) before interrupting. This prevents coughs,
             // echo leakage, and background noise from triggering false barge-ins.
-            state_mut.vad_stage.extend_from_slice(&vad_samples);
             while state_mut.vad_stage.len() >= EARSHOT_FRAME_SIZE {
                 let frame_slice: [i16; EARSHOT_FRAME_SIZE] = {
                     let mut buf = [0i16; EARSHOT_FRAME_SIZE];
@@ -422,18 +435,9 @@ impl EndpointIoRoutines for AiAgent {
                 };
                 state_mut.vad_stage.drain(..EARSHOT_FRAME_SIZE);
 
-                let score = match state_mut.vad.as_mut() {
-                    Some(detector) => detector.predict_i16(&frame_slice),
-                    None => -1.0,
-                };
-
-                // RMS noise gate (same as normal VAD path).
-                let rms = {
-                    let sum_sq: f64 = frame_slice.iter().map(|&s| (s as f64).powi(2)).sum();
-                    (sum_sq / frame_slice.len() as f64).sqrt() as f32 / 32768.0
-                };
-                let is_voiced = score >= BARGE_IN_SCORE_THRESHOLD
-                    && rms >= state_mut.min_speech_rms;
+                let (score, rms) = score_frame(state_mut.vad.as_mut(), &frame_slice);
+                let is_voiced =
+                    score >= BARGE_IN_SCORE_THRESHOLD && rms >= state_mut.min_speech_rms;
 
                 let frame_len = frame_slice.len() as u32;
                 if is_voiced {
@@ -442,13 +446,13 @@ impl EndpointIoRoutines for AiAgent {
                         tracing::info!(
                             "VAD: barge-in confirmed for {uuid} (score={score:.3} rms={rms:.4} \
                              confirm={}/{}samples)",
-                            state_mut.barge_in_confirm, state_mut.barge_in_confirm_samples
+                            state_mut.barge_in_confirm,
+                            state_mut.barge_in_confirm_samples
                         );
                         state_mut.barge_in_confirm = 0;
                         // Tell the actor to cancel the current turn + flush TTS.
                         if let Some(actor) = state_mut.actor.as_ref() {
                             let actor = actor.clone();
-                            let uuid_clone = uuid.clone();
                             crate::runtime::spawn(async move {
                                 let _ = actor.tell(crate::actor::BargeIn).await;
                             });
@@ -461,7 +465,6 @@ impl EndpointIoRoutines for AiAgent {
             return SUCCESS;
         }
 
-        state_mut.vad_stage.extend_from_slice(&vad_samples);
         while state_mut.vad_stage.len() >= EARSHOT_FRAME_SIZE {
             let frame_slice: [i16; EARSHOT_FRAME_SIZE] = {
                 let mut buf = [0i16; EARSHOT_FRAME_SIZE];
@@ -470,29 +473,15 @@ impl EndpointIoRoutines for AiAgent {
             };
             state_mut.vad_stage.drain(..EARSHOT_FRAME_SIZE);
 
-            let score = match state_mut.vad.as_mut() {
-                Some(detector) => detector.predict_i16(&frame_slice),
-                None => -1.0,
-            };
-
+            let (score, rms) = score_frame(state_mut.vad.as_mut(), &frame_slice);
             // RMS noise gate: skip frames with low energy regardless of VAD
             // score. This is the primary defense against background noise —
             // speexdsp in the dialplan preprocess reduces noise, and the RMS
             // gate catches what's left. Configured via `min_speech_rms` in yaml.
-            let rms = {
-                let sum_sq: f64 = frame_slice.iter().map(|&s| (s as f64).powi(2)).sum();
-                (sum_sq / frame_slice.len() as f64).sqrt() as f32 / 32768.0
-            };
+            // (ai_speaking is already handled by the early-return branch above,
+            // so here the normal speech_threshold always applies.)
             let rms_gate = rms >= state_mut.min_speech_rms;
-
-            // Threshold: higher when AI is speaking (barge-in requires stronger
-            // signal to suppress echo that FS preprocess AEC didn't eliminate).
-            let ai_speaking = state_mut.ai_speaking.load(Ordering::Relaxed);
-            let threshold = if ai_speaking {
-                BARGE_IN_SCORE_THRESHOLD
-            } else {
-                state_mut.speech_threshold
-            };
+            let threshold = state_mut.speech_threshold;
 
             // Onset accumulator (voice-call style): accumulate ms when score
             // > threshold AND RMS gate passes; decay when it doesn't. Speech
@@ -505,13 +494,13 @@ impl EndpointIoRoutines for AiAgent {
                 state_mut.onset_accum_ms *= 1.0 - state_mut.speech_onset_decay;
             }
 
-            let onset_fired = !state_mut.in_speech
-                && state_mut.onset_accum_ms >= state_mut.speech_onset_ms;
+            let onset_fired =
+                !state_mut.in_speech && state_mut.onset_accum_ms >= state_mut.speech_onset_ms;
 
             let frame_len = frame_slice.len() as u32;
             tracing::trace!(
                 target: "ai_agent_seat::io",
-                "VAD {uuid}: score={score:.3} rms={rms:.4} gate={rms_gate} ai_sp={ai_speaking} \
+                "VAD {uuid}: score={score:.3} rms={rms:.4} gate={rms_gate} \
                  thr={threshold:.2} onset={:.1}ms/{:.0}ms voiced={is_voiced}",
                 state_mut.onset_accum_ms, state_mut.speech_onset_ms
             );
@@ -528,7 +517,8 @@ impl EndpointIoRoutines for AiAgent {
                     tracing::info!(
                         "VAD: speech STARTED for {uuid} (score={score:.3} rms={rms:.4} \
                          onset={:.1}ms) pre_roll={pre_roll_len} buf={}",
-                        state_mut.onset_accum_ms, state_mut.speech_buffer.len()
+                        state_mut.onset_accum_ms,
+                        state_mut.speech_buffer.len()
                     );
                 }
                 if state_mut.in_speech {
@@ -543,27 +533,22 @@ impl EndpointIoRoutines for AiAgent {
                     let speech = std::mem::take(&mut state_mut.speech_buffer);
                     if !speech.is_empty() {
                         tracing::info!(
-                            "VAD {uuid}: sending speech segment ({} samples = {:.1}s @8kHz)",
-                            speech.len(), speech.len() as f32 / 8000.0
+                            "VAD {uuid}: sending speech segment ({} samples = {:.1}s)",
+                            speech.len(),
+                            speech.len() as f32 / PIPELINE_SAMPLE_RATE as f32
                         );
                         match state_mut.speech_tx.as_ref() {
                             Some(tx) => {
                                 if let Err(e) = tx.try_send(speech) {
-                                    tracing::warn!(
-                                        "try_send(speech) for {uuid} failed: {e}"
-                                    );
+                                    tracing::warn!("try_send(speech) for {uuid} failed: {e}");
                                 }
                             }
                             None => {
-                                tracing::warn!(
-                                    "speech segment for {uuid} dropped: no speech_tx"
-                                );
+                                tracing::warn!("speech segment for {uuid} dropped: no speech_tx");
                             }
                         }
                         state_mut.pre_roll.clear();
-                        tracing::info!(
-                            "VAD: speech ENDED for {uuid} — segment sent to actor"
-                        );
+                        tracing::info!("VAD: speech ENDED for {uuid} — segment sent to actor");
                     }
                 }
             }
@@ -728,8 +713,7 @@ mod tests {
     fn ringbuf_ok_short_sentence() {
         // 12-char sentence ≈ 2s at 8kHz = 16000 samples. Fits in 32000.
         let total_samples = 16000;
-        let (pushed, popped, dropped) =
-            simulate_tts_pipeline(total_samples, 5120, 8000, 3000);
+        let (pushed, popped, dropped) = simulate_tts_pipeline(total_samples, 5120, 8000, 3000);
 
         eprintln!("Short: pushed={pushed} popped={popped} dropped={dropped}");
         assert_eq!(dropped, 0);
@@ -803,7 +787,10 @@ mod tests {
             pre_roll.len(),
             pre_roll.capacity()
         );
-        eprintln!("pre_roll: len={} capacity={}", pre_roll.len(), pre_roll.capacity());
+        eprintln!(
+            "pre_roll: len={} capacity={}",
+            pre_roll.len(),
+            pre_roll.capacity()
+        );
     }
 }
-

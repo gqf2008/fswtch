@@ -40,7 +40,10 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn text(role: &str, content: String) -> Self {
-        Self { role: role.to_string(), content }
+        Self {
+            role: role.to_string(),
+            content,
+        }
     }
 }
 
@@ -182,7 +185,13 @@ pub async fn turn_pipeline(
         }
     }
 
-    let ToolExecutionResult { reply, asr, hangup, dtmf, transfer } = result;
+    let ToolExecutionResult {
+        reply,
+        asr,
+        hangup,
+        dtmf,
+        transfer,
+    } = result;
     tracing::info!(
         "LATENCY {uuid}: total before TTS = {}ms (LLM+tools)",
         t0.elapsed().as_millis()
@@ -221,9 +230,7 @@ pub async fn turn_pipeline(
 
     // ── Stage 4: persist history via TurnDone message back to the actor ──
     let user_for_history = match &asr {
-        Some(asr_text) if !asr_text.is_empty() => {
-            Some(ChatMessage::text("user", asr_text.clone()))
-        }
+        Some(asr_text) if !asr_text.is_empty() => Some(ChatMessage::text("user", asr_text.clone())),
         _ => Some(ChatMessage::text("user", "[用户语音]".to_string())),
     };
     let assistant_for_history = if reply.is_empty() {
@@ -233,7 +240,10 @@ pub async fn turn_pipeline(
     };
     tracing::info!(
         "turn complete for {uuid}: reply={} chars, asr={:?}",
-        assistant_for_history.as_ref().map(|m| m.content.chars().count()).unwrap_or(0),
+        assistant_for_history
+            .as_ref()
+            .map(|m| m.content.chars().count())
+            .unwrap_or(0),
         asr
     );
     let _ = actor_ref
@@ -271,6 +281,19 @@ async fn synthesize_and_play(
         }
     }
     ai_speaking.store(false, Ordering::Relaxed);
+}
+
+/// Shared HTTP client for LLM calls. Reused across turns so the TLS
+/// connector + connection pool (keep-alive to the same LLM endpoint) are
+/// amortized instead of rebuilt per speech segment (~50-100ms setup each).
+static LLM_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+fn llm_client() -> &'static reqwest::Client {
+    LLM_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new())
+    })
 }
 
 /// Call the LLM (OpenAI-compatible chat/completions) with conversation +
@@ -315,12 +338,10 @@ async fn call_llm_with_tools(
     tracing::debug!("LLM request body ({uuid}): {body}");
 
     let url = chat_completions_url(&cfg.api.llm_url);
-    let client = reqwest::Client::new();
-    let resp = client
+    let resp = llm_client()
         .post(&url)
         .bearer_auth(&cfg.api.llm_key)
         .json(&body)
-        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .context("LLM HTTP request failed")?;

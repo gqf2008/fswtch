@@ -7,6 +7,14 @@
 //! `write_frame` / `read_frame` / `kill_channel` callbacks in [`io`] run on
 //! the media thread at 50 Hz (20 ms frames).
 //!
+//! # Global allocator
+//!
+//! [`mimalloc`] is installed as the process-wide allocator (see
+//! `#[global_allocator]` below). The media thread does small, frequent
+//! allocations (per-frame `Vec`s in the VAD bypass), and mimalloc's
+//! thread-local caches are friendlier to that pattern than the system
+//! allocator, reducing jitter on the 20 ms real-time budget.
+//!
 //! Pipeline (audio-native LLM, no separate ASR): the caller's audio (arriving
 //! in `write_frame`) is run through VAD; when a speech segment completes, an
 //! orchestrator turn is spawned on the tokio runtime. The orchestrator encodes
@@ -18,6 +26,16 @@
 //! Per-call state ([`io::CallState`]) lives in a global
 //! [`dashmap::DashMap`]([`io::CALLS`]) keyed by session UUID, because the I/O
 //! callbacks receive no `user_data` parameter.
+
+// Process-wide allocator: mimalloc. Installed before any other item so it
+// takes effect for all subsequent allocations (incl. in dependencies). The
+// media thread's per-frame small allocations benefit from mimalloc's
+// thread-local caches — less jitter on the 20 ms real-time budget than the
+// system allocator.
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 pub mod actor;
 pub mod audio_dsp;
@@ -62,12 +80,11 @@ fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::Modul
     // Confirm config actually loaded (tracing → stderr; visible with `freeswitch -nf`).
     if let Some(cfg) = config::get() {
         tracing::info!(
-            "config loaded: pipeline={} llm_model={} llm_url={} volcano_speaker={} volcano_sr={}",
+            "config loaded: pipeline={} llm_model={} llm_url={} volcano_speaker={}",
             cfg.api.pipeline_mode,
             cfg.api.llm_model,
             cfg.api.llm_url,
             cfg.api.volcano_speaker,
-            cfg.api.volcano_tts_sample_rate,
         );
     } else {
         tracing::warn!("no config loaded — orchestrator will use canned responses");

@@ -22,10 +22,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
+use kameo::Actor;
 use kameo::actor::{ActorRef, Spawn, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message, StreamMessage};
-use kameo::Actor;
 use parking_lot::Mutex;
 // `Producer` trait is required for `ringbuf::Prod::push_slice` method
 // resolution (it is a trait method, not inherent). We use the `Direct`
@@ -36,9 +36,9 @@ use tokio_util::sync::CancellationToken;
 
 use ringbuf::traits::Consumer;
 
-use crate::call_core::{control, register_call, CallControl};
-use crate::io::{CallState, CALLS};
-use crate::orchestrator::{turn_pipeline, ChatMessage, MAX_HISTORY};
+use crate::call_core::{CallControl, control, register_call};
+use crate::io::{CALLS, CallState};
+use crate::orchestrator::{ChatMessage, MAX_HISTORY, turn_pipeline};
 use crate::tts::{OnAudio, VolcanoBidirectionalSession};
 use crate::voice_core::Config;
 
@@ -81,20 +81,18 @@ impl CallActor {
         on_audio: OnAudio,
         speech_rx: tokio::sync::mpsc::Receiver<Vec<i16>>,
     ) -> Self {
-        let tts_session =
-            config
-                .as_ref()
-                .filter(|c| !c.api.volcano_api_key.is_empty())
-                .map(|c| {
-                    VolcanoBidirectionalSession::new(
-                        c.api.volcano_api_key.clone(),
-                        c.api.volcano_resource_id.clone(),
-                        c.api.volcano_speaker.clone(),
-                        c.api.volcano_tts_sample_rate,
-                        uuid.clone(),
-                        on_audio,
-                    )
-                });
+        let tts_session = config
+            .as_ref()
+            .filter(|c| !c.api.volcano_api_key.is_empty())
+            .map(|c| {
+                VolcanoBidirectionalSession::new(
+                    c.api.volcano_api_key.clone(),
+                    c.api.volcano_resource_id.clone(),
+                    c.api.volcano_speaker.clone(),
+                    uuid.clone(),
+                    on_audio,
+                )
+            });
         let mut conversation = Vec::new();
         if let Some(cfg) = config.as_ref()
             && let Some(prompt) = cfg.system_prompt.as_ref()
@@ -194,7 +192,11 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
                 cons.clear();
             }
         }
-        tracing::info!("CallActor {}: speech segment received ({} samples), starting turn", self.uuid, audio.len());
+        tracing::info!(
+            "CallActor {}: speech segment received ({} samples), starting turn",
+            self.uuid,
+            audio.len()
+        );
         // Run the turn IN-LINE (mailbox-sequential): the next SpeechSegment or
         // BargeIn queues in the mailbox until this turn finishes. This prevents
         // the "each new segment cancels the previous LLM call" storm that
@@ -214,8 +216,18 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
             tracing::error!("CallActor {}: no actor_ref (on_start not run?)", uuid);
             return;
         };
-        turn_pipeline(uuid, config, conv_snapshot, tts, audio, cancel, ai_speaking, control, actor_ref)
-            .await;
+        turn_pipeline(
+            uuid,
+            config,
+            conv_snapshot,
+            tts,
+            audio,
+            cancel,
+            ai_speaking,
+            control,
+            actor_ref,
+        )
+        .await;
     }
 }
 
@@ -259,6 +271,17 @@ pub fn stop_runtime() {
 ///
 /// Idempotent: a no-op if `uuid` is already in [`CALLS`].
 pub fn init_call(uuid: &str, codec_rate: u32) -> Result<()> {
+    // Serialize init: `outgoing_channel` (originate thread) and the first
+    // `write_frame` (media thread) can both call init_call for the same UUID
+    // at ~the same instant. A `contains_key` + `insert` pair is a TOCTOU race
+    // that spawns two CallActors + two TTS WebSockets (one orphaned, leaked).
+    // The init lock makes the check-and-insert atomic. Held only during init
+    // (fast relative to call lifetime); CallState lookups use CALLS directly.
+    use std::sync::Mutex as StdMutex;
+    static INIT_LOCK: std::sync::LazyLock<StdMutex<()>> =
+        std::sync::LazyLock::new(|| StdMutex::new(()));
+    let _guard = INIT_LOCK.lock().unwrap();
+
     if CALLS.contains_key(uuid) {
         return Ok(());
     }
@@ -315,7 +338,11 @@ pub fn init_call(uuid: &str, codec_rate: u32) -> Result<()> {
             let _guard = handle.enter();
             CallActor::spawn(actor)
         }
-        None => return Err(anyhow::anyhow!("no tokio runtime (start_runtime not called?)")),
+        None => {
+            return Err(anyhow::anyhow!(
+                "no tokio runtime (start_runtime not called?)"
+            ));
+        }
     };
     state.actor = Some(actor_ref);
     CALLS.insert(uuid.to_string(), state);
