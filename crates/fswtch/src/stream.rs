@@ -66,12 +66,20 @@ pub struct ApiStream {
 impl ApiStream {
     /// Wraps a FreeSWITCH stream pointer for the duration of an API callback.
     ///
+    /// Returns `None` when `raw` is null (FreeSWITCH passes null when no stream
+    /// is attached to the callback). Mirrors [`Stream::from_raw`]'s null handling
+    /// so the `api_callback!` macro's `$stream: Option<ApiStream>` parameter
+    /// type-checks at every call site.
+    ///
     /// # Safety
     ///
-    /// `raw` must point to a live FreeSWITCH stream handle and remain valid while this wrapper is
-    /// used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Self {
-        Self { raw }
+    /// A non-null `raw` must point to a live FreeSWITCH stream handle and remain
+    /// valid while this wrapper is used.
+    pub unsafe fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Option<Self> {
+        if raw.is_null() {
+            return None;
+        }
+        Some(Self { raw })
     }
 
     pub fn as_ptr(self) -> *mut sys::switch_stream_handle_t {
