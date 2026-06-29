@@ -229,11 +229,24 @@ impl<'a> MediaBugContext<'a> {
         self.raw.as_ptr()
     }
 
-    pub fn session(&self) -> Option<NonNull<sys::switch_core_session_t>> {
-        // SAFETY: `self.raw` is live for this callback.
-        NonNull::new(call_ffi!(sys::switch_core_media_bug_get_session(
-            self.raw.as_ptr()
-        )))
+    /// The session this media bug is attached to.
+    ///
+    /// FreeSWITCH calls media bug callbacks under the session's read lock, so the
+    /// returned session is guaranteed live for the duration of the callback.
+    /// Returns a `Session` (a lightweight, `Copy` handle — does not manage the
+    /// refcount; the bug owns the session for the callback's duration). Downstream
+    /// code can call `session.read_sample_rate()`, `session.channel()`, etc.
+    /// directly, with **no `unsafe` at the call site**.
+    ///
+    /// Returns `None` only if the bug has been detached (should not happen inside
+    /// a callback, but is handled defensively).
+    pub fn session(&self) -> Option<Session> {
+        // SAFETY: `self.raw` is live for this callback; the session it returns is
+        // live for the callback duration (FS holds the session read lock while
+        // invoking media bug callbacks). `Session` is a non-owning handle, so
+        // constructing it from a borrowed pointer is sound.
+        let ptr = call_ffi!(sys::switch_core_media_bug_get_session(self.raw.as_ptr()));
+        unsafe { Session::from_raw(ptr) }
     }
 
     pub fn native_read_frame(&self) -> Option<MediaFrame<'_>> {

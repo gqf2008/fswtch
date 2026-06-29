@@ -245,24 +245,20 @@ test ! -f freeswitch/mod_voice_seat/src/ffi.rs && echo "✓ ffi.rs deleted"
 
 ## 残留说明
 
-### 1. `unsafe { Session::from_raw(ptr) }`（2 处，**固有，不可消除**）
+### 1. media bug 回调拿 session —— **零 unsafe**（fork 已封装）
 
-- `aec_vad/mod.rs` — media bug 回调拿裸 `*mut switch_core_session_t`
-- `events.rs` — fire 事件拿裸 session 指针
-
-这两处 `unsafe` 是 **Rust 语言对裸指针→wrapper 转换的硬性要求**，不是 fork 缺口。`from_raw(*mut)` 必须是 `unsafe fn`：编译器无法验证裸指针非空/有效/不跨回调用，这个保证只能由调用点上下文给出。
-
-**fork 不会提供 `from_callback_ptr` 之类的 "safe" 变体** —— 那会把 soundness 责任从调用点（可见、可审）转嫁给 fork 内部（隐藏），一旦 voice-call 在非回调上下文误用就是 UB，比保留 `unsafe` 标记更危险。`unsafe` 标记是给 reviewer 的信号："这里要人审上下文"。
-
-fork 的价值不是消除这 1 处，是把 voice-call 现状的 **N 处手写 `unsafe sys::` 调用收敛到这 1 处不可避免的 `from_raw`：
+voice-call 在 `on_read_replace`/`on_write_replace` 等 `MediaBugHandler` 回调里需要 session（读 sample rate、UUID、channel）。**fork 的 `MediaBugContext::session()` 现在返回 `Option<Session>`（safe）**，回调里直接用：
 
 ```rust
-// 迁移后: 1 处 unsafe (from_raw), 其余全 safe
-let session = unsafe { Session::from_raw(session_ptr) };   // 唯一 unsafe
-let rate = session.read_sample_rate();                     // safe (原 sys:: 调用)
-let uuid = session.uuid();                                 // safe (原 sys:: 调用)
-let channel = session.channel();                           // safe (原 sys:: 调用)
+fn on_read_replace(&mut self, ctx: &mut MediaBugContext<'_>, frame: &mut MediaFrameMut<'_>) {
+    let session = ctx.session().expect("session live in callback");
+    let rate = session.read_sample_rate();   // safe
+    let uuid = session.uuid();               // safe
+    let channel = session.channel();         // safe
+}
 ```
+
+soundness 依据：FS 在 session 读锁下回调 media bug，session 在回调期间必然有效。`Session` 是非拥有句柄（`Copy`），从借用指针构造 sound。**voice-call 不需要 `unsafe { Session::from_raw }`**。
 
 ### 2. `extern "C" fn switch_module_shutdown`（**可消除 `unsafe`**）
 
