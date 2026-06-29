@@ -77,12 +77,30 @@ pub struct VadConfig {
     /// Sample rate for VAD processing (typically 16000).
     #[serde(default)]
     pub sample_rate: u32,
-    /// Minimum speech RMS to consider as speech.
+    /// Minimum RMS energy (linear f32 scale, 0.0-1.0) for a frame to be
+    /// considered for speech detection. Frames below this are treated as
+    /// silence regardless of VAD score. This is the primary noise gate.
     #[serde(default)]
     pub min_speech_rms: f32,
     /// Barge-in confirmation time in milliseconds.
     #[serde(default)]
     pub barge_in_confirm_ms: u32,
+    /// Minimum cumulative high-probability time (ms) before speech onset fires.
+    /// Uses an accumulator with decay — low-prob frames reduce the accumulator
+    /// rather than resetting it. Matches voice-call's proven approach.
+    #[serde(default = "default_speech_onset_ms")]
+    pub speech_onset_ms: f32,
+    /// Per-frame decay rate on the onset accumulator when frame prob < threshold.
+    /// 0.25 means one low-prob frame cancels 25% of accumulated onset.
+    #[serde(default = "default_speech_onset_decay")]
+    pub speech_onset_decay: f32,
+}
+
+fn default_speech_onset_ms() -> f32 {
+    80.0
+}
+fn default_speech_onset_decay() -> f32 {
+    0.25
 }
 
 impl Default for VadConfig {
@@ -93,6 +111,8 @@ impl Default for VadConfig {
             sample_rate: 16000,
             min_speech_rms: 0.01,
             barge_in_confirm_ms: 80,
+            speech_onset_ms: default_speech_onset_ms(),
+            speech_onset_decay: default_speech_onset_decay(),
         }
     }
 }

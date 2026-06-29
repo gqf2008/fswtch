@@ -35,7 +35,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use fswtch::{EventBinder, Result, sys};
+use fswtch::{EventBinder, Result};
 
 use crate::boundary;
 use crate::call_core::{control, is_live_call};

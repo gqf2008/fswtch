@@ -1,8 +1,17 @@
 use anyhow::{Result, anyhow};
 use rubato::{FastFixedIn, Resampler};
 
-/// Pipeline sample rate (16kHz for ASR processing).
-pub const PIPELINE_SAMPLE_RATE: u32 = 16000;
+/// Pipeline native sample rate: 8 kHz. Caller (sofia) audio is 8 kHz, TTS
+/// (seed-tts-2.0) outputs 8 kHz, LLM accepts 8 kHz WAV — so the entire
+/// pipeline (speech_buffer, ringbuf, codec, TTS, LLM WAV) runs at 8 kHz
+/// to avoid unnecessary resampling. Only the VAD (earshot) requires 16 kHz,
+/// handled as a bypass upsampling path.
+pub const PIPELINE_SAMPLE_RATE: u32 = 8000;
+
+/// VAD sample rate: earshot requires 16 kHz input. Caller 8 kHz audio is
+/// upsampled to 16 kHz for VAD prediction only; the speech segment data
+/// stays at 8 kHz (pipeline native).
+pub const VAD_SAMPLE_RATE: u32 = 16000;
 
 /// Sample rate converter using rubato.
 #[allow(dead_code)]

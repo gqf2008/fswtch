@@ -43,22 +43,20 @@ fswtch::module_exports! {
 }
 
 fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::ModuleBuilder> {
-    // Initialize tracing subscriber for logging. Output to stderr: FreeSWITCH
-    // daemonizes (closes stdout) so a plain `fmt()` subscriber writing stdout
-    // would vanish; stderr survives and is captured by `freeswitch -nf` / shell
-    // redirection. (A future tracing→`switch_log_printf` bridge will route
-    // these into the FreeSWITCH log system.)
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .try_init();
+    // Bridge tracing → FreeSWITCH's `switch_log_printf` (via `fswtch::log`). This makes
+    // ai-agent-seat logs appear in `freeswitch.log` / `fs_cli` like a native module's,
+    // with correct levels (ERROR/WARN/INFO/DEBUG). Set `RUST_LOG=ai_agent_seat=debug`
+    // to see per-frame VAD logs.
+    init_tracing();
 
     tracing::info!("Loading ai_agent_seat module");
 
-    // Load configuration from voice_seat.conf.xml path
-    if let Ok(config_path) = std::env::var("VOICE_SEAT_CONFIG")
-        && let Err(e) = config::load(&config_path)
-    {
+    // Load configuration: env var, then default path.
+    let config_path = std::env::var("VOICE_SEAT_CONFIG").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/.local/etc/freeswitch/voice_seat.yaml")
+    });
+    if let Err(e) = config::load(&config_path) {
         tracing::warn!("Failed to load config from {}: {}", config_path, e);
     }
     // Confirm config actually loaded (tracing → stderr; visible with `freeswitch -nf`).
@@ -125,4 +123,65 @@ pub extern "C" fn switch_module_shutdown() -> fswtch::Status {
 
     tracing::info!("ai_agent_seat module shutdown complete");
     fswtch::SUCCESS
+}
+
+// ── tracing → FreeSWITCH switch_log_printf bridge ────────────────────────
+//
+// A `tracing_subscriber::Layer` that forwards each event to `fswtch::log`
+// (`switch_log_printf`), so ai-agent-seat logs flow into the normal FreeSWITCH
+// log system (visible via `fs_cli` / `freeswitch.log`) instead of stderr.
+
+use std::fmt::Write as _;
+use tracing::field::{Field, Visit};
+use tracing_subscriber::layer::Context as LayerContext;
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
+
+struct FsLogLayer;
+
+impl<S: tracing::Subscriber> Layer<S> for FsLogLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: LayerContext<'_, S>) {
+        let mut visitor = FieldCollector::default();
+        event.record(&mut visitor);
+
+        let meta = event.metadata();
+        let level = match *meta.level() {
+            tracing::Level::ERROR => fswtch::LogLevel::Error,
+            tracing::Level::WARN => fswtch::LogLevel::Warning,
+            tracing::Level::INFO => fswtch::LogLevel::Info,
+            tracing::Level::DEBUG => fswtch::LogLevel::Debug,
+            tracing::Level::TRACE => fswtch::LogLevel::Debug2,
+        };
+        // `target` is the module path (e.g. `ai_agent_seat::io`); switch_log_printf
+        // surfaces it as the log line's tag.
+        fswtch::log(meta.target(), level, visitor.0);
+    }
+}
+
+/// Visits a tracing event's fields, formatting them as `message field=value …`.
+#[derive(Default)]
+struct FieldCollector(String);
+
+impl Visit for FieldCollector {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if !self.0.is_empty() {
+            self.0.push(' ');
+        }
+        if field.name() == "message" {
+            // `format_args!` Debug renders as the formatted text (no quotes).
+            let _ = write!(self.0, "{:?}", value);
+        } else {
+            let _ = write!(self.0, "{}={:?}", field.name(), value);
+        }
+    }
+}
+
+fn init_tracing() {
+    // Default to `info` for this crate when RUST_LOG is unset; RUST_LOG overrides
+    // (e.g. `RUST_LOG=ai_agent_seat=debug` to see 50 Hz VAD decisions).
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("ai_agent_seat=info"));
+    let _ = tracing_subscriber::registry()
+        .with(filter)
+        .with(FsLogLayer)
+        .try_init();
 }

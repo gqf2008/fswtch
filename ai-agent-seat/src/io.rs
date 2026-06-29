@@ -18,7 +18,8 @@
 //! - `write_frame(session, frame)`: FreeSWITCH writes the CALLER'S audio TO
 //!   this endpoint. VAD runs here. The frame is read-only.
 //! - `read_frame(session, frame)`: FreeSWITCH reads audio FROM this endpoint.
-//!   We drain [`CallState::tts_accum`] into the frame; silence when empty.
+//!   We drain [`CallState::tts_cons`] (SPSC ringbuf) into the frame; silence
+//!   when empty.
 //! - `kill_channel(session, sig)`: call ended — drop the [`CallState`].
 //! - `outgoing_channel(...)`: create the B leg when the dialplan bridges to
 //!   `ai_agent/<num>`.
@@ -30,29 +31,37 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use dashmap::DashMap;
 use fswtch::{
     CallerProfile, EndpointIoRoutines, EndpointInterfaceRef, Frame, FrameMut, OriginateFlag,
     OutgoingResult, Session, Status, SUCCESS, request_session,
 };
+// `Consumer` trait is required for `ringbuf::Cons::pop_slice` / `clear`
+// method resolution (they are trait methods, not inherent).
+use ringbuf::traits::Consumer;
 
-use crate::audio_dsp::{PIPELINE_SAMPLE_RATE, SampleRateConverter, get_codec_rate};
+use crate::audio_dsp::{PIPELINE_SAMPLE_RATE, VAD_SAMPLE_RATE, get_codec_rate};
 use crate::voice_core::Config;
 
 /// earshot predicts on fixed 256-sample (16 ms at 16 kHz) frames.
 const EARSHOT_FRAME_SIZE: usize = 256;
 
-/// Score above which an earshot frame is considered speech.
-const SPEECH_SCORE_THRESHOLD: f32 = 0.5;
+/// Higher threshold for barge-in detection (AI speaking). Suppresses residual
+/// echo leakage that FS preprocess AEC didn't fully eliminate — real caller
+/// voice scores >0.8, echo typically 0.5-0.7.
+const BARGE_IN_SCORE_THRESHOLD: f32 = 0.8;
 
 /// Per-call state, owned by the global [`CALLS`] map and borrowed by the I/O
 /// callbacks + the orchestrator's spawned tasks.
 ///
-/// `tts_accum` is the bridge from the orchestrator (async, tokio runtime) to
-/// `read_frame` (sync, FS media thread): the orchestrator pushes 16 kHz i16
-/// PCM here, `read_frame` drains it. A [`DashMap`] entry's `RefMut` gives us
-/// the exclusive borrow `read_frame` needs without a separate lock.
+/// The SPSC ringbuf (`tts_cons`) is the bridge from the TTS driver loop
+/// (async, tokio runtime — sole `Producer` via `on_audio`) to `read_frame`
+/// (sync, FS media thread — sole `Consumer`): the driver pushes 16 kHz i16
+/// PCM, `read_frame` drains it. A [`DashMap`] entry's `RefMut` gives us the
+/// exclusive borrow `read_frame` needs without a separate lock.
 ///
 /// `ai_speaking` is shared by value (Arc-clone) with the orchestrator so it
 /// can set/clear it without touching the map.
@@ -61,11 +70,27 @@ pub struct CallState {
     /// earshot VAD detector (16 kHz). `None` when the pipeline rate is not 16 kHz.
     pub vad: Option<earshot::Detector>,
     /// Upsampler from the session's codec rate to 16 kHz, when they differ.
-    pub resampler: Option<SampleRateConverter>,
+    pub(crate) resampler: Option<FsResample>,
     /// Pre-roll buffer (300 ms at 16 kHz) captured before speech onset.
     pub pre_roll: VecDeque<i16>,
+    /// Fixed max size of `pre_roll` (samples). NOT `VecDeque::capacity()`, which
+    /// grows on reallocation. 300 ms at 8 kHz = 2400.
+    pub pre_roll_max: usize,
     /// Whether we are currently inside a speech segment.
     pub in_speech: bool,
+    /// Count of consecutive speech-scoring frames. Speech onset is only
+    /// confirmed when this reaches the onset threshold — prevents
+    /// single-frame noise spikes from triggering a segment.
+    pub consecutive_speech: u32,
+    /// Onset accumulator (ms). Increases by frame_ms when score > threshold,
+    /// decays by `speech_onset_decay` fraction when score < threshold.
+    /// Speech onset fires when accumulator >= `speech_onset_ms`.
+    pub onset_accum_ms: f32,
+    /// Config-driven thresholds (from VadConfig via voice_seat.yaml).
+    pub speech_threshold: f32,
+    pub speech_onset_ms: f32,
+    pub speech_onset_decay: f32,
+    pub min_speech_rms: f32,
     /// Accumulated 16 kHz i16 PCM for the current speech segment.
     pub speech_buffer: Vec<i16>,
     /// Staging buffer for accumulating samples into earshot-sized (256) frames.
@@ -80,15 +105,34 @@ pub struct CallState {
     /// Current barge-in confirmation counter.
     pub barge_in_confirm: u32,
     /// TTS audio to play toward the caller (16 kHz i16 PCM). Drained by
-    /// `read_frame`; filled by the orchestrator's `synthesize_and_play`.
-    pub tts_accum: VecDeque<i16>,
+    /// `read_frame`; filled by the TTS driver loop via the `on_audio` callback
+    /// that owns the ringbuf `Producer`. This is a SPSC ring buffer (driver =
+    /// sole producer on the tokio runtime, `read_frame` = sole consumer on the
+    /// FS media thread), so the DashMap `RefMut` exclusive borrow is sufficient
+    /// — no extra lock. `None` only transiently between `CallState::new` and
+    /// `actor::init_call` assigning the consumer half.
+    ///
+    /// We use the `Direct` (`ringbuf::Cons`) wrapper rather than the `Caching`
+    /// (`HeapCons`) one: `Direct` holds the `Arc<HeapRb<i16>>` directly and is
+    /// `Send + Sync` (a hard requirement — `CallState` lives in a global
+    /// `DashMap` `static`), whereas `Caching` uses `Cell` caches and is
+    /// `!Sync`. The producer/consumer caches are unnecessary for our SPSC
+    /// access pattern anyway.
+    pub tts_cons: Option<ringbuf::Cons<std::sync::Arc<ringbuf::HeapRb<i16>>>>,
+    /// Per-call speech-segment channel. `write_frame` (sync media thread) does
+    /// a non-blocking `try_send` here at end-of-speech; the CallActor consumes
+    /// it via `attach_stream` (`StreamMessage<Vec<i16>>`). Replaces the old
+    /// per-segment `runtime::spawn(tell)` — zero spawn, backpressure is "drop
+    /// the segment if the mailbox is full". `None` only transiently until
+    /// `actor::init_call` assigns it.
+    pub speech_tx: Option<tokio::sync::mpsc::Sender<Vec<i16>>>,
     /// AI-speaking flag, shared (Arc-clone) with the orchestrator.
     pub ai_speaking: Arc<AtomicBool>,
     /// Loaded configuration snapshot (may be `None` → defaults).
     pub config: Option<Config>,
-    /// The orchestrator owning this call's AI pipeline. `None` until
-    /// [`actor::init_call`] constructs it.
-    pub orchestrator: Option<Arc<crate::orchestrator::Orchestrator>>,
+    /// Per-call actor ref (set by `actor::init_call`). `None` only transiently
+    /// during `CallState::new` before `init_call` assigns it.
+    pub actor: Option<kameo::actor::ActorRef<crate::actor::CallActor>>,
 }
 
 impl CallState {
@@ -97,13 +141,19 @@ impl CallState {
     /// `codec_rate` is the session's read-codec sample rate (Hz); the resampler
     /// is created when it differs from [`PIPELINE_SAMPLE_RATE`].
     pub fn new(uuid: String, codec_rate: u32, config: Option<Config>) -> anyhow::Result<Self> {
-        let resampler = if codec_rate != PIPELINE_SAMPLE_RATE {
-            Some(SampleRateConverter::new(codec_rate, PIPELINE_SAMPLE_RATE)?)
+        // VAD bypass resampler: pipeline 8 kHz → VAD 16 kHz (earshot requires
+        // 16 kHz). Only used to feed VAD prediction; speech segment data stays
+        // at pipeline rate (8 kHz).
+        let resampler = if PIPELINE_SAMPLE_RATE != VAD_SAMPLE_RATE {
+            Some(FsResample(
+                fswtch::Resample::new(PIPELINE_SAMPLE_RATE, VAD_SAMPLE_RATE, 1, 1)
+                    .map_err(|e| anyhow::anyhow!("VAD resample init: {e:?}"))?,
+            ))
         } else {
             None
         };
 
-        let vad = if PIPELINE_SAMPLE_RATE == 16000 {
+        let vad = if VAD_SAMPLE_RATE == 16000 {
             Some(earshot::Detector::default())
         } else {
             None
@@ -112,37 +162,42 @@ impl CallState {
         let pre_roll_size = (PIPELINE_SAMPLE_RATE * 300 / 1000) as usize;
 
         let vad_config = config.as_ref().map(|c| c.vad.clone()).unwrap_or_default();
-        let silence_samples = vad_config.silence_timeout_ms * PIPELINE_SAMPLE_RATE / 1000;
-        let barge_in_confirm_samples = vad_config.barge_in_confirm_ms * PIPELINE_SAMPLE_RATE / 1000;
+        let silence_samples = vad_config.silence_timeout_ms * VAD_SAMPLE_RATE / 1000;
+        let barge_in_confirm_samples = vad_config.barge_in_confirm_ms * VAD_SAMPLE_RATE / 1000;
 
         Ok(Self {
             uuid,
             vad,
             resampler,
             pre_roll: VecDeque::with_capacity(pre_roll_size),
+            pre_roll_max: pre_roll_size,
             in_speech: false,
+            consecutive_speech: 0,
+            onset_accum_ms: 0.0,
+            speech_threshold: vad_config.speech_threshold,
+            speech_onset_ms: vad_config.speech_onset_ms,
+            speech_onset_decay: vad_config.speech_onset_decay,
+            min_speech_rms: vad_config.min_speech_rms,
             speech_buffer: Vec::new(),
             vad_stage: Vec::with_capacity(EARSHOT_FRAME_SIZE),
             silence_samples,
             current_silence: 0,
             barge_in_confirm_samples,
             barge_in_confirm: 0,
-            tts_accum: VecDeque::new(),
+            tts_cons: None,
+            speech_tx: None,
             ai_speaking: Arc::new(AtomicBool::new(false)),
             config,
-            orchestrator: None,
+            actor: None,
         })
     }
 
-    /// Push 16 kHz i16 PCM into the TTS accumulator (called from the
-    /// orchestrator's async task).
-    pub fn push_tts(&mut self, samples: &[i16]) {
-        self.tts_accum.extend(samples.iter().copied());
-    }
-
-    /// Drop any buffered TTS audio (barge-in flush).
+    /// Drop any buffered TTS audio (barge-in flush). Clears the SPSC ringbuf
+    /// consumer so `read_frame` emits silence on the next frame.
     pub fn clear_tts(&mut self) {
-        self.tts_accum.clear();
+        if let Some(cons) = self.tts_cons.as_mut() {
+            cons.clear();
+        }
     }
 }
 
@@ -153,6 +208,24 @@ impl CallState {
 /// media-thread lookups don't contend.
 pub static CALLS: std::sync::LazyLock<DashMap<String, CallState>> =
     std::sync::LazyLock::new(DashMap::new);
+
+/// One-shot flag: set when `write_frame` first receives a non-empty caller
+/// frame, so the first media frame logs at INFO (subsequent frames are TRACE).
+/// Reset to `false` on module unload (shutdown clears all calls).
+static WRITE_FRAME_SEEN: AtomicBool = AtomicBool::new(false);
+
+/// Global `write_frame` invocation counter, for periodic (1/sec) diagnostics.
+static WF_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// `fswtch::Resample` (`switch_resample_t`) is `!Send + !Sync`, but a CallState
+/// lives in a global DashMap and is driven from one media thread per call —
+/// exclusive ownership, no concurrent access. We opt into `Send + Sync` so the
+/// DashMap accepts it.
+pub(crate) struct FsResample(fswtch::Resample);
+// SAFETY: the resampler is only ever touched from the single media thread
+// driving a given call's `write_frame`; never shared concurrently.
+unsafe impl Send for FsResample {}
+unsafe impl Sync for FsResample {}
 
 /// The `ai_agent` endpoint: a unit-struct implementing
 /// [`fswtch::EndpointIoRoutines`]. Behavior is fixed per-type; per-call state
@@ -206,14 +279,16 @@ impl EndpointIoRoutines for AiAgent {
 
         // Initialize read + write codecs (L16 at the loopback's 8 kHz, 20 ms).
         // Without a read codec, `switch_core_io` hangs the channel up with
-        // `SWITCH_CAUSE_INCOMPATIBLE_DESTINATION` the instant media exchange
-        // begins. L16 (linear PCM) needs no transcoding against the loopback
-        // A leg and lets our `read_frame`/`write_frame` see raw i16 samples.
-        let codec_rate = get_codec_rate(&new_session).max(8000);
-        if let Err(e) = new_session.init_read_codec("L16", codec_rate, 20, 1) {
+        // Initialize read + write codecs at the PIPELINE rate (16 kHz). The VAD
+        // and TTS paths run at 16 kHz internally, so `read_frame`/`write_frame`
+        // must see 16 kHz PCM — FreeSWITCH's bridge then transcodes/resamples
+        // between this leg (16 kHz L16) and the caller's leg (typically 8 kHz).
+        // (Earlier this used `codec_rate` from the fresh session = 8000, which
+        // mismatched the 16 kHz pipeline PCM and produced wrong-pitch audio.)
+        if let Err(e) = new_session.init_read_codec("L16", PIPELINE_SAMPLE_RATE, 20, 1) {
             tracing::warn!("outgoing_channel: init_read_codec failed: {e}");
         }
-        if let Err(e) = new_session.init_write_codec("L16", codec_rate, 20, 1) {
+        if let Err(e) = new_session.init_write_codec("L16", PIPELINE_SAMPLE_RATE, 20, 1) {
             tracing::warn!("outgoing_channel: init_write_codec failed: {e}");
         }
 
@@ -250,6 +325,25 @@ impl EndpointIoRoutines for AiAgent {
             return SUCCESS;
         };
 
+        let samples = frame.pcm_i16();
+        // Per-frame diagnostics: a global counter logs one line per second
+        // (every 50 frames) showing raw sample count + accumulated VAD-stage
+        // length, so we can tell whether write_frame is called steadily and
+        // whether samples are reaching the VAD buffer. The first non-empty
+        // frame also logs at INFO.
+        let raw_len = samples.map(|s| s.len()).unwrap_or(0);
+        let n = WF_FRAME_COUNT.fetch_add(1, Ordering::Relaxed);
+        if !WRITE_FRAME_SEEN.load(Ordering::Relaxed) && raw_len > 0 {
+            WRITE_FRAME_SEEN.store(true, Ordering::Relaxed);
+            tracing::info!("write_frame: first media frame for {uuid} ({raw_len} samples)");
+        }
+        if n.is_multiple_of(50) {
+            tracing::trace!(
+                target: "ai_agent_seat::io",
+                "write_frame #{n} {uuid}: raw_len={raw_len}"
+            );
+        }
+
         // Lazy-init the call on first frame (codec rate known by now).
         if !CALLS.contains_key(&uuid) {
             let codec_rate = get_codec_rate(session);
@@ -264,22 +358,110 @@ impl EndpointIoRoutines for AiAgent {
         };
         let state_mut = state.value_mut();
 
-        let Some(samples) = frame.pcm_i16() else {
+        let Some(samples) = samples else {
             return SUCCESS;
         };
         if samples.is_empty() {
             return SUCCESS;
         }
 
-        // Upsample to 16 kHz if the codec rate differs.
-        let samples_16k: Vec<i16> = if let Some(resampler) = state_mut.resampler.as_mut() {
-            resampler.process(samples)
+        // Accumulate raw 8 kHz caller PCM into speech_buffer (during speech) or
+        // pre_roll (during silence). This is decoupled from the VAD loop (which
+        // runs in the 16 kHz bypass domain) — VAD has ~16 ms latency, so the
+        // onset is covered by pre_roll and trailing silence is trimmed by the
+        // silence timeout. speech_buffer stays at pipeline rate (8 kHz) for the
+        // LLM WAV, avoiding a lossy 16k→8k round-trip.
+        if state_mut.in_speech {
+            state_mut.speech_buffer.extend_from_slice(samples);
+            // Diagnostic: log when speech_buffer grows beyond 2 seconds.
+            // This should NOT happen for normal speech segments (< 10s).
+            // If it does, the buffer is leaking across turns.
+            if state_mut.speech_buffer.len() == 16000 {
+                tracing::warn!(
+                    "VAD {uuid}: speech_buffer reached {} samples (2s) — possible accumulation bug",
+                    state_mut.speech_buffer.len()
+                );
+            }
+        } else {
+            state_mut.pre_roll.extend(samples.iter().copied());
+            // Trim to a FIXED size — NOT `capacity()`. VecDeque reallocates on
+            // overflow, so `capacity()` grows and the trim threshold grows with
+            // it, turning pre_roll into an unbounded buffer (saw 94720 samples =
+            // 11.8s instead of the intended 2400 = 300ms).
+            while state_mut.pre_roll.len() > state_mut.pre_roll_max {
+                state_mut.pre_roll.pop_front();
+            }
+        }
+
+        // VAD bypass: upsample 8 kHz → 16 kHz for earshot prediction only.
+        let vad_samples: Vec<i16> = if let Some(resampler) = state_mut.resampler.as_ref() {
+            let mut buf = samples.to_vec();
+            resampler.0.process(&mut buf).to_vec()
         } else {
             samples.to_vec()
         };
 
-        // VAD: accumulate into 256-sample frames and score each.
-        state_mut.vad_stage.extend_from_slice(&samples_16k);
+        // VAD: accumulate into 256-sample 16 kHz frames and score each.
+        // Skip VAD entirely while AI is speaking — the TTS output leaks back
+        // through the caller's mic (echo) and scores 0.8+ on earshot, causing
+        // false speech segments. Half-duplex is simpler and more reliable than
+        // trying to correlate echo vs real speech. VAD resumes automatically
+        // when ai_speaking transitions to false (TTS done).
+        let ai_speaking = state_mut.ai_speaking.load(Ordering::Relaxed);
+        if ai_speaking {
+            // AI is speaking — run barge-in detection with higher threshold.
+            // Upsample + predict earshot, require sustained voice (config-driven
+            // `barge_in_confirm_ms`) before interrupting. This prevents coughs,
+            // echo leakage, and background noise from triggering false barge-ins.
+            state_mut.vad_stage.extend_from_slice(&vad_samples);
+            while state_mut.vad_stage.len() >= EARSHOT_FRAME_SIZE {
+                let frame_slice: [i16; EARSHOT_FRAME_SIZE] = {
+                    let mut buf = [0i16; EARSHOT_FRAME_SIZE];
+                    buf.copy_from_slice(&state_mut.vad_stage[..EARSHOT_FRAME_SIZE]);
+                    buf
+                };
+                state_mut.vad_stage.drain(..EARSHOT_FRAME_SIZE);
+
+                let score = match state_mut.vad.as_mut() {
+                    Some(detector) => detector.predict_i16(&frame_slice),
+                    None => -1.0,
+                };
+
+                // RMS noise gate (same as normal VAD path).
+                let rms = {
+                    let sum_sq: f64 = frame_slice.iter().map(|&s| (s as f64).powi(2)).sum();
+                    (sum_sq / frame_slice.len() as f64).sqrt() as f32 / 32768.0
+                };
+                let is_voiced = score >= BARGE_IN_SCORE_THRESHOLD
+                    && rms >= state_mut.min_speech_rms;
+
+                let frame_len = frame_slice.len() as u32;
+                if is_voiced {
+                    state_mut.barge_in_confirm += frame_len;
+                    if state_mut.barge_in_confirm >= state_mut.barge_in_confirm_samples {
+                        tracing::info!(
+                            "VAD: barge-in confirmed for {uuid} (score={score:.3} rms={rms:.4} \
+                             confirm={}/{}samples)",
+                            state_mut.barge_in_confirm, state_mut.barge_in_confirm_samples
+                        );
+                        state_mut.barge_in_confirm = 0;
+                        // Tell the actor to cancel the current turn + flush TTS.
+                        if let Some(actor) = state_mut.actor.as_ref() {
+                            let actor = actor.clone();
+                            let uuid_clone = uuid.clone();
+                            crate::runtime::spawn(async move {
+                                let _ = actor.tell(crate::actor::BargeIn).await;
+                            });
+                        }
+                    }
+                } else {
+                    state_mut.barge_in_confirm = 0;
+                }
+            }
+            return SUCCESS;
+        }
+
+        state_mut.vad_stage.extend_from_slice(&vad_samples);
         while state_mut.vad_stage.len() >= EARSHOT_FRAME_SIZE {
             let frame_slice: [i16; EARSHOT_FRAME_SIZE] = {
                 let mut buf = [0i16; EARSHOT_FRAME_SIZE];
@@ -292,54 +474,97 @@ impl EndpointIoRoutines for AiAgent {
                 Some(detector) => detector.predict_i16(&frame_slice),
                 None => -1.0,
             };
-            let is_speech = score >= SPEECH_SCORE_THRESHOLD;
-            let frame_len = frame_slice.len() as u32;
 
-            if is_speech {
-                if !state_mut.in_speech {
+            // RMS noise gate: skip frames with low energy regardless of VAD
+            // score. This is the primary defense against background noise —
+            // speexdsp in the dialplan preprocess reduces noise, and the RMS
+            // gate catches what's left. Configured via `min_speech_rms` in yaml.
+            let rms = {
+                let sum_sq: f64 = frame_slice.iter().map(|&s| (s as f64).powi(2)).sum();
+                (sum_sq / frame_slice.len() as f64).sqrt() as f32 / 32768.0
+            };
+            let rms_gate = rms >= state_mut.min_speech_rms;
+
+            // Threshold: higher when AI is speaking (barge-in requires stronger
+            // signal to suppress echo that FS preprocess AEC didn't eliminate).
+            let ai_speaking = state_mut.ai_speaking.load(Ordering::Relaxed);
+            let threshold = if ai_speaking {
+                BARGE_IN_SCORE_THRESHOLD
+            } else {
+                state_mut.speech_threshold
+            };
+
+            // Onset accumulator (voice-call style): accumulate ms when score
+            // > threshold AND RMS gate passes; decay when it doesn't. Speech
+            // onset fires when accumulator >= speech_onset_ms.
+            let frame_ms = EARSHOT_FRAME_SIZE as f32 * 1000.0 / VAD_SAMPLE_RATE as f32;
+            let is_voiced = score >= threshold && rms_gate;
+            if is_voiced {
+                state_mut.onset_accum_ms += frame_ms;
+            } else {
+                state_mut.onset_accum_ms *= 1.0 - state_mut.speech_onset_decay;
+            }
+
+            let onset_fired = !state_mut.in_speech
+                && state_mut.onset_accum_ms >= state_mut.speech_onset_ms;
+
+            let frame_len = frame_slice.len() as u32;
+            tracing::trace!(
+                target: "ai_agent_seat::io",
+                "VAD {uuid}: score={score:.3} rms={rms:.4} gate={rms_gate} ai_sp={ai_speaking} \
+                 thr={threshold:.2} onset={:.1}ms/{:.0}ms voiced={is_voiced}",
+                state_mut.onset_accum_ms, state_mut.speech_onset_ms
+            );
+
+            if is_voiced || onset_fired {
+                if !state_mut.in_speech && onset_fired {
                     state_mut.in_speech = true;
+                    let pre_roll: Vec<i16> = state_mut.pre_roll.drain(..).collect();
+                    let pre_roll_len = pre_roll.len();
                     state_mut.speech_buffer.clear();
-                    state_mut.speech_buffer.extend(state_mut.pre_roll.iter());
+                    state_mut.speech_buffer.extend(pre_roll);
                     state_mut.current_silence = 0;
-                    tracing::debug!("Speech started for {uuid}");
+                    state_mut.barge_in_confirm = 0;
+                    tracing::info!(
+                        "VAD: speech STARTED for {uuid} (score={score:.3} rms={rms:.4} \
+                         onset={:.1}ms) pre_roll={pre_roll_len} buf={}",
+                        state_mut.onset_accum_ms, state_mut.speech_buffer.len()
+                    );
                 }
-                state_mut.speech_buffer.extend_from_slice(&frame_slice);
+                if state_mut.in_speech {
+                    state_mut.current_silence = 0;
+                }
                 state_mut.barge_in_confirm = 0;
             } else if state_mut.in_speech {
                 state_mut.current_silence += frame_len;
                 if state_mut.current_silence >= state_mut.silence_samples {
                     state_mut.in_speech = false;
+                    state_mut.onset_accum_ms = 0.0;
                     let speech = std::mem::take(&mut state_mut.speech_buffer);
                     if !speech.is_empty() {
-                        let orch = state_mut.orchestrator.clone();
-                        let uuid_for_task = uuid.clone();
-                        crate::runtime::spawn(async move {
-                            if let Some(orch) = orch {
-                                match orch.process_speech_segment(speech).await {
-                                    Some((reply, asr)) => {
-                                        tracing::info!(
-                                            "turn complete for {uuid_for_task}: \
-                                             reply={} chars, asr={:?}",
-                                            reply.chars().count(),
-                                            asr
-                                        );
-                                    }
-                                    None => {
-                                        tracing::info!("turn discarded for {uuid_for_task}");
-                                    }
+                        tracing::info!(
+                            "VAD {uuid}: sending speech segment ({} samples = {:.1}s @8kHz)",
+                            speech.len(), speech.len() as f32 / 8000.0
+                        );
+                        match state_mut.speech_tx.as_ref() {
+                            Some(tx) => {
+                                if let Err(e) = tx.try_send(speech) {
+                                    tracing::warn!(
+                                        "try_send(speech) for {uuid} failed: {e}"
+                                    );
                                 }
                             }
-                        });
+                            None => {
+                                tracing::warn!(
+                                    "speech segment for {uuid} dropped: no speech_tx"
+                                );
+                            }
+                        }
                         state_mut.pre_roll.clear();
-                        tracing::debug!("Speech ended for {uuid}");
+                        tracing::info!(
+                            "VAD: speech ENDED for {uuid} — segment sent to actor"
+                        );
                     }
-                } else {
-                    state_mut.speech_buffer.extend_from_slice(&frame_slice);
-                }
-            } else {
-                state_mut.pre_roll.extend(&frame_slice);
-                while state_mut.pre_roll.len() > state_mut.pre_roll.capacity() {
-                    state_mut.pre_roll.pop_front();
                 }
             }
         }
@@ -349,7 +574,7 @@ impl EndpointIoRoutines for AiAgent {
 
     /// `read_frame`: FreeSWITCH reads audio FROM this endpoint.
     ///
-    /// Drains [`CallState::tts_accum`] into the frame; fills any remainder
+    /// Drains [`CallState::tts_cons`] into the frame; fills any remainder
     /// with silence (zeros) when no TTS is available.
     fn read_frame(session: &Session, frame: &mut FrameMut) -> Status {
         let Some(uuid) = session.channel().and_then(|c| c.uuid()) else {
@@ -375,15 +600,14 @@ impl EndpointIoRoutines for AiAgent {
         };
         let state_mut = state.value_mut();
 
-        // Drain TTS accumulator into `buf`; zero-fill the rest.
-        let mut written = 0usize;
-        while written < buf.len() {
-            let Some(sample) = state_mut.tts_accum.pop_front() else {
-                break;
-            };
-            buf[written] = sample;
-            written += 1;
-        }
+        // Drain the SPSC ringbuf consumer into `buf`; zero-fill the rest.
+        // `pop_slice` is the single consumer's read — the FS media thread owns
+        // this consumer exclusively (the producer lives in the TTS driver loop
+        // on the tokio runtime), so the DashMap `RefMut` borrow is sufficient.
+        let written = match state_mut.tts_cons.as_mut() {
+            Some(cons) => cons.pop_slice(buf),
+            None => 0,
+        };
         for s in &mut buf[written..] {
             *s = 0;
         }
@@ -392,19 +616,194 @@ impl EndpointIoRoutines for AiAgent {
     }
 
     /// `kill_channel`: call ended — remove the [`CallState`] from [`CALLS`].
-    fn kill_channel(session: &Session, _sig: i32) -> Status {
+    fn kill_channel(session: &Session, sig: i32) -> Status {
+        // FreeSWITCH signals: NONE=0, KILL=1, XFER=2, BREAK=3. Only KILL ends the
+        // call; BREAK/XFER are media-control signals sent during bridge setup and
+        // mid-call (e.g. on barge-in). Cleaning up CallState on a non-KILL signal
+        // would orphan the call — `write_frame` would then re-init a fresh
+        // CallState (losing orchestrator/TTS) or fail to find one, breaking VAD.
+        const SIG_KILL: i32 = 1;
+        if sig != SIG_KILL {
+            tracing::trace!("kill_channel sig={sig} (non-KILL; keeping call state)");
+            return SUCCESS;
+        }
+
         let Some(uuid) = session.channel().and_then(|c| c.uuid()) else {
             return SUCCESS;
         };
 
         if let Some((_, mut state)) = CALLS.remove(&uuid) {
-            if let Some(orch) = state.orchestrator.take() {
-                orch.full_hangup_reset();
+            // Kill the CallActor: immediately aborts its task (any in-flight
+            // turn) and drops its state (tts_session → WS Shutdown). This is
+            // the strong lifecycle boundary that fixes the old "TTS keeps
+            // running after hangup" leak.
+            if let Some(actor_ref) = state.actor.take() {
+                actor_ref.kill();
             }
             tracing::info!("kill_channel: removed call state for {uuid}");
         }
         crate::call_core::unregister_call(&uuid);
         SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ringbuf::traits::{Consumer, Observer, Producer};
+    use std::sync::Arc;
+
+    /// The ringbuf capacity used in production (from actor::init_call).
+    const RINGBUF_CAPACITY: usize = 160000;
+
+    /// Simulate the TTS → ringbuf → read_frame pipeline.
+    /// Returns (samples_pushed, samples_popped, samples_dropped).
+    fn simulate_tts_pipeline(
+        total_audio_samples: usize,
+        chunk_size: usize,
+        pop_rate_per_sec: usize,
+        duration_ms: u64,
+    ) -> (usize, usize, usize) {
+        let rb = Arc::new(ringbuf::HeapRb::<i16>::new(RINGBUF_CAPACITY));
+        let mut prod = ringbuf::Prod::new(rb.clone());
+        let mut cons = ringbuf::Cons::new(rb);
+
+        let audio: Vec<i16> = (0..total_audio_samples)
+            .map(|i| (i % 1000) as i16)
+            .collect();
+
+        let mut pushed = 0;
+        let mut popped = 0;
+        let mut offset = 0;
+
+        let pop_interval_ms = 20u64;
+        let pop_samples = pop_rate_per_sec * pop_interval_ms as usize / 1000;
+        let mut elapsed = 0u64;
+
+        while elapsed < duration_ms {
+            // Producer: push one chunk (simulates TTS arriving in bursts)
+            if offset < audio.len() {
+                let end = (offset + chunk_size).min(audio.len());
+                let chunk = &audio[offset..end];
+                let n = prod.push_slice(chunk);
+                pushed += n;
+                offset += chunk.len();
+            }
+
+            // Consumer: pop at fixed rate (simulates read_frame every 20ms)
+            let mut buf = vec![0i16; pop_samples];
+            let n = cons.pop_slice(&mut buf);
+            popped += n;
+
+            elapsed += pop_interval_ms;
+        }
+
+        let dropped = total_audio_samples.min(offset) - pushed;
+        (pushed, popped, dropped)
+    }
+
+    #[test]
+    fn ringbuf_overflow_long_sentence() {
+        // 57-char Chinese sentence ≈ 5s at 8kHz = 40000 samples.
+        // Ringbuf capacity = 32000 (4s). Expect overflow → dropped samples.
+        let total_samples = 40000;
+        let chunk_size = 5120; // typical TTS chunk
+        let pop_rate = 8000;
+        let duration = 6000;
+
+        let (pushed, popped, dropped) =
+            simulate_tts_pipeline(total_samples, chunk_size, pop_rate, duration);
+
+        eprintln!(
+            "Long sentence: pushed={pushed} popped={popped} dropped={dropped} / total={total_samples}"
+        );
+        assert_eq!(
+            dropped, 0,
+            "BUG: {dropped} samples dropped! push_slice silently discards on overflow. \
+             Capacity={RINGBUF_CAPACITY}=4s, sentence=5s. \
+             FIX: increase to 80000+ (10s)."
+        );
+    }
+
+    #[test]
+    fn ringbuf_ok_short_sentence() {
+        // 12-char sentence ≈ 2s at 8kHz = 16000 samples. Fits in 32000.
+        let total_samples = 16000;
+        let (pushed, popped, dropped) =
+            simulate_tts_pipeline(total_samples, 5120, 8000, 3000);
+
+        eprintln!("Short: pushed={pushed} popped={popped} dropped={dropped}");
+        assert_eq!(dropped, 0);
+        assert_eq!(pushed, total_samples);
+        assert!(popped >= total_samples - 320);
+    }
+
+    #[test]
+    fn ringbuf_clear_prevents_turn_overlap() {
+        let rb = Arc::new(ringbuf::HeapRb::<i16>::new(RINGBUF_CAPACITY));
+        let mut prod = ringbuf::Prod::new(rb.clone());
+        let mut cons = ringbuf::Cons::new(rb);
+
+        // Turn 1: push 8000 samples, consume only 4000
+        let turn1: Vec<i16> = (0..8000).map(|i| (i % 100) as i16).collect();
+        assert_eq!(prod.push_slice(&turn1), 8000);
+        let mut buf = vec![0i16; 4000];
+        assert_eq!(cons.pop_slice(&mut buf), 4000);
+        assert_eq!(cons.occupied_len(), 4000);
+
+        // Turn 2 starts: clear ringbuf
+        cons.clear();
+        assert_eq!(cons.occupied_len(), 0, "Clear must remove leftover");
+
+        // Turn 2: push new audio
+        let turn2: Vec<i16> = (0..4000).map(|i| (500 + i % 100) as i16).collect();
+        assert_eq!(prod.push_slice(&turn2), 4000);
+
+        let mut buf2 = vec![0i16; 4000];
+        assert_eq!(cons.pop_slice(&mut buf2), 4000);
+        assert_eq!(buf2[0], 500, "Must be turn 2 data, not turn 1");
+    }
+
+    #[test]
+    fn ringbuf_capacity_sufficient_for_10s() {
+        let seconds = RINGBUF_CAPACITY as f64 / 8000.0;
+        eprintln!("Ringbuf: {RINGBUF_CAPACITY} samples = {seconds}s at 8kHz");
+        assert!(
+            seconds >= 10.0,
+            "BUG: Ringbuf holds only {seconds}s. Long TTS (5-10s) overflows. \
+             FIX: increase to 80000 (10s)."
+        );
+    }
+
+    /// Regression: pre_roll must be trimmed to a FIXED size, NOT
+    /// `VecDeque::capacity()` (which grows on reallocation, turning pre_roll
+    /// into an unbounded buffer that swallowed 11.8s of audio).
+    #[test]
+    fn pre_roll_trimmed_to_fixed_size() {
+        use std::collections::VecDeque;
+        const PRE_ROLL_MAX: usize = 2400; // 300ms at 8kHz
+
+        // Simulate: pre_roll receives 60s of audio (way beyond capacity).
+        // With the old `capacity()`-based trim, it would grow unboundedly.
+        let mut pre_roll: VecDeque<i16> = VecDeque::with_capacity(PRE_ROLL_MAX);
+        // Push 60 seconds = 480000 samples in 160-sample chunks (20ms frames)
+        for _ in 0..3000 {
+            pre_roll.extend(std::iter::repeat(0i16).take(160));
+            // OLD (buggy): while pre_roll.len() > pre_roll.capacity() { ... }
+            // NEW (fixed): trim to the fixed constant
+            while pre_roll.len() > PRE_ROLL_MAX {
+                pre_roll.pop_front();
+            }
+        }
+
+        assert_eq!(
+            pre_roll.len(),
+            PRE_ROLL_MAX,
+            "BUG: pre_roll grew to {} (capacity={}), expected max {PRE_ROLL_MAX}. \
+             Trimming to `capacity()` is wrong — VecDeque reallocates and grows.",
+            pre_roll.len(),
+            pre_roll.capacity()
+        );
+        eprintln!("pre_roll: len={} capacity={}", pre_roll.len(), pre_roll.capacity());
     }
 }
 
