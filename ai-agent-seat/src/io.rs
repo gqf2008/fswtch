@@ -29,7 +29,6 @@
 //! into FreeSWITCH.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -95,8 +94,8 @@ fn score_frame(
 /// PCM, `read_frame` drains it. A [`DashMap`] entry's `RefMut` gives us the
 /// exclusive borrow `read_frame` needs without a separate lock.
 ///
-/// `ai_speaking` is shared by value (Arc-clone) with the orchestrator so it
-/// can set/clear it without touching the map.
+/// `turn_pending` + `tts_audio_active` are shared by value (Arc-clone) with
+/// the orchestrator so it can set/clear them without touching the map.
 pub struct CallState {
     pub uuid: String,
     /// earshot VAD detector (16 kHz). `None` when the pipeline rate is not 16 kHz.
@@ -160,8 +159,11 @@ pub struct CallState {
     /// the segment if the mailbox is full". `None` only transiently until
     /// `actor::init_call` assigns it.
     pub speech_tx: Option<tokio::sync::mpsc::Sender<Vec<i16>>>,
-    /// AI-speaking flag, shared (Arc-clone) with the orchestrator.
-    pub ai_speaking: Arc<AtomicBool>,
+    /// Turn-lifecycle flags (turn-pending + tts-audio-active). Shared
+    /// (Arc-clone) with the orchestrator via [`crate::actor::TurnFlags`].
+    /// `write_frame` reads `tts_audio_active` for the VAD echo-gate;
+    /// `wait_until_silent` reads `turn_pending`. Writers use `begin()`/`end()`.
+    pub turn_flags: crate::actor::TurnFlags,
     /// Loaded configuration snapshot (may be `None` → defaults).
     pub config: Option<Config>,
     /// Per-call actor ref (set by `actor::init_call`). `None` only transiently
@@ -220,7 +222,7 @@ impl CallState {
             barge_in_confirm: 0,
             tts_cons: None,
             speech_tx: None,
-            ai_speaking: Arc::new(AtomicBool::new(false)),
+            turn_flags: crate::actor::TurnFlags::new(),
             config,
             actor: None,
         })
@@ -431,13 +433,13 @@ impl EndpointIoRoutines for AiAgent {
         }
 
         // VAD: accumulate into 256-sample 16 kHz frames and score each.
-        // Skip VAD entirely while AI is speaking — the TTS output leaks back
-        // through the caller's mic (echo) and scores 0.8+ on earshot, causing
-        // false speech segments. Half-duplex is simpler and more reliable than
-        // trying to correlate echo vs real speech. VAD resumes automatically
-        // when ai_speaking transitions to false (TTS done).
-        let ai_speaking = state_mut.ai_speaking.load(Ordering::Relaxed);
-        if ai_speaking {
+        // Skip VAD entirely while TTS audio is flowing — the TTS output leaks
+        // back through the caller's mic (echo) and scores 0.8+ on earshot,
+        // causing false speech segments. Half-duplex is simpler and more
+        // reliable than trying to correlate echo vs real speech. VAD resumes
+        // automatically when tts_audio_active transitions to false (TTS done).
+        let tts_audio_active = state_mut.turn_flags.tts_audio_active.load(Ordering::Relaxed);
+        if tts_audio_active {
             // AI is speaking — run barge-in detection with higher threshold.
             // Upsample + predict earshot, require sustained voice (config-driven
             // `barge_in_confirm_ms`) before interrupting. This prevents coughs,
@@ -501,7 +503,7 @@ impl EndpointIoRoutines for AiAgent {
             // score. This is the primary defense against background noise —
             // speexdsp in the dialplan preprocess reduces noise, and the RMS
             // gate catches what's left. Configured via `min_speech_rms` in yaml.
-            // (ai_speaking is already handled by the early-return branch above,
+            // (tts_audio_active is already handled by the early-return branch above,
             // so here the normal speech_threshold always applies.)
             let rms_gate = rms >= state_mut.min_speech_rms;
             let threshold = state_mut.speech_threshold;

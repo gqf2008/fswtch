@@ -47,6 +47,44 @@ use crate::voice_core::Config;
 /// Barge-in: cancel the in-flight turn + flush the TTS ringbuf.
 pub struct BargeIn;
 
+/// The two turn-lifecycle flags, always flipped together. [`begin`](Self::begin)
+/// / [`end`](Self::end) are the only writers, so the pair cannot drift; readers
+/// access whichever field matches their concern:
+/// - `tts_audio_active` — `io::write_frame`'s VAD echo-gate.
+/// - `turn_pending` — `orchestrator::wait_until_silent` (hangup/transfer drain).
+#[derive(Clone)]
+pub struct TurnFlags {
+    pub turn_pending: Arc<AtomicBool>,
+    pub tts_audio_active: Arc<AtomicBool>,
+}
+
+impl TurnFlags {
+    pub fn new() -> Self {
+        Self {
+            turn_pending: Arc::new(AtomicBool::new(false)),
+            tts_audio_active: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Mark a turn as in-progress (TTS fired, not yet idle). Sets BOTH flags.
+    pub fn begin(&self) {
+        self.turn_pending.store(true, Ordering::Relaxed);
+        self.tts_audio_active.store(true, Ordering::Relaxed);
+    }
+
+    /// Mark a turn as done (idle / barge-in / error). Clears BOTH flags.
+    pub fn end(&self) {
+        self.turn_pending.store(false, Ordering::Relaxed);
+        self.tts_audio_active.store(false, Ordering::Relaxed);
+    }
+}
+
+impl Default for TurnFlags {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A finished turn's history entries, sent back from the background turn task
 /// so the actor (single-threaded mailbox) is the sole writer of conversation
 /// history.
@@ -63,7 +101,10 @@ pub struct CallActor {
     conversation: Mutex<Vec<ChatMessage>>,
     tts_session: Option<VolcanoBidirectionalSession>,
     turn_cancel: CancellationToken,
-    ai_speaking: Arc<AtomicBool>,
+    /// Turn-lifecycle flags (turn-pending + tts-audio-active). The two share
+    /// begin/end gating via [`TurnFlags::begin`]/[`TurnFlags::end`] but have
+    /// distinct readers — see [`TurnFlags`].
+    turn_flags: TurnFlags,
     control: Arc<dyn CallControl>,
     /// Receiver half of the per-call speech-segment channel. `take`n in
     /// `on_start` and attached via `attach_stream` so the actor mailbox
@@ -78,7 +119,7 @@ impl CallActor {
     pub fn new(
         uuid: String,
         config: Option<Config>,
-        ai_speaking: Arc<AtomicBool>,
+        turn_flags: TurnFlags,
         control: Arc<dyn CallControl>,
         on_audio: OnAudio,
         speech_rx: tokio::sync::mpsc::Receiver<Vec<i16>>,
@@ -88,12 +129,12 @@ impl CallActor {
             .filter(|c| !c.api.volcano_api_key.is_empty())
             .map(|c| {
                 // `on_turn_end`: the driver fires this once a turn's audio
-                // stream goes idle (fire-and-forget completion) — clear
-                // `ai_speaking` so barge-in detection resumes. Barge-in also
-                // clears it directly (see the BargeIn handler).
-                let ai_speaking_for_turn_end = Arc::clone(&ai_speaking);
+                // stream goes idle (fire-and-forget completion) — clear both
+                // turn-lifecycle flags. Barge-in clears them directly too (see
+                // the BargeIn handler).
+                let flags = turn_flags.clone();
                 let on_turn_end: crate::tts::OnTurnEnd = Box::new(move || {
-                    ai_speaking_for_turn_end.store(false, Ordering::Relaxed);
+                    flags.end();
                 });
                 VolcanoBidirectionalSession::new(
                     c.api.volcano_api_key.clone(),
@@ -117,7 +158,7 @@ impl CallActor {
             conversation: Mutex::new(conversation),
             tts_session,
             turn_cancel: CancellationToken::new(),
-            ai_speaking,
+            turn_flags,
             control,
             speech_rx: Some(speech_rx),
             actor_ref: None,
@@ -230,7 +271,7 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
         let conv_snapshot = self.conversation.lock().clone();
         let config = self.config.clone();
         let uuid = self.uuid.clone();
-        let ai_speaking = Arc::clone(&self.ai_speaking);
+        let turn_flags = self.turn_flags.clone();
         let control = Arc::clone(&self.control);
         let Some(actor_ref) = self.actor_ref.clone() else {
             tracing::error!("CallActor {}: no actor_ref (on_start not run?)", uuid);
@@ -243,7 +284,7 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
             tts,
             audio,
             cancel,
-            ai_speaking,
+            turn_flags,
             control,
             actor_ref,
         )
@@ -256,7 +297,7 @@ impl Message<BargeIn> for CallActor {
 
     async fn handle(&mut self, _msg: BargeIn, _ctx: &mut Context<Self, Self::Reply>) {
         self.turn_cancel.cancel();
-        self.ai_speaking.store(false, Ordering::Relaxed);
+        self.turn_flags.end();
         // Tell the TTS driver to discard the in-flight turn's audio (it keeps
         // draining the server cleanly until the stream goes idle). Without this
         // the cancelled turn's late audio would still push into the ringbuf.
@@ -317,8 +358,9 @@ pub fn init_call(uuid: &str, codec_rate: u32) -> Result<()> {
     }
     let config = crate::config::get();
     let mut state = CallState::new(uuid.to_string(), codec_rate, config.clone())?;
-    // Share the AI-speaking flag between CallState (media thread) + CallActor.
-    let ai_speaking = Arc::clone(&state.ai_speaking);
+    // Share the turn-lifecycle flags between CallState (media thread) +
+    // CallActor.
+    let turn_flags = state.turn_flags.clone();
 
     // ── Media plumbing ────────────────────────────────────────────────
     // SPSC ringbuf for TTS PCM: the TTS driver loop owns the `Producer`
@@ -355,7 +397,7 @@ pub fn init_call(uuid: &str, codec_rate: u32) -> Result<()> {
     let actor = CallActor::new(
         uuid.to_string(),
         config,
-        ai_speaking,
+        turn_flags,
         control(),
         on_audio,
         speech_rx,

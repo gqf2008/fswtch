@@ -459,22 +459,58 @@ impl VolcanoBidirectionalSession {
     /// Does NOT send `start_session`/`finish_session` (call-lifetime session,
     /// opened once at [`start`]) and does NOT await a server end signal
     /// (seed-tts-2.0 sends none in this mode). Serialized by `send_mutex` so
-    /// only one `task_request` is on the wire at a time; concurrent sentence
-    /// tasks queue here.
+    /// only one `task_request` is on the wire at a time.
+    ///
+    /// `turn_open`: true when this sentence continues an already-open turn (the
+    /// streaming-LLM path sends one task_request per sentence). In that case the
+    /// turn's `ActiveTask` is REUSED — we don't cancel it, don't install a fresh
+    /// one, and don't re-arm flags. The idle timer keeps tracking the same task;
+    /// `last_audio_at` refreshes on every frame (in `route_frame`), so inter-
+    /// sentence gaps don't trip the idle timer — only the turn's final stream
+    /// silence does. Audio order is the server's FIFO on the single session +
+    /// the single ringbuf sink, so no per-sentence sequencer is needed.
+    ///
+    /// `turn_open == false` (turn's first sentence, or whole-reply mode): opens
+    /// the turn — installs a fresh `ActiveTask` (cancelling any prior turn still
+    /// streaming late frames). The caller sets `tts_audio_active` + `turn_pending`
+    /// around this call.
     ///
     /// Returns `Ok(true)` (always, unless the send itself fails) — completion is
     /// observed asynchronously via `on_turn_end` / [`cancel_current_turn`].
-    pub async fn synthesize(&self, text: &str, cancel: tokio_util::sync::CancellationToken) -> Result<bool> {
+    pub async fn synthesize_sentence(
+        &self,
+        text: &str,
+        cancel: tokio_util::sync::CancellationToken,
+        turn_open: bool,
+    ) -> Result<bool> {
         let t_syn = std::time::Instant::now();
-        tracing::info!("Volcano TTS synthesize: {} chars", text.chars().count());
-
-        // Ensure the WebSocket connection is up + the call-lifetime session open.
-        self.ensure_started().await?;
         tracing::info!(
-            "LATENCY TTS {}: ensure_started = {}ms",
-            self.inner.call_uuid,
-            t_syn.elapsed().as_millis()
+            "Volcano TTS synthesize: {} chars (turn_open={})",
+            text.chars().count(),
+            turn_open
         );
+
+        if !turn_open {
+            // Ensure the WebSocket connection is up + the call-lifetime session
+            // open. (On continuation sentences the session is usually already open.)
+            self.ensure_started().await?;
+            tracing::info!(
+                "LATENCY TTS {}: ensure_started = {}ms",
+                self.inner.call_uuid,
+                t_syn.elapsed().as_millis()
+            );
+        } else {
+            // Continuation sentence: the session was open at turn start, but it
+            // can die mid-turn (server idle timeout, network blip, mid-turn
+            // SessionFinished). If it did, reopen — otherwise send_raw fails on
+            // a dead cmd_tx and the sentence's audio is silently lost.
+            if !self.is_started().await {
+                tracing::info!(
+                    "Volcano TTS: session died mid-turn, reopening for continuation sentence"
+                );
+                self.ensure_started().await?;
+            }
+        }
 
         // Serialize: one task_request on the wire at a time. Held only for the
         // send (not its audio playback) — audio arrives async after we return.
@@ -484,19 +520,21 @@ impl VolcanoBidirectionalSession {
             return Ok(false);
         }
 
-        // Install this turn as the active forwarder, cancelling any prior turn
-        // still in `current`. A new turn only arrives after the previous turn's
-        // mailbox work finished (mailbox-sequential) and `clear_tts` flushed the
-        // ringbuf — but the server may still be streaming the PREVIOUS turn's
-        // audio (call-lifetime session, no per-turn finish_session). Marking the
-        // old task `cancelled` makes `route_frame` discard those late frames
-        // instead of pushing them into the ringbuf on top of this turn's audio.
-        {
+        if !turn_open {
+            // First sentence of a turn: install this turn as the active
+            // forwarder, cancelling any PRIOR turn still in `current`. A new
+            // turn only arrives after the previous turn's mailbox work finished
+            // and `clear_tts` flushed the ringbuf — but the server may still be
+            // streaming the previous turn's audio (call-lifetime session, no
+            // finish_session). Marking the old task `cancelled` makes
+            // `route_frame` discard those late frames instead of pushing them on
+            // top of this turn's audio.
             let mut st = self.inner.state.lock().await;
             if let Some(prev) = st.current.as_mut() {
                 prev.cancelled = true;
             }
             st.current = Some(ActiveTask::new());
+            // turn_open continuation sentences reuse `current` untouched.
         }
 
         // task_request — send the text to synthesize. session_id == call_uuid.
@@ -933,3 +971,234 @@ fn parse_pcm_le(bytes: &[u8]) -> Vec<i16> {
         .map(|b| i16::from_le_bytes([b[0], b[1]]))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tts_ws_codec::{EventType, Message, MsgType, MsgTypeFlagBits};
+
+    /// Build a `VolcanoBidirectionalSession` WITHOUT connecting (no WS). Lets
+    /// tests exercise `cancel_current_turn` + state inspection through the
+    /// public constructor + a no-op `on_audio`/`on_turn_end`.
+    fn session_no_connect() -> VolcanoBidirectionalSession {
+        VolcanoBidirectionalSession::new(
+            "key".into(),
+            "res".into(),
+            "speaker".into(),
+            "call-uuid".into(),
+            Box::new(|_| {}),
+            Box::new(|| {}),
+        )
+    }
+
+    /// A `VolcanoBidirectionalSession` + its shared state with no-op callbacks.
+    /// Use for tests that inspect state but don't assert on audio capture.
+    fn session_and_state() -> (VolcanoBidirectionalSession, Arc<Mutex<SessionState>>) {
+        let session = session_no_connect();
+        let state = Arc::clone(&session.inner.state);
+        (session, state)
+    }
+
+    // ── parse_pcm_le ─────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_pcm_le_empty() {
+        assert!(parse_pcm_le(&[]).is_empty());
+    }
+
+    #[test]
+    fn parse_pcm_le_odd_byte_dropped() {
+        // 3 bytes → 1 sample + 1 trailing byte dropped.
+        let out = parse_pcm_le(&[0x64, 0x00, 0xFF]);
+        assert_eq!(out, vec![100]);
+    }
+
+    #[test]
+    fn parse_pcm_le_aligned() {
+        let bytes: Vec<u8> = [100i16, 200, 300]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        assert_eq!(parse_pcm_le(&bytes), vec![100, 200, 300]);
+    }
+
+    // ── cancel_current_turn ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn cancel_current_turn_sets_cancelled_flag() {
+        let session = session_no_connect();
+        // Install an active task manually.
+        {
+            let mut st = session.inner.state.lock().await;
+            st.current = Some(ActiveTask::new());
+        }
+        session.cancel_current_turn().await;
+        let st = session.inner.state.lock().await;
+        let task = st.current.as_ref().expect("task present");
+        assert!(task.cancelled, "cancelled flag must be set");
+    }
+
+    #[tokio::test]
+    async fn cancel_current_turn_noop_without_task() {
+        // No active task — must not panic.
+        let session = session_no_connect();
+        session.cancel_current_turn().await;
+        let st = session.inner.state.lock().await;
+        assert!(st.current.is_none());
+    }
+
+    // ── fire_turn_complete ───────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn fire_turn_complete_invokes_on_turn_end_once() {
+        let fired = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let session = VolcanoBidirectionalSession::new(
+            "key".into(),
+            "res".into(),
+            "speaker".into(),
+            "call-uuid".into(),
+            Box::new(|_| {}),
+            {
+                let fired = Arc::clone(&fired);
+                Box::new(move || {
+                    fired.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                })
+            },
+        );
+        let state = Arc::clone(&session.inner.state);
+        {
+            let mut st = state.lock().await;
+            st.current = Some(ActiveTask::new());
+        }
+        let weak: std::sync::Weak<SessionInner> = Arc::downgrade(&session.inner);
+        fire_turn_complete(&state, &weak).await;
+        fire_turn_complete(&state, &weak).await; // idempotent — must not re-fire
+        assert_eq!(
+            fired.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "on_turn_end fires exactly once per task"
+        );
+    }
+
+    #[tokio::test]
+    async fn fire_turn_complete_noop_without_task() {
+        let session = session_no_connect();
+        let state = Arc::clone(&session.inner.state);
+        let weak: std::sync::Weak<SessionInner> = Arc::downgrade(&session.inner);
+        // No task installed — must not panic / fire callback.
+        fire_turn_complete(&state, &weak).await;
+    }
+
+    // ── route_frame ──────────────────────────────────────────────────────
+
+    /// Build a marshalled server frame.
+    fn server_frame(msg: Message) -> Vec<u8> {
+        msg.marshal().expect("marshal test frame")
+    }
+
+    #[tokio::test]
+    async fn route_frame_audio_pushes_to_on_audio() {
+        let (session, state) = session_and_state();
+        let weak = Arc::downgrade(&session.inner);
+        {
+            let mut st = state.lock().await;
+            st.current = Some(ActiveTask::new());
+        }
+        let pcm: Vec<i16> = vec![100, 200, 300, 400];
+        let pcm_bytes: Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let frame = server_frame(Message {
+            msg_type: MsgType::AudioOnlyServer,
+            flag: MsgTypeFlagBits::PositiveSeq,
+            sequence: 1,
+            payload: pcm_bytes,
+            ..Message::default()
+        });
+        let mut resampler = None;
+        let out = route_frame(&frame, &state, &mut resampler, &weak).await.unwrap();
+        assert_eq!(out, Some(pcm), "audio PCM routed to caller");
+        // The first-audio flag + last_audio_at must be armed.
+        let st = state.lock().await;
+        let task = st.current.as_ref().unwrap();
+        assert!(
+            task.first_audio_received.load(std::sync::atomic::Ordering::Relaxed),
+            "first_audio_received armed"
+        );
+        assert!(task.last_audio_at.lock().is_some(), "last_audio_at stamped");
+    }
+
+    #[tokio::test]
+    async fn route_frame_audio_cancelled_is_discarded() {
+        let (session, state) = session_and_state();
+        let weak = Arc::downgrade(&session.inner);
+        {
+            let mut st = state.lock().await;
+            let mut task = ActiveTask::new();
+            task.cancelled = true;
+            st.current = Some(task);
+        }
+        let pcm_bytes: Vec<u8> = [100i16, 200].iter().flat_map(|s| s.to_le_bytes()).collect();
+        let frame = server_frame(Message {
+            msg_type: MsgType::AudioOnlyServer,
+            flag: MsgTypeFlagBits::PositiveSeq,
+            sequence: 1,
+            payload: pcm_bytes,
+            ..Message::default()
+        });
+        let mut resampler = None;
+        let out = route_frame(&frame, &state, &mut resampler, &weak).await.unwrap();
+        assert_eq!(out, None, "cancelled turn's audio is discarded");
+    }
+
+    #[tokio::test]
+    async fn route_frame_session_finished_resets_started_and_fires() {
+        let (session, state) = session_and_state();
+        let weak = Arc::downgrade(&session.inner);
+        {
+            let mut st = state.lock().await;
+            st.started = true;
+            st.current = Some(ActiveTask::new());
+        }
+        let frame = server_frame(Message {
+            msg_type: MsgType::FullServerResponse,
+            flag: MsgTypeFlagBits::WithEvent,
+            event: EventType::SessionFinished,
+            session_id: "call-uuid".into(),
+            payload: b"{}".to_vec(),
+            ..Message::default()
+        });
+        let mut resampler = None;
+        route_frame(&frame, &state, &mut resampler, &weak).await.unwrap();
+        let st = state.lock().await;
+        assert!(!st.started, "SessionFinished resets started so next turn reopens");
+        assert!(
+            st.current.as_ref().unwrap().completed.load(std::sync::atomic::Ordering::Relaxed),
+            "SessionFinished fires turn completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn route_frame_tts_sentence_end_fires_completion() {
+        let (session, state) = session_and_state();
+        let weak = Arc::downgrade(&session.inner);
+        {
+            let mut st = state.lock().await;
+            st.current = Some(ActiveTask::new());
+        }
+        let frame = server_frame(Message {
+            msg_type: MsgType::FullServerResponse,
+            flag: MsgTypeFlagBits::WithEvent,
+            event: EventType::TTSSentenceEnd,
+            session_id: "call-uuid".into(),
+            payload: b"{}".to_vec(),
+            ..Message::default()
+        });
+        let mut resampler = None;
+        route_frame(&frame, &state, &mut resampler, &weak).await.unwrap();
+        let st = state.lock().await;
+        assert!(
+            st.current.as_ref().unwrap().completed.load(std::sync::atomic::Ordering::Relaxed),
+            "TTSSentenceEnd fires turn completion (best-effort early complete)"
+        );
+    }
+}
+

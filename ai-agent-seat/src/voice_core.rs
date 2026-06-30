@@ -47,6 +47,15 @@ pub struct ApiConfig {
     pub llm_temperature: Option<f32>,
     /// Optional max output tokens.
     pub llm_max_tokens: Option<u32>,
+    /// If true, pure-text LLM replies are consumed as an SSE stream and split
+    /// into sentences for per-sentence fire-and-forget TTS (lower first-audio
+    /// latency). **Disables tool-calling**: the streaming request omits
+    /// `tools`, so with `llm_stream=true` the model cannot emit `speak`/
+    /// `hangup`/`send_dtmf`/`transfer` tool calls — turns that need them fall
+    /// back to plain text. Use only for conversation-only deployments, or keep
+    /// `false` if any of those tools are required. Default false — opt-in.
+    #[serde(default)]
+    pub llm_stream: bool,
     /// Volcano (ByteDance) TTS WebSocket API key (`X-Api-Key`).
     #[serde(default)]
     pub volcano_api_key: String,

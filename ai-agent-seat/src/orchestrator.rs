@@ -88,7 +88,7 @@ pub async fn turn_pipeline(
     tts_session: Option<VolcanoBidirectionalSession>,
     audio: Vec<i16>,
     cancel: CancellationToken,
-    ai_speaking: Arc<AtomicBool>,
+    turn_flags: crate::actor::TurnFlags,
     control: Arc<dyn CallControl>,
     actor_ref: ActorRef<CallActor>,
 ) {
@@ -113,36 +113,81 @@ pub async fn turn_pipeline(
         return;
     }
 
-    // ── Stage 2: LLM call with tools (cancellable) ──────────────────────
+    // ── Stage 2: LLM call ─────────────────────────────────────────────────
+    // Two paths:
+    //  - streaming (llm_stream enabled): SSE text stream → split into sentences
+    //    → per-sentence fire-and-forget TTS (low first-audio latency). NO tools
+    //    (tool-bearing replies need the non-streaming path; the streaming body
+    //    omits `tools`, so the model replies with plain text).
+    //  - non-streaming (default, or streaming disabled): `call_llm_with_tools`
+    //    returns `(tool_calls, inline_text)`; tools are executed in Stage 3.
     let t1 = std::time::Instant::now();
-    let (tool_calls, inline_text) = match tokio::select! {
-        biased;
-        _ = cancel.cancelled() => {
-            tracing::info!("turn_pipeline {uuid}: cancelled during LLM call");
-            return;
+    let use_stream_cfg = match config.as_ref() {
+        Some(c) if c.api.llm_stream && tts_session.is_some() => Some(c),
+        _ => None,
+    };
+    let (tool_calls, reply_from_llm): (Vec<ToolCall>, String) = match use_stream_cfg {
+        Some(cfg) => {
+            // Streaming text path — drives TTS directly; returns the full reply.
+            match stream_llm_and_synthesize(
+                cfg,
+                &conversation_snapshot,
+                &b64,
+                &uuid,
+                tts_session.as_ref(),
+                &cancel,
+                &turn_flags,
+            )
+            .await
+            {
+                Ok(reply) => {
+                    tracing::info!(
+                        "LATENCY {uuid}: stage2 LLM stream = {}ms ({} chars)",
+                        t1.elapsed().as_millis(),
+                        reply.chars().count()
+                    );
+                    (Vec::new(), reply) // no tools on the streaming path
+                }
+                Err(e) => {
+                    tracing::error!("turn_pipeline {uuid}: LLM stream failed: {e}");
+                    return;
+                }
+            }
         }
-        r = call_llm_with_tools(config.as_ref(), &conversation_snapshot, &b64, &uuid) => r,
-    } {
-        Ok(pair) => pair,
-        Err(e) => {
-            tracing::error!("turn_pipeline {uuid}: LLM call failed: {e}");
-            return;
+        _ => {
+            let (tool_calls, inline_text) = match tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    tracing::info!("turn_pipeline {uuid}: cancelled during LLM call");
+                    return;
+                }
+                r = call_llm_with_tools(config.as_ref(), &conversation_snapshot, &b64, &uuid) => r,
+            } {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::error!("turn_pipeline {uuid}: LLM call failed: {e}");
+                    return;
+                }
+            };
+            tracing::info!(
+                "LATENCY {uuid}: stage2 LLM call = {}ms",
+                t1.elapsed().as_millis()
+            );
+            (tool_calls, inline_text)
         }
     };
-    tracing::info!(
-        "LATENCY {uuid}: stage2 LLM call = {}ms",
-        t1.elapsed().as_millis()
-    );
 
     if cancel.is_cancelled() {
         tracing::info!("turn_pipeline {uuid}: cancelled after LLM call");
         return;
     }
 
-    // ── Stage 3: execute tool calls (speak → TTS, hangup/dtmf/transfer) ──
+    // ── Stage 3: execute tool calls (speak → TTS, hangup/dtmf/transfer) ───
+    // On the streaming path `tool_calls` is empty and TTS already fired; here
+    // we only assemble the tool-driven reply (non-streaming path) + side effects.
     let mut result = ToolExecutionResult::default();
-    if !inline_text.is_empty() {
-        result.reply = inline_text;
+    if !reply_from_llm.is_empty() {
+        result.reply = reply_from_llm;
     }
     for tc in &tool_calls {
         match tc.name.as_str() {
@@ -197,13 +242,16 @@ pub async fn turn_pipeline(
         t0.elapsed().as_millis()
     );
 
-    // Synthesize the reply (if any) — cancellable.
-    if !reply.is_empty()
+    // Synthesize the reply (if any) — cancellable. On the streaming path TTS
+    // already fired per-sentence inside `stream_llm_and_synthesize`, so skip the
+    // whole-reply synthesis here (it would double-play).
+    if use_stream_cfg.is_none()
+        && !reply.is_empty()
         && !cancel.is_cancelled()
         && let Some(session) = tts_session.as_ref()
     {
         let t_tts = std::time::Instant::now();
-        synthesize_and_play(session, &uuid, &reply, &cancel, &ai_speaking).await;
+        synthesize_and_play(session, &uuid, &reply, &cancel, &turn_flags).await;
         tracing::info!(
             "LATENCY {uuid}: TTS synthesize (total) = {}ms",
             t_tts.elapsed().as_millis()
@@ -216,7 +264,7 @@ pub async fn turn_pipeline(
     // so DTMF doesn't mix with TTS audio. `wait_until_silent` is a no-op if
     // nothing is speaking.
     if hangup || dtmf.is_some() || transfer.is_some() {
-        wait_until_silent(&ai_speaking, &cancel).await;
+        wait_until_silent(&turn_flags.turn_pending, &cancel).await;
         if let Some(digits) = &dtmf
             && let Err(e) = control.send_dtmf(&uuid, digits)
         {
@@ -265,56 +313,56 @@ pub async fn turn_pipeline(
 /// in [`crate::actor::init_call`], and pushes 8 kHz i16 PCM directly into the
 /// SPSC ringbuf that `read_frame` drains.
 ///
-/// Fire-and-forget: `synthesize` sends `task_request` and returns immediately
-/// — it does NOT wait for the audio to play (call-lifetime Volcano session, one
-/// `task_request` per turn; `finish_session` only at call end). `ai_speaking`
-/// stays `true` here; the driver clears it via `on_turn_end` once the audio
-/// stream goes idle. Media teardown (hangup/transfer) bridges the gap with
-/// [`wait_until_silent`].
+/// Fire-and-forget: `synthesize_sentence` sends `task_request` and returns
+/// immediately — it does NOT wait for the audio to play (call-lifetime Volcano
+/// session, one `task_request` per turn; `finish_session` only at call end).
+/// The turn flags stay `begin()`-ed here; the driver clears them via
+/// `on_turn_end` once the audio stream goes idle. Media teardown (hangup/
+/// transfer) bridges the gap with [`wait_until_silent`].
 async fn synthesize_and_play(
     session: &VolcanoBidirectionalSession,
     uuid: &str,
     text: &str,
     cancel: &CancellationToken,
-    ai_speaking: &AtomicBool,
+    turn_flags: &crate::actor::TurnFlags,
 ) {
-    ai_speaking.store(true, Ordering::Relaxed);
+    turn_flags.begin();
 
     let synth_cancel = cancel.clone();
-    match session.synthesize(text, synth_cancel).await {
+    match session.synthesize_sentence(text, synth_cancel, false).await {
         Ok(true) => {
             tracing::info!("turn_pipeline {uuid}: TTS synthesize fired");
         }
         Ok(false) => {
             // Cancelled before the task_request was sent — no audio will play,
-            // so no `on_turn_end` will fire. Clear `ai_speaking` ourselves.
+            // so no `on_turn_end` will fire. Clear the flags ourselves.
             tracing::info!("turn_pipeline {uuid}: TTS synthesize cancelled before fire");
-            ai_speaking.store(false, Ordering::Relaxed);
+            turn_flags.end();
         }
         Err(e) => {
             tracing::error!("turn_pipeline {uuid}: TTS synthesize failed: {e}");
             // Clear on error so a later `wait_until_silent` doesn't hang waiting
             // for audio that will never arrive.
-            ai_speaking.store(false, Ordering::Relaxed);
+            turn_flags.end();
         }
     }
 }
 
 /// Wait for the current turn's TTS audio to finish playing before tearing down
-/// media. Under fire-and-forget, [`synthesize`] returned before the audio
-/// played; `ai_speaking` is cleared by the driver's `on_turn_end` on
-/// stream-idle. No-op if nothing is speaking (e.g. empty reply, no session).
+/// media. Under fire-and-forget, [`synthesize_sentence`] returned before the
+/// audio played; `turn_pending` is cleared by the driver's `on_turn_end` on
+/// stream-idle. No-op if nothing is pending (e.g. empty reply, no session).
 /// Bounded by 30s + `cancel` so a stuck driver can't hang the turn forever.
-async fn wait_until_silent(ai_speaking: &AtomicBool, cancel: &CancellationToken) {
+async fn wait_until_silent(turn_pending: &AtomicBool, cancel: &CancellationToken) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         // Cancel is terminal — check it first so barge-in/drop doesn't wait a
-        // full poll interval, and so `ai_speaking` stuck-true (no-audio stall)
+        // full poll interval, and so `turn_pending` stuck-true (no-audio stall)
         // doesn't pin this past the deadline pointlessly.
         if cancel.is_cancelled() || std::time::Instant::now() >= deadline {
             return;
         }
-        if !ai_speaking.load(Ordering::Relaxed) {
+        if !turn_pending.load(Ordering::Relaxed) {
             return;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -334,6 +382,280 @@ fn llm_client() -> &'static reqwest::Client {
     })
 }
 
+/// Return the byte index just past the first sentence boundary in `text`, or
+/// `None` if no boundary is found. Chinese `。！？` and `\n` are always
+/// boundaries; Western `.!?` are boundaries only when followed by whitespace or
+/// at end-of-string (so `3.14` is NOT split). Ported from voice-call
+/// `find_sentence_boundary` (pure function).
+fn find_sentence_boundary(text: &str) -> Option<usize> {
+    // Iterate char indices directly (no Vec allocation). Called per LLM token
+    // with the growing `sentence_buffer`, so avoiding the collect keeps it
+    // allocation-free on the hot path.
+    let mut chars = text.char_indices();
+    while let Some((byte_idx, ch)) = chars.next() {
+        match ch {
+            '。' | '！' | '？' => return Some(byte_idx + ch.len_utf8()),
+            '\n' => return Some(byte_idx + ch.len_utf8()),
+            '.' | '!' | '?' => {
+                let end = byte_idx + ch.len_utf8();
+                match chars.clone().next() {
+                    None => return Some(end), // end-of-string
+                    Some((_, next_ch)) if matches!(next_ch, ' ' | '\n' | '\t' | '\r') => {
+                        // Boundary — include the trailing whitespace.
+                        let (nb, nch) = chars.next().unwrap();
+                        return Some(nb + nch.len_utf8());
+                    }
+                    _ => {} // not followed by whitespace — not a boundary
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Stream pure-text LLM reply tokens (SSE) and fire-and-forget each sentence's
+/// TTS as it completes. Returns the full concatenated reply (for history).
+///
+/// Used only when `llm_stream` is enabled AND the turn has no tool calls
+/// (tool-bearing replies go through the non-streaming path — tool semantics
+/// need the complete response, and SSE tool-delta reassembly is out of scope).
+/// Each sentence reuses the turn's single `ActiveTask` (`turn_open` after the
+/// first) — the server's FIFO on the call-lifetime session + the single ringbuf
+/// sink preserve audio order without a sequencer.
+///
+/// `turn_pending` + `tts_audio_active` are set true at the first sentence and
+/// cleared by the driver's `on_turn_end` when the final stream goes idle.
+async fn stream_llm_and_synthesize(
+    config: &Config,
+    messages: &[ChatMessage],
+    live_audio_b64: &str,
+    uuid: &str,
+    tts_session: Option<&VolcanoBidirectionalSession>,
+    cancel: &CancellationToken,
+    turn_flags: &crate::actor::TurnFlags,
+) -> Result<String> {
+    use futures::StreamExt;
+
+    // Build the streaming request: same multimodal messages, but text-only
+    // (no tools — the non-streaming probe already decided tools weren't used)
+    // and `stream: true`.
+    let messages_json = build_llm_messages(messages, live_audio_b64);
+    let mut body = serde_json::json!({
+        "model": config.api.llm_model,
+        "messages": messages_json,
+        "stream": true,
+    });
+    apply_optional_body_fields(&mut body, config);
+
+    let url = chat_completions_url(&config.api.llm_url);
+    let send_result = tokio::select! {
+        biased;
+        _ = cancel.cancelled() => return Ok(String::new()),
+        r = llm_client()
+            .post(&url)
+            .bearer_auth(&config.api.llm_key)
+            .json(&body)
+            .send() => r,
+    };
+    let resp = send_result.context("LLM stream request failed")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("LLM stream HTTP {status}: {text}");
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
+    let mut sentence_buffer = String::new();
+    let mut full_reply = String::new();
+    let mut turn_open = false;
+    let t_first_token = std::time::Instant::now();
+    let mut first_token_seen = false;
+
+    loop {
+        let chunk = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break,
+            c = stream.next() => c,
+        };
+        let bytes = match chunk {
+            Some(c) => c?,
+            None => break,
+        };
+        buffer.push_str(std::str::from_utf8(&bytes).unwrap_or(""));
+        // Normalize CRLF → LF in place (SSE spec uses `\r\n`; stripping `\r`
+        // makes `\n\n` reliably delimit events). Cheaper than `replace` (no
+        // full-buffer realloc).
+        if buffer.contains('\r') {
+            buffer.retain(|c| c != '\r');
+        }
+        // Process every complete SSE event (`\n\n`-delimited).
+        while let Some(pos) = buffer.find("\n\n") {
+            // Drain the event block + the `\n\n` separator in place (no copies).
+            let event_block: String = buffer.drain(..pos).collect();
+            buffer.drain(..2);
+            // Concatenate `data:` lines (SSE spec).
+            let mut assembled = String::new();
+            for raw in event_block.lines() {
+                let line = raw.trim();
+                if line.is_empty() || line.starts_with(':') {
+                    continue;
+                }
+                if let Some(d) = line.strip_prefix("data: ") {
+                    if !assembled.is_empty() {
+                        assembled.push('\n');
+                    }
+                    assembled.push_str(d);
+                }
+            }
+            if assembled.is_empty() {
+                continue;
+            }
+            if assembled == "[DONE]" {
+                buffer.clear();
+                break;
+            }
+            let parsed: serde_json::Value = match serde_json::from_str(&assembled) {
+                Ok(v) => v,
+                Err(_) => continue, // skip keep-alive / unparseable
+            };
+            let choices = match parsed["choices"].as_array() {
+                Some(c) => c,
+                None => continue,
+            };
+            for choice in choices {
+                if let Some(content) = choice["delta"]["content"].as_str() {
+                    if !first_token_seen {
+                        first_token_seen = true;
+                        tracing::info!(
+                            "LATENCY {uuid}: LLM first token = {}ms",
+                            t_first_token.elapsed().as_millis()
+                        );
+                    }
+                    full_reply.push_str(content);
+                    sentence_buffer.push_str(content);
+                    // Dispatch every complete sentence as soon as it forms.
+                    while let Some(boundary) = find_sentence_boundary(&sentence_buffer) {
+                        // Split one sentence off the buffer in place (one alloc
+                        // for the sentence, none for the remainder).
+                        let sentence: String = sentence_buffer.drain(..boundary).collect();
+                        if sentence.trim().is_empty() || cancel.is_cancelled() {
+                            continue;
+                        }
+                        if let Some(session) = tts_session {
+                            if !turn_open {
+                                turn_flags.begin();
+                            }
+                            match session
+                                .synthesize_sentence(&sentence, cancel.clone(), turn_open)
+                                .await
+                            {
+                                Ok(true) => {
+                                    turn_open = true;
+                                }
+                                Ok(false) => {
+                                    // Cancelled before the task_request was sent —
+                                    // no audio will play, so no `on_turn_end` will
+                                    // fire. If this was the turn-opener, undo the
+                                    // `begin()`; on a continuation sentence the
+                                    // earlier sentence's task will retire via its
+                                    // own idle timer, so leave it.
+                                    if !turn_open {
+                                        turn_flags.end();
+                                    }
+                                    // Stop dispatching — the turn is cancelled.
+                                    break;
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "turn_pipeline {uuid}: sentence TTS send failed: {e}"
+                                    );
+                                    if !turn_open {
+                                        // Turn-opener failed before any audio: undo
+                                        // `begin()` (no on_turn_end will fire for a
+                                        // task that was never installed / never sent).
+                                        turn_flags.end();
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Flush the trailing fragment (no terminal punctuation) as a final sentence.
+    let tail = sentence_buffer.trim();
+    if !tail.is_empty()
+        && !cancel.is_cancelled()
+        && let Some(session) = tts_session
+    {
+        if !turn_open {
+            turn_flags.begin();
+        }
+        match session.synthesize_sentence(tail, cancel.clone(), turn_open).await {
+            Ok(true) => {}
+            // On cancel/error, mirror the in-loop handling: undo begin() if this
+            // was the turn-opener (no on_turn_end will fire), then stop.
+            Ok(false) | Err(_) => {
+                if !turn_open {
+                    turn_flags.end();
+                }
+            }
+        }
+    }
+
+    // If the stream produced no text at all (and wasn't cancelled), the server
+    // likely returned a non-SSE body (some endpoints ignore `stream:true` and
+    // reply with a single JSON object). The SSE parser never found a `\n\n`
+    // event boundary, so `full_reply` is empty. Surface this as an error so the
+    // caller falls back / logs rather than silently producing no TTS.
+    if full_reply.is_empty()
+        && !cancel.is_cancelled()
+        && !buffer.is_empty()
+    {
+        tracing::warn!(
+            "LLM stream {uuid}: no SSE events parsed (non-SSE response? trailing buffer: {:?})",
+            &buffer
+        );
+        anyhow::bail!("LLM stream produced no SSE events (non-SSE response?)");
+    }
+
+    Ok(full_reply)
+}
+
+/// Build the `messages` array: prior conversation + a multimodal user turn
+/// carrying the live caller audio as WAV base64. Shared by the streaming and
+/// non-streaming LLM paths so the multimodal message format stays in sync.
+fn build_llm_messages(messages: &[ChatMessage], live_audio_b64: &str) -> Vec<serde_json::Value> {
+    let mut messages_json: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+        .collect();
+    messages_json.push(serde_json::json!({
+        "role": "user",
+        "content": [
+            { "type": "input_audio", "input_audio": { "data": live_audio_b64, "format": "wav" } },
+            { "type": "text", "text": "请识别并回复这段语音内容" },
+        ],
+    }));
+    messages_json
+}
+
+/// Apply optional `temperature` + `max_tokens` fields from config to an LLM
+/// request body (shared by the streaming and non-streaming paths).
+fn apply_optional_body_fields(body: &mut serde_json::Value, cfg: &Config) {
+    if let Some(t) = cfg.api.llm_temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    if let Some(m) = cfg.api.llm_max_tokens {
+        body["max_tokens"] = serde_json::json!(m);
+    }
+}
+
 /// Call the LLM (OpenAI-compatible chat/completions) with conversation +
 /// tool definitions + live audio as multimodal `input_audio`.
 async fn call_llm_with_tools(
@@ -349,17 +671,7 @@ async fn call_llm_with_tools(
         return Ok(canned_response(uuid, messages));
     }
 
-    let mut messages_json: Vec<serde_json::Value> = messages
-        .iter()
-        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
-        .collect();
-    messages_json.push(serde_json::json!({
-        "role": "user",
-        "content": [
-            { "type": "input_audio", "input_audio": { "data": live_audio_b64, "format": "wav" } },
-            { "type": "text", "text": "请识别并回复这段语音内容" },
-        ],
-    }));
+    let messages_json = build_llm_messages(messages, live_audio_b64);
 
     let mut body = serde_json::json!({
         "model": cfg.api.llm_model,
@@ -367,12 +679,7 @@ async fn call_llm_with_tools(
         "tools": tool_definitions(),
         "tool_choice": "auto",
     });
-    if let Some(t) = cfg.api.llm_temperature {
-        body["temperature"] = serde_json::json!(t);
-    }
-    if let Some(m) = cfg.api.llm_max_tokens {
-        body["max_tokens"] = serde_json::json!(m);
-    }
+    apply_optional_body_fields(&mut body, cfg);
     tracing::debug!("LLM request body ({uuid}): {body}");
 
     let url = chat_completions_url(&cfg.api.llm_url);
@@ -495,4 +802,50 @@ fn parse_llm_response(json: &serde_json::Value) -> Result<(Vec<ToolCall>, String
 fn extract_string_arg(arguments_json: &str, field: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(arguments_json).ok()?;
     v.get(field)?.as_str().map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_sentence_boundary;
+
+    #[test]
+    fn no_boundary_returns_none() {
+        assert_eq!(find_sentence_boundary("正在思考"), None);
+        assert_eq!(find_sentence_boundary("Hello world"), None);
+        assert_eq!(find_sentence_boundary(""), None);
+    }
+
+    #[test]
+    fn chinese_terminal_punct_is_boundary() {
+        // Includes the punctuation in the fragment.
+        assert_eq!(find_sentence_boundary("你好。"), Some("你好。".len()));
+        assert_eq!(find_sentence_boundary("停！"), Some("停！".len()));
+    }
+
+    #[test]
+    fn newline_is_boundary() {
+        assert_eq!(find_sentence_boundary("第一行\n第二行"), Some("第一行\n".len()));
+    }
+
+    #[test]
+    fn western_punct_only_with_trailing_whitespace() {
+        // `.` at end-of-string is a boundary.
+        assert_eq!(find_sentence_boundary("Hello."), Some(6));
+        // `.` followed by space — boundary includes the trailing space.
+        assert_eq!(find_sentence_boundary("First. Second."), Some(7));
+    }
+
+    #[test]
+    fn decimal_number_is_not_split() {
+        // `3.14` — the `.` is followed by `1`, not whitespace → no boundary.
+        assert_eq!(find_sentence_boundary("3.14"), None);
+    }
+
+    #[test]
+    fn first_boundary_wins() {
+        // Multiple boundaries → returns the first.
+        let s = "你好。世界！";
+        let idx = find_sentence_boundary(s).unwrap();
+        assert_eq!(&s[..idx], "你好。");
+    }
 }
