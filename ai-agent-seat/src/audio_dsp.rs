@@ -10,6 +10,10 @@ pub const PIPELINE_SAMPLE_RATE: u32 = 8000;
 /// stays at 8 kHz (pipeline native).
 pub const VAD_SAMPLE_RATE: u32 = 16000;
 
+/// Audio-output callback: the TTS driver invokes this for each resampled PCM
+/// chunk, pushing directly into the caller's playback ringbuf (no mpsc/forwarder).
+pub type OnAudio = Box<dyn FnMut(&[i16]) + Send + 'static>;
+
 /// `fswtch::Resample` (`switch_resample_t`) is `!Send`/`!Sync` because the
 /// underlying C resampler is not safe under *concurrent* access. Both call
 /// sites (the media-thread VAD bypass in `io.rs` and the tokio TTS driver

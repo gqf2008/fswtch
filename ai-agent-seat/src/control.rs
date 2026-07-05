@@ -65,9 +65,7 @@ impl CallControl for FfiControl {
         // `switch_core_session_send_dtmf_string` (wrapped by `Session::send_dtmf`).
         // Faster than the `send_dtmf` dialplan app round-trip and reaches the
         // media layer even outside the dialplan execution context.
-        Self::with_session(uuid, "send_dtmf", |session| {
-            Ok(session.send_dtmf(digits)?)
-        })
+        Self::with_session(uuid, "send_dtmf", |session| Ok(session.send_dtmf(digits)?))
     }
 
     fn transfer(&self, uuid: &str, destination: &str) -> Result<()> {

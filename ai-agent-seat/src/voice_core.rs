@@ -36,7 +36,7 @@ pub struct ApiConfig {
     /// LLM base URL (e.g. `https://ark.cn-beijing.volces.com/api/v3`). The chat-completions
     /// path is appended by the orchestrator.
     #[serde(default)]
-    pub llm_url: String,
+    pub llm_base_url: String,
     /// LLM API key (bearer token).
     #[serde(default)]
     pub llm_key: String,
@@ -65,6 +65,26 @@ pub struct ApiConfig {
     /// Volcano TTS speaker voice id.
     #[serde(default)]
     pub volcano_speaker: String,
+    /// Volcano TTS WebSocket endpoint URL. Defaults to
+    /// `wss://openspeech.bytedance.com/api/v3/tts/bidirection`.
+    #[serde(default)]
+    pub volcano_tts_url: String,
+    /// TTS provider: `""` (empty / unset) = Volcano (default), `"mimo"` = Xiaomi MIMO HTTP TTS.
+    #[serde(default)]
+    pub tts_provider: String,
+    /// MIMO TTS voice id (e.g. `"mimo_default"`, `"冰糖"`, `"Mia"`).
+    #[serde(default)]
+    pub mimo_tts_voice: String,
+    /// MIMO TTS output format: `"wav"` (default) or `"pcm16"` (for streaming).
+    #[serde(default)]
+    pub mimo_tts_format: String,
+    /// LLM authentication mode: `""` (empty / unset) = `Authorization: Bearer` (default),
+    /// `"api-key"` = `api-key` header (Xiaomi MIMO / some OpenAI-compatible proxies).
+    #[serde(default)]
+    pub llm_auth_mode: String,
+    /// ASR model name for transcription (e.g. `"whisper-1"`). Used when `pipeline_mode` is `"asr_llm_tts"`.
+    #[serde(default)]
+    pub asr_model: String,
 }
 
 /// VAD configuration.

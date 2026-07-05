@@ -43,9 +43,12 @@ pub mod boundary;
 pub mod call_core;
 pub mod config;
 pub mod control;
+pub mod doubao_responses;
 pub mod event_sub;
 pub mod io;
+pub mod mimo_tts;
 pub mod orchestrator;
+pub mod providers;
 pub mod runtime;
 pub mod tts;
 pub mod tts_ws_codec;
@@ -69,32 +72,27 @@ fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::Modul
 
     tracing::info!("Loading ai_agent_seat module");
 
-    // Load configuration. Resolution order (first hit wins):
-    //   1. VOICE_SEAT_CONFIG env var (explicit override)
-    //   2. <param name="ai_config" value="..."/> from voice_seat.conf.xml
-    //      (read via FreeSWITCH's switch_xml_open_cfg — the standard FS idiom;
-    //      the config is auto-bound from autoload_configs/voice_seat.conf.xml)
-    //   3. ~/.local/etc/freeswitch/voice_seat.yaml (default)
-    // Any failure degrades to the next; none crash the module load.
-    let config_path = std::env::var("VOICE_SEAT_CONFIG").ok().unwrap_or_else(|| {
-        read_ai_config_param_from_xml().unwrap_or_else(|| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            format!("{home}/.local/etc/freeswitch/voice_seat.yaml")
-        })
-    });
-    if let Err(e) = config::load(&config_path) {
-        tracing::warn!("Failed to load config from {}: {}", config_path, e);
+    // Load configuration from FreeSWITCH native XML config
+    // (autoload_configs/ai-agent-seat.conf.xml → <settings><param .../></settings>).
+    // Each <param name="..."> maps to a Config field. Channel variables
+    // (VOICE_SEAT_*) set in the dialplan override these per-call at
+    // outgoing_channel time.
+    match load_config_from_xml() {
+        Ok(cfg) => {
+            tracing::info!(
+                "config loaded from XML: pipeline={} llm_model={} llm_base_url={} tts_provider={}",
+                cfg.api.pipeline_mode,
+                cfg.api.llm_model,
+                cfg.api.llm_base_url,
+                cfg.api.tts_provider,
+            );
+            config::store(cfg);
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load config from XML: {e}");
+        }
     }
-    // Confirm config actually loaded (tracing → stderr; visible with `freeswitch -nf`).
-    if let Some(cfg) = config::get() {
-        tracing::info!(
-            "config loaded: pipeline={} llm_model={} llm_url={} volcano_speaker={}",
-            cfg.api.pipeline_mode,
-            cfg.api.llm_model,
-            cfg.api.llm_url,
-            cfg.api.volcano_speaker,
-        );
-    } else {
+    if config::get().is_none() {
         tracing::warn!("no config loaded — orchestrator will use canned responses");
     }
 
@@ -208,27 +206,101 @@ impl Visit for FieldCollector {
     }
 }
 
-/// Read the `<param name="ai_config" value="..."/>` from the module's
-/// FreeSWITCH XML config (`autoload_configs/voice_seat.conf.xml`).
+/// Load the AI [`Config`] from the module's FreeSWITCH XML config
+/// (`autoload_configs/ai-agent-seat.conf.xml`).
 ///
-/// Uses FreeSWITCH's `switch_xml_open_cfg` — the canonical config-read idiom,
-/// safe during `switch_module_load`. Returns `None` on any failure (file not
-/// bound, no `<settings>`, no `ai_config` param) so the caller falls back to
-/// the default path. Never panics.
-fn read_ai_config_param_from_xml() -> Option<String> {
+/// Iterates all `<param name="..." value="..."/>` children of `<settings>`
+/// and maps each `name` to a `Config` field. Uses FreeSWITCH's
+/// `switch_xml_open_cfg` (the canonical config-read idiom, safe during
+/// `switch_module_load`).
+///
+/// `system_prompt_file` is a special param: its value is a file path whose
+/// contents are read and stored as `Config::system_prompt`.
+fn load_config_from_xml() -> anyhow::Result<crate::voice_core::Config> {
+    use crate::voice_core::Config;
     use fswtch::{XmlConfig, XmlNode};
-    let xml = XmlConfig::open("voice_seat.conf")?;
-    // `settings()` returns the <settings> node. Its CHILDREN are <param> nodes;
-    // iterate them (not <settings>'s siblings — the earlier bug).
-    let first_param: XmlNode<'_> = xml.settings()?.child("param")?;
+
+    // `XmlConfig::open` returns the <configuration> root node via
+    // `switch_xml_open_cfg`. `settings()` returns that same root (the fswtch
+    // binding name is misleading — FreeSWITCH's `switch_xml_open_cfg` writes
+    // the root node, not a <settings> child). So we navigate:
+    //   <configuration> → child <settings> → children <param>.
+    let xml = XmlConfig::open("ai-agent-seat.conf")
+        .ok_or_else(|| anyhow::anyhow!("ai-agent-seat.conf not bound or missing"))?;
+    let root = xml
+        .settings()
+        .ok_or_else(|| anyhow::anyhow!("XmlConfig returned no root node"))?;
+
+    // <configuration> → <settings>
+    let settings = root
+        .child("settings")
+        .ok_or_else(|| anyhow::anyhow!("no <settings> node under <configuration>"))?;
+
+    let first_param: XmlNode<'_> = settings
+        .child("param")
+        .ok_or_else(|| anyhow::anyhow!("no <param> nodes in <settings>"))?;
+
+    let mut cfg = Config::default();
     let mut node = Some(first_param);
     while let Some(p) = node {
-        if p.attr("name").as_deref() == Some("ai_config") {
-            return p.attr("value");
-        }
+        let (name, value) = match (p.attr("name"), p.attr("value")) {
+            (Some(n), Some(v)) => (n, v),
+            _ => {
+                node = p.next();
+                continue;
+            }
+        };
+        apply_param(&mut cfg, &name, &value);
         node = p.next();
     }
-    None
+    Ok(cfg)
+}
+
+/// Apply one `<param name="..." value="...">` to the [`Config`].
+fn apply_param(cfg: &mut crate::voice_core::Config, name: &str, value: &str) {
+    let api = &mut cfg.api;
+    match name {
+        // ── API / LLM ──
+        "pipeline_mode" => api.pipeline_mode = value.to_string(),
+        "llm_base_url" => api.llm_base_url = value.to_string(),
+        "llm_key" => api.llm_key = value.to_string(),
+        "llm_model" => api.llm_model = value.to_string(),
+        "llm_temperature" => api.llm_temperature = value.parse().ok(),
+        "llm_max_tokens" => api.llm_max_tokens = value.parse().ok(),
+        "llm_stream" => api.llm_stream = value == "true" || value == "1",
+        "llm_auth_mode" => api.llm_auth_mode = value.to_string(),
+        // ── TTS provider selection ──
+        "tts_provider" => api.tts_provider = value.to_string(),
+        // ── Volcano TTS ──
+        "volcano_api_key" => api.volcano_api_key = value.to_string(),
+        "volcano_resource_id" => api.volcano_resource_id = value.to_string(),
+        "volcano_speaker" => api.volcano_speaker = value.to_string(),
+        "volcano_tts_url" => api.volcano_tts_url = value.to_string(),
+        "volcano_tts_sample_rate" => { /* accepted for compat; pipeline forces 8kHz */ }
+        // ── MIMO TTS ──
+        "mimo_tts_voice" => api.mimo_tts_voice = value.to_string(),
+        "mimo_tts_format" => api.mimo_tts_format = value.to_string(),
+        // ── ASR ──
+        "asr_model" => api.asr_model = value.to_string(),
+        // ── system prompt (from file) ──
+        "system_prompt_file" => match std::fs::read_to_string(value) {
+            Ok(content) => cfg.system_prompt = Some(content),
+            Err(e) => tracing::warn!("system_prompt_file {} read failed: {e}", value),
+        },
+        "system_prompt" => cfg.system_prompt = Some(value.to_string()),
+        // ── VAD ──
+        "vad_speech_threshold" => cfg.vad.speech_threshold = value.parse().unwrap_or(0.5),
+        "vad_silence_timeout_ms" => cfg.vad.silence_timeout_ms = value.parse().unwrap_or(500),
+        "vad_min_speech_rms" => cfg.vad.min_speech_rms = value.parse().unwrap_or(0.01),
+        "vad_barge_in_confirm_ms" => cfg.vad.barge_in_confirm_ms = value.parse().unwrap_or(80),
+        "vad_speech_onset_ms" => cfg.vad.speech_onset_ms = value.parse().unwrap_or(80.0),
+        "vad_speech_onset_decay" => cfg.vad.speech_onset_decay = value.parse().unwrap_or(0.25),
+        // ── Audio ──
+        "audio_fade_out_ms" => cfg.audio.fade_out_ms = value.parse().unwrap_or(80),
+        // ── max call duration ──
+        "max_call_secs" => cfg.max_call_secs = value.parse().unwrap_or(0),
+        _ => tracing::debug!("unknown config param: {name}={value}"),
+    }
 }
 
 fn init_tracing() {

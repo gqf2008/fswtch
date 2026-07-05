@@ -2,9 +2,7 @@ use std::ptr::NonNull;
 
 use crate::caller::{CallerExtension, CallerProfile};
 use crate::command::{borrowed_cstr_to_str, borrowed_cstr_to_string, strdup_to_string};
-use crate::{
-    CallDirection, Cause, ChannelState, Event, Result, cstring, status_to_result, sys,
-};
+use crate::{CallDirection, Cause, ChannelState, Event, Result, cstring, status_to_result, sys};
 
 /// FreeSWITCH channel flag bitset (`switch_channel_flag_t`).
 ///
@@ -1078,7 +1076,8 @@ impl Channel {
     /// cleared.
     pub fn clear_flag_partner(self, flag: ChannelFlag) -> bool {
         // SAFETY: `self.raw` is a live channel.
-        let cleared = unsafe { sys::switch_channel_clear_flag_partner(self.raw.as_ptr(), flag.bits()) };
+        let cleared =
+            unsafe { sys::switch_channel_clear_flag_partner(self.raw.as_ptr(), flag.bits()) };
         cleared != 0
     }
 
@@ -1304,7 +1303,9 @@ fn collect_channel_variables(
 pub fn str_to_cause(name: impl AsRef<str>) -> Result<Cause> {
     let name = cstring(name)?;
     // SAFETY: `name` is a valid C string for the call.
-    Ok(Cause::from_raw(unsafe { sys::switch_channel_str2cause(name.as_ptr()) }))
+    Ok(Cause::from_raw(unsafe {
+        sys::switch_channel_str2cause(name.as_ptr())
+    }))
 }
 
 /// Translates a [`Cause`] into its canonical name. The returned string borrows static storage.
@@ -1369,9 +1370,18 @@ mod tests {
     #[test]
     fn call_state_distinct_values() {
         // The bindgen constants are 0..=8 in declaration order; spot-check the boundaries.
-        assert_eq!(CallState::DOWN.raw(), sys::switch_channel_callstate_t_CCS_DOWN);
-        assert_eq!(CallState::ACTIVE.raw(), sys::switch_channel_callstate_t_CCS_ACTIVE);
-        assert_eq!(CallState::UNHELD.raw(), sys::switch_channel_callstate_t_CCS_UNHELD);
+        assert_eq!(
+            CallState::DOWN.raw(),
+            sys::switch_channel_callstate_t_CCS_DOWN
+        );
+        assert_eq!(
+            CallState::ACTIVE.raw(),
+            sys::switch_channel_callstate_t_CCS_ACTIVE
+        );
+        assert_eq!(
+            CallState::UNHELD.raw(),
+            sys::switch_channel_callstate_t_CCS_UNHELD
+        );
         assert_ne!(CallState::ACTIVE, CallState::HELD);
     }
 

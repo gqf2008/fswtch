@@ -41,22 +41,36 @@ pub type LimitUsageFn = Option<
 >;
 pub type LimitResetFn = Option<unsafe extern "C" fn() -> sys::switch_status_t>;
 pub type LimitStatusFn = Option<unsafe extern "C" fn() -> *mut c_char>;
-pub type LimitIntervalResetFn =
-    Option<unsafe extern "C" fn(realm: *const c_char, resource: *const c_char) -> sys::switch_status_t>;
-pub type TimerInitFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
-pub type TimerNextFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
-pub type TimerStepFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
-pub type TimerSyncFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
+pub type LimitIntervalResetFn = Option<
+    unsafe extern "C" fn(realm: *const c_char, resource: *const c_char) -> sys::switch_status_t,
+>;
+pub type TimerInitFn =
+    Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
+pub type TimerNextFn =
+    Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
+pub type TimerStepFn =
+    Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
+pub type TimerSyncFn =
+    Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
 pub type TimerCheckFn = Option<
-    unsafe extern "C" fn(arg1: *mut sys::switch_timer_t, arg2: sys::switch_bool_t) -> sys::switch_status_t,
+    unsafe extern "C" fn(
+        arg1: *mut sys::switch_timer_t,
+        arg2: sys::switch_bool_t,
+    ) -> sys::switch_status_t,
 >;
-pub type TimerDestroyFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
+pub type TimerDestroyFn =
+    Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
 pub type FileOpenFn = Option<
-    unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, file_path: *const c_char) -> sys::switch_status_t,
+    unsafe extern "C" fn(
+        arg1: *mut sys::switch_file_handle_t,
+        file_path: *const c_char,
+    ) -> sys::switch_status_t,
 >;
-pub type FileCloseFn = Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t) -> sys::switch_status_t>;
-pub type FileTruncateFn =
-    Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, offset: i64) -> sys::switch_status_t>;
+pub type FileCloseFn =
+    Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t) -> sys::switch_status_t>;
+pub type FileTruncateFn = Option<
+    unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, offset: i64) -> sys::switch_status_t,
+>;
 pub type FileReadFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_file_handle_t,
@@ -117,8 +131,12 @@ pub type AsrLoadGrammarFn = Option<
         name: *const c_char,
     ) -> sys::switch_status_t,
 >;
-pub type AsrUnloadGrammarFn =
-    Option<unsafe extern "C" fn(ah: *mut sys::switch_asr_handle_t, name: *const c_char) -> sys::switch_status_t>;
+pub type AsrUnloadGrammarFn = Option<
+    unsafe extern "C" fn(
+        ah: *mut sys::switch_asr_handle_t,
+        name: *const c_char,
+    ) -> sys::switch_status_t,
+>;
 pub type AsrCloseFn = Option<
     unsafe extern "C" fn(
         ah: *mut sys::switch_asr_handle_t,
@@ -165,8 +183,11 @@ pub type DbHandleNewFn = Option<
         dih: *mut *mut sys::switch_database_interface_handle_t,
     ) -> sys::switch_status_t,
 >;
-pub type DbHandleDestroyFn =
-    Option<unsafe extern "C" fn(dih: *mut *mut sys::switch_database_interface_handle_t) -> sys::switch_status_t>;
+pub type DbHandleDestroyFn = Option<
+    unsafe extern "C" fn(
+        dih: *mut *mut sys::switch_database_interface_handle_t,
+    ) -> sys::switch_status_t,
+>;
 pub type DbExecDetailedFn = Option<
     unsafe extern "C" fn(
         file: *const c_char,
@@ -275,7 +296,10 @@ impl Module {
     pub fn add_chat_application(
         self,
         info: ApplicationInfo,
-        function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> sys::switch_status_t,
+        function: unsafe extern "C" fn(
+            *mut sys::switch_event_t,
+            *const c_char,
+        ) -> sys::switch_status_t,
     ) -> Result<ChatApplicationInterface> {
         let strings = info.into_cstrings()?;
         let application = create_interface::<sys::switch_chat_application_interface_t>(
@@ -716,7 +740,10 @@ impl ModuleBuilder {
     pub fn chat_application(
         self,
         info: ApplicationInfo,
-        function: unsafe extern "C" fn(*mut sys::switch_event_t, *const c_char) -> sys::switch_status_t,
+        function: unsafe extern "C" fn(
+            *mut sys::switch_event_t,
+            *const c_char,
+        ) -> sys::switch_status_t,
     ) -> Result<Self> {
         self.module.add_chat_application(info, function)?;
         Ok(self)

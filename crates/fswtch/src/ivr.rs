@@ -1508,8 +1508,14 @@ mod tests {
     fn media_flag_raw_roundtrip() {
         // from_raw/bits is a pure newtype pass-through, so every SMF_* constant survives a round
         // trip and equals its variant.
-        assert_eq!(MediaFlag::NONE.bits(), sys::switch_media_flag_enum_t_SMF_NONE);
-        assert_eq!(MediaFlag::FORCE.bits(), sys::switch_media_flag_enum_t_SMF_FORCE);
+        assert_eq!(
+            MediaFlag::NONE.bits(),
+            sys::switch_media_flag_enum_t_SMF_NONE
+        );
+        assert_eq!(
+            MediaFlag::FORCE.bits(),
+            sys::switch_media_flag_enum_t_SMF_FORCE
+        );
         assert_eq!(
             MediaFlag::from_raw(sys::switch_media_flag_enum_t_SMF_PRIORITY).bits(),
             MediaFlag::PRIORITY.bits()
@@ -1535,7 +1541,11 @@ mod tests {
     fn media_flag_bitor_assign() {
         let mut f = MediaFlag::ECHO_ALEG;
         f |= MediaFlag::ECHO_BLEG;
-        assert_eq!(f.bits(), sys::switch_media_flag_enum_t_SMF_ECHO_ALEG | sys::switch_media_flag_enum_t_SMF_ECHO_BLEG);
+        assert_eq!(
+            f.bits(),
+            sys::switch_media_flag_enum_t_SMF_ECHO_ALEG
+                | sys::switch_media_flag_enum_t_SMF_ECHO_BLEG
+        );
         assert!(f.contains(MediaFlag::ECHO_ALEG));
         assert!(f.contains(MediaFlag::ECHO_BLEG));
     }

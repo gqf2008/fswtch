@@ -206,13 +206,7 @@ impl JitterBuffer {
     pub fn put_packet(&self, packet: &crate::RtpPacket<'_>, len: usize) -> Result<()> {
         // SAFETY: `self.raw` is a live buffer; `packet.as_ptr()` is a valid pointer to a
         // `switch_rtp_packet_t` borrowed for the duration of the call (read-only access from C).
-        let status = unsafe {
-            sys::switch_jb_put_packet(
-                self.raw.as_ptr(),
-                packet.as_ptr(),
-                len,
-            )
-        };
+        let status = unsafe { sys::switch_jb_put_packet(self.raw.as_ptr(), packet.as_ptr(), len) };
         status_to_result(status)
     }
 

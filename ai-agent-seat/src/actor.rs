@@ -38,10 +38,10 @@ use tokio_util::sync::CancellationToken;
 
 use ringbuf::traits::Consumer;
 
+use crate::audio_dsp::OnAudio;
 use crate::call_core::{CallControl, control, register_call};
 use crate::io::{CALLS, CallState};
 use crate::orchestrator::{ChatMessage, MAX_HISTORY, turn_pipeline};
-use crate::tts::{OnAudio, VolcanoBidirectionalSession};
 use crate::voice_core::Config;
 
 /// Barge-in: cancel the in-flight turn + flush the TTS ringbuf.
@@ -99,7 +99,9 @@ pub struct CallActor {
     uuid: String,
     config: Option<Config>,
     conversation: Mutex<Vec<ChatMessage>>,
-    tts_session: Option<VolcanoBidirectionalSession>,
+    llm: Option<crate::doubao_responses::DoubaoResponsesLlm>,
+    asr: Option<rig_core::providers::openai::TranscriptionModel>,
+    tts: Option<Arc<dyn crate::providers::TtsProvider>>,
     turn_cancel: CancellationToken,
     /// Turn-lifecycle flags (turn-pending + tts-audio-active). The two share
     /// begin/end gating via [`TurnFlags::begin`]/[`TurnFlags::end`] but have
@@ -124,27 +126,31 @@ impl CallActor {
         on_audio: OnAudio,
         speech_rx: tokio::sync::mpsc::Receiver<Vec<i16>>,
     ) -> Self {
-        let tts_session = config
+        // Build LLM provider using factory
+        let llm = config
             .as_ref()
-            .filter(|c| !c.api.volcano_api_key.is_empty())
-            .map(|c| {
-                // `on_turn_end`: the driver fires this once a turn's audio
-                // stream goes idle (fire-and-forget completion) — clear both
-                // turn-lifecycle flags. Barge-in clears them directly too (see
-                // the BargeIn handler).
+            .and_then(|c| crate::providers::factory::build_llm_provider(&c.api).ok());
+
+        // Build ASR provider using factory (only if pipeline_mode is "asr_llm_tts")
+        let asr = config
+            .as_ref()
+            .filter(|c| c.api.pipeline_mode == "asr_llm_tts")
+            .and_then(|c| crate::providers::factory::build_transcription_provider(&c.api).ok());
+
+        // Build TTS provider using factory.
+        // `on_audio` pushes PCM into the call-wide ringbuf; `on_turn_end`
+        // clears turn_flags when a turn's audio stream goes idle.
+        let tts = {
+            let on_turn_end: crate::tts::OnTurnEnd = {
                 let flags = turn_flags.clone();
-                let on_turn_end: crate::tts::OnTurnEnd = Box::new(move || {
-                    flags.end();
-                });
-                VolcanoBidirectionalSession::new(
-                    c.api.volcano_api_key.clone(),
-                    c.api.volcano_resource_id.clone(),
-                    c.api.volcano_speaker.clone(),
-                    uuid.clone(),
-                    on_audio,
-                    on_turn_end,
-                )
-            });
+                Box::new(move || flags.end())
+            };
+            config.as_ref().and_then(|c| {
+                crate::providers::factory::build_tts_provider(&c.api, &uuid, on_audio, on_turn_end)
+                    .ok()
+            })
+        };
+
         let mut conversation = Vec::new();
         if let Some(cfg) = config.as_ref()
             && let Some(prompt) = cfg.system_prompt.as_ref()
@@ -156,7 +162,9 @@ impl CallActor {
             uuid,
             config,
             conversation: Mutex::new(conversation),
-            tts_session,
+            llm,
+            asr,
+            tts,
             turn_cancel: CancellationToken::new(),
             turn_flags,
             control,
@@ -192,18 +200,9 @@ impl Actor for CallActor {
             let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
             actor_ref.attach_stream(stream, (), ());
         }
-        // Eagerly connect the Volcano WS so the first turn isn't delayed by the
-        // ~3 s handshake. Lazy-retry on `synthesize` if this fails.
-        if let Some(session) = &state.tts_session {
-            if let Err(e) = session.start().await {
-                tracing::warn!(
-                    "CallActor {}: TTS eager connect failed (will lazy-retry): {e}",
-                    state.uuid
-                );
-            } else {
-                tracing::info!("CallActor {}: TTS connected at init", state.uuid);
-            }
-        }
+        // TTS providers are now initialized via factory functions.
+        // Volcano WebSocket TTS will connect lazily on first use.
+        // MIMO HTTP TTS doesn't need eager connection.
         Ok(state)
     }
 
@@ -213,7 +212,7 @@ impl Actor for CallActor {
         reason: ActorStopReason,
     ) -> Result<(), Self::Error> {
         // Kill any in-flight turn, then let actor state drop (which drops
-        // `tts_session` → `SessionInner::Drop` sends WS Shutdown).
+        // `tts` → VolcanoTtsProvider's inner session → WS Shutdown).
         self.turn_cancel.cancel();
         tracing::info!("CallActor stopped for {} ({:?})", self.uuid, reason);
         Ok(())
@@ -244,9 +243,12 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
         // generation bump. A child token would also work, but a fresh token is
         // simpler since the old one is dropped with the previous turn task.
         self.turn_cancel = CancellationToken::new();
-        // Clear any leftover TTS audio from the previous turn before starting
-        // a new one — prevents audio overlap (old turn's TTS tail + new turn's
-        // TTS head mixing in the ringbuf).
+        // Cancel any in-flight TTS from the previous turn + clear the ringbuf.
+        // This prevents audio overlap (old turn's TTS tail + new turn's TTS
+        // head mixing in the ringbuf) without blocking the mailbox.
+        if let Some(tts_provider) = &self.tts {
+            tts_provider.cancel();
+        }
         if let Some(mut st) = crate::io::CALLS.get_mut(&self.uuid) {
             let st = st.value_mut();
             if let Some(cons) = st.tts_cons.as_mut() {
@@ -267,7 +269,9 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
         // Mailbox serialization during LLM still prevents the "each new segment
         // cancels the previous LLM call" storm from VAD splitting an utterance.
         let cancel = self.turn_cancel.clone();
-        let tts = self.tts_session.clone();
+        let llm = self.llm.clone();
+        let asr = self.asr.clone();
+        let tts = self.tts.clone();
         let conv_snapshot = self.conversation.lock().clone();
         let config = self.config.clone();
         let uuid = self.uuid.clone();
@@ -281,6 +285,8 @@ impl Message<StreamMessage<Vec<i16>, (), ()>> for CallActor {
             uuid,
             config,
             conv_snapshot,
+            llm,
+            asr,
             tts,
             audio,
             cancel,
@@ -298,11 +304,9 @@ impl Message<BargeIn> for CallActor {
     async fn handle(&mut self, _msg: BargeIn, _ctx: &mut Context<Self, Self::Reply>) {
         self.turn_cancel.cancel();
         self.turn_flags.end();
-        // Tell the TTS driver to discard the in-flight turn's audio (it keeps
-        // draining the server cleanly until the stream goes idle). Without this
-        // the cancelled turn's late audio would still push into the ringbuf.
-        if let Some(session) = &self.tts_session {
-            session.cancel_current_turn().await;
+        // Tell the TTS provider to cancel any in-flight synthesis
+        if let Some(tts_provider) = &self.tts {
+            tts_provider.cancel();
         }
         if let Some(mut s) = CALLS.get_mut(&self.uuid) {
             s.value_mut().clear_tts();

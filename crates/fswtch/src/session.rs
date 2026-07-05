@@ -97,8 +97,7 @@ impl Session {
         // SAFETY: `self.raw` is a live session; `codec` is a valid codec struct
         // allocated on this session's pool. `set_read_codec` stores the pointer
         // for the session's lifetime (pool-owned, so no dangling on drop).
-        let status =
-            unsafe { sys::switch_core_session_set_read_codec(self.raw.as_ptr(), codec) };
+        let status = unsafe { sys::switch_core_session_set_read_codec(self.raw.as_ptr(), codec) };
         status_to_result(status)
     }
 
@@ -112,8 +111,7 @@ impl Session {
     ) -> Result<()> {
         let codec = self.alloc_codec_on_pool(implementation, rate, ms, channels)?;
         // SAFETY: see `init_read_codec`.
-        let status =
-            unsafe { sys::switch_core_session_set_write_codec(self.raw.as_ptr(), codec) };
+        let status = unsafe { sys::switch_core_session_set_write_codec(self.raw.as_ptr(), codec) };
         status_to_result(status)
     }
 
@@ -149,7 +147,13 @@ impl Session {
         }
         // SAFETY: `codec` is a freshly pool-allocated buffer of the right size;
         // zero it before init (matches bindgen's Default). The pool owns it.
-        unsafe { std::ptr::write_bytes::<u8>(codec.cast::<u8>(), 0, std::mem::size_of::<sys::switch_codec_t>()) };
+        unsafe {
+            std::ptr::write_bytes::<u8>(
+                codec.cast::<u8>(),
+                0,
+                std::mem::size_of::<sys::switch_codec_t>(),
+            )
+        };
         // SAFETY: `codec` is a valid, zeroed, pool-owned `switch_codec_t`;
         // SAFETY: `codec` is a valid, zeroed, pool-owned `switch_codec_t`;
         // `implementation` is a valid C string; `pool` is this session's pool.
@@ -161,9 +165,8 @@ impl Session {
         // "Codec decoder is not initialized" (switch_core_codec.c:815) →
         // INCOMPATIBLE_DESTINATION hangup. This matches how mod_loopback's
         // tech_init initializes its codecs.
-        let codec_flags =
-            sys::switch_codec_flag_enum_t_SWITCH_CODEC_FLAG_ENCODE
-                | sys::switch_codec_flag_enum_t_SWITCH_CODEC_FLAG_DECODE;
+        let codec_flags = sys::switch_codec_flag_enum_t_SWITCH_CODEC_FLAG_ENCODE
+            | sys::switch_codec_flag_enum_t_SWITCH_CODEC_FLAG_DECODE;
         let status = unsafe {
             sys::switch_core_codec_init_with_bitrate(
                 codec.cast::<sys::switch_codec_t>(),

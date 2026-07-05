@@ -1,8 +1,8 @@
-//! AI pipeline (audio-native LLM + Volcano TTS) — free functions driven by
+//! AI pipeline (audio-native LLM + TTS) — free functions driven by
 //! [`crate::actor::CallActor`].
 //!
 //! "AudioLlm" mode (no ASR): caller audio → WAV → base64 → multimodal LLM
-//! message → `speak(text)` tool → Volcano TTS → 16 kHz PCM → SPSC ringbuf
+//! message → `speak(text)` tool → TTS → 16 kHz PCM → SPSC ringbuf
 //! (`on_audio` → `Producer`; `read_frame` → `Consumer`) → caller.
 //!
 //! [`turn_pipeline`] runs as a background task spawned by the CallActor's
@@ -12,6 +12,7 @@
 //! blocked). On completion it sends a `TurnDone` message back to the actor to
 //! persist conversation history.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,8 +25,9 @@ use kameo::actor::ActorRef;
 use crate::actor::{CallActor, TurnDone};
 use crate::audio_dsp::PIPELINE_SAMPLE_RATE;
 use crate::call_core::CallControl;
-use crate::tts::VolcanoBidirectionalSession;
+use crate::providers::{LlmProvider, TtsProvider};
 use crate::voice_core::Config;
+use rig_core::providers::openai;
 
 /// Maximum conversation history entries kept for LLM context.
 pub const MAX_HISTORY: usize = 20;
@@ -60,18 +62,10 @@ pub struct ToolExecutionResult {
     pub reply: String,
     pub asr: Option<String>,
     pub hangup: bool,
+    /// Seconds to wait after TTS before hanging up (LLM-decided, max 15).
+    pub hangup_delay: f64,
     pub dtmf: Option<String>,
     pub transfer: Option<String>,
-}
-
-/// Builds the full chat-completions URL from a configured base URL.
-fn chat_completions_url(base: &str) -> String {
-    let trimmed = base.trim_end_matches('/');
-    if trimmed.ends_with("/chat/completions") {
-        trimmed.to_string()
-    } else {
-        format!("{trimmed}/chat/completions")
-    }
 }
 
 /// Run one speech segment through the full pipeline (LLM → speak tool → TTS).
@@ -85,7 +79,9 @@ pub async fn turn_pipeline(
     uuid: String,
     config: Option<Config>,
     conversation_snapshot: Vec<ChatMessage>,
-    tts_session: Option<VolcanoBidirectionalSession>,
+    llm: Option<crate::doubao_responses::DoubaoResponsesLlm>,
+    asr: Option<openai::TranscriptionModel>,
+    tts: Option<Arc<dyn TtsProvider>>,
     audio: Vec<i16>,
     cancel: CancellationToken,
     turn_flags: crate::actor::TurnFlags,
@@ -99,9 +95,49 @@ pub async fn turn_pipeline(
 
     let t0 = std::time::Instant::now();
 
+    // ── Stage 0: ASR (if pipeline_mode is "asr_llm_tts") ─────────────────
+    let pipeline_mode = config
+        .as_ref()
+        .map(|c| c.api.pipeline_mode.as_str())
+        .unwrap_or("audio_llm");
+    let transcribed_text = if pipeline_mode == "asr_llm_tts" {
+        if let Some(asr_model) = &asr {
+            let t_asr = std::time::Instant::now();
+            let wav = encode_wav(&audio, PIPELINE_SAMPLE_RATE);
+            match transcribe_audio(asr_model, &wav, &uuid).await {
+                Ok(text) => {
+                    tracing::info!(
+                        "LATENCY {uuid}: ASR = {}ms, transcribed: {}",
+                        t_asr.elapsed().as_millis(),
+                        text
+                    );
+                    Some(text)
+                }
+                Err(e) => {
+                    tracing::error!("turn_pipeline {uuid}: ASR failed: {e}");
+                    return;
+                }
+            }
+        } else {
+            tracing::warn!(
+                "turn_pipeline {uuid}: pipeline_mode is asr_llm_tts but no ASR model configured"
+            );
+            return;
+        }
+    } else {
+        None
+    };
+
     // ── Stage 1: perception (audio → multimodal LLM message) ────────────
-    let wav = encode_wav(&audio, PIPELINE_SAMPLE_RATE);
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&wav);
+    // In ASR mode, audio was already encoded for transcription above; skip the
+    // redundant re-encode since transcribed_text is set and the LLM paths
+    // use text-only messages when transcribed_text is Some.
+    let b64 = if transcribed_text.is_none() {
+        let wav = encode_wav(&audio, PIPELINE_SAMPLE_RATE);
+        base64::engine::general_purpose::STANDARD.encode(&wav)
+    } else {
+        String::new() // unused in ASR mode
+    };
     tracing::info!(
         "LATENCY {uuid}: stage1 encode_wav+b64 = {}ms ({} audio samples)",
         t0.elapsed().as_millis(),
@@ -113,67 +149,83 @@ pub async fn turn_pipeline(
         return;
     }
 
-    // ── Stage 2: LLM call ─────────────────────────────────────────────────
-    // Two paths:
-    //  - streaming (llm_stream enabled): SSE text stream → split into sentences
-    //    → per-sentence fire-and-forget TTS (low first-audio latency). NO tools
-    //    (tool-bearing replies need the non-streaming path; the streaming body
-    //    omits `tools`, so the model replies with plain text).
-    //  - non-streaming (default, or streaming disabled): `call_llm_with_tools`
-    //    returns `(tool_calls, inline_text)`; tools are executed in Stage 3.
+    // ── Stage 2: LLM call (Doubao Responses API, streaming + tools) ──────
+    // Single unified streaming path: the Responses API streams text deltas
+    // AND tool call argument deltas simultaneously. Text is dispatched to TTS
+    // per-sentence as it arrives; speak tool call text is extracted
+    // incrementally from the streaming JSON arguments. Tool calls are
+    // collected for Stage 3 side-effects (hangup/dtmf/transfer).
     let t1 = std::time::Instant::now();
-    let use_stream_cfg = match config.as_ref() {
-        Some(c) if c.api.llm_stream && tts_session.is_some() => Some(c),
-        _ => None,
-    };
-    let (tool_calls, reply_from_llm): (Vec<ToolCall>, String) = match use_stream_cfg {
-        Some(cfg) => {
-            // Streaming text path — drives TTS directly; returns the full reply.
-            match stream_llm_and_synthesize(
-                cfg,
-                &conversation_snapshot,
-                &b64,
-                &uuid,
-                tts_session.as_ref(),
-                &cancel,
-                &turn_flags,
-            )
-            .await
-            {
-                Ok(reply) => {
-                    tracing::info!(
-                        "LATENCY {uuid}: stage2 LLM stream = {}ms ({} chars)",
-                        t1.elapsed().as_millis(),
-                        reply.chars().count()
-                    );
-                    (Vec::new(), reply) // no tools on the streaming path
-                }
-                Err(e) => {
-                    tracing::error!("turn_pipeline {uuid}: LLM stream failed: {e}");
-                    return;
+    let (tool_calls, reply_from_llm, tts_already_fired): (Vec<ToolCall>, String, bool) = if llm.is_none() {
+        (Vec::new(), canned_response(&uuid, &conversation_snapshot).1, false)
+    } else {
+        let llm_provider = llm.as_ref().unwrap();
+
+        let system_prompt = config.as_ref()
+            .and_then(|c| c.system_prompt.as_ref().map(|s| s.as_str()));
+
+        // Sentence-boundary splitter + TTS dispatch closure.
+        let tts_ref = tts.as_ref().map(|t| t.clone());
+        let flags_ref = turn_flags.clone();
+        let cancel_ref = cancel.clone();
+        let uuid_ref = uuid.clone();
+        let sentence_buffer = Arc::new(std::sync::Mutex::new(String::new()));
+        let turn_open = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let tts_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let tts_fired_clone = Arc::clone(&tts_fired);
+
+        let mut on_text_delta = move |delta: &str| {
+            let mut buffer = sentence_buffer.lock().unwrap();
+            buffer.push_str(delta);
+            while let Some(boundary) = find_sentence_boundary(&buffer) {
+                let sentence: String = buffer.drain(..boundary).collect();
+                if sentence.trim().is_empty() || cancel_ref.is_cancelled() { continue; }
+                if let Some(ref tts_provider) = tts_ref {
+                    if !turn_open.load(std::sync::atomic::Ordering::Relaxed) {
+                        flags_ref.begin();
+                        turn_open.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    tts_fired.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // Fire-and-forget: spawn TTS so the LLM stream is not blocked.
+                    let tts_clone = tts_provider.clone();
+                    let sentence_clone = sentence;
+                    let flags_clone = flags_ref.clone();
+                    let uuid_clone = uuid_ref.clone();
+                    crate::runtime::spawn(async move {
+                        if let Err(e) = tts_clone.synthesize(&sentence_clone).await {
+                            tracing::warn!("turn_pipeline {uuid_clone}: sentence TTS failed: {e}");
+                            flags_clone.end();
+                        }
+                    });
                 }
             }
-        }
-        _ => {
-            let (tool_calls, inline_text) = match tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    tracing::info!("turn_pipeline {uuid}: cancelled during LLM call");
-                    return;
-                }
-                r = call_llm_with_tools(config.as_ref(), &conversation_snapshot, &b64, &uuid) => r,
-            } {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::error!("turn_pipeline {uuid}: LLM call failed: {e}");
-                    return;
-                }
-            };
-            tracing::info!(
-                "LATENCY {uuid}: stage2 LLM call = {}ms",
-                t1.elapsed().as_millis()
-            );
-            (tool_calls, inline_text)
+        };
+
+        let result = llm_provider.stream_with_tools(
+            &conversation_snapshot,
+            system_prompt,
+            &b64,
+            transcribed_text.as_deref(),
+            &cancel,
+            &mut on_text_delta,
+        ).await;
+
+        match result {
+            Ok((tc, reply)) => {
+                let fired = tts_fired_clone.load(std::sync::atomic::Ordering::Relaxed);
+                tracing::info!(
+                    "LATENCY {uuid}: stage2 LLM stream = {}ms ({} chars, {} tool calls, tts_fired={})",
+                    t1.elapsed().as_millis(),
+                    reply.chars().count(),
+                    tc.len(),
+                    fired,
+                );
+                (tc, reply, fired)
+            }
+            Err(e) => {
+                tracing::error!("turn_pipeline {uuid}: LLM stream failed: {e}");
+                return;
+            }
         }
     };
 
@@ -214,6 +266,22 @@ pub async fn turn_pipeline(
                         s
                     }));
                 }
+                // speak tool can request hangup after speaking
+                if extract_bool_arg(&tc.arguments, "hangup").unwrap_or(false) {
+                    result.hangup = true;
+                    // LLM must fill hangup_delay. If missing, estimate from text length.
+                    let delay = extract_number_arg(&tc.arguments, "hangup_delay")
+                        .unwrap_or_else(|| {
+                            let chars = extract_string_arg(&tc.arguments, "text")
+                                .map(|t| t.chars().count() as f64)
+                                .unwrap_or(20.0);
+                            tracing::warn!("turn_pipeline: hangup=true but no hangup_delay, estimating {chars} chars * 0.15s");
+                            (chars * 0.15).max(1.0)
+                        })
+                        .min(15.0)
+                        .max(0.5);
+                    result.hangup_delay = delay;
+                }
             }
             "hangup" => result.hangup = true,
             "send_dtmf" => {
@@ -234,6 +302,7 @@ pub async fn turn_pipeline(
         reply,
         asr,
         hangup,
+        hangup_delay,
         dtmf,
         transfer,
     } = result;
@@ -242,29 +311,37 @@ pub async fn turn_pipeline(
         t0.elapsed().as_millis()
     );
 
-    // Synthesize the reply (if any) — cancellable. On the streaming path TTS
-    // already fired per-sentence inside `stream_llm_and_synthesize`, so skip the
-    // whole-reply synthesis here (it would double-play).
-    if use_stream_cfg.is_none()
-        && !reply.is_empty()
-        && !cancel.is_cancelled()
-        && let Some(session) = tts_session.as_ref()
-    {
-        let t_tts = std::time::Instant::now();
-        synthesize_and_play(session, &uuid, &reply, &cancel, &turn_flags).await;
-        tracing::info!(
-            "LATENCY {uuid}: TTS synthesize (total) = {}ms",
-            t_tts.elapsed().as_millis()
-        );
+    // Synthesize the reply (if any) — cancellable.
+    // Skip if the streaming path already TTS'd the text (via on_text_delta
+    // callback) — re-synthesizing would double-play.
+    if !reply.is_empty() && !cancel.is_cancelled() && !tts_already_fired {
+        if let Some(tts_provider) = tts.as_ref() {
+            let t_tts = std::time::Instant::now();
+            synthesize_and_play(tts_provider, &uuid, &reply, &cancel, &turn_flags).await;
+            tracing::info!(
+                "LATENCY {uuid}: TTS synthesize (total) = {}ms",
+                t_tts.elapsed().as_millis()
+            );
+        }
     }
 
-    // Call-control side effects. Under fire-and-forget, `synthesize` returned
-    // before the audio played — let any in-flight TTS finish first so the
-    // goodbye reaches the caller before media tears down (hangup/transfer) and
-    // so DTMF doesn't mix with TTS audio. `wait_until_silent` is a no-op if
-    // nothing is speaking.
+    // Do NOT wait_until_silent here — it blocks the actor mailbox, preventing
+    // barge-in. Instead, the actor's StreamMessage::Next handler cancels TTS
+    // + clears the ringbuf at the start of the next turn. This keeps the
+    // mailbox free for BargeIn messages during TTS playback.
+
+    // Call-control side effects. For hangup, wait the LLM-decided delay
+    // (hangup_delay seconds, capped at 15) after TTS fires — gives audio
+    // time to play before media tears down. Cancellable by barge-in.
     if hangup || dtmf.is_some() || transfer.is_some() {
-        wait_until_silent(&turn_flags.turn_pending, &cancel).await;
+        if hangup && hangup_delay > 0.0 {
+            tracing::info!("turn_pipeline {uuid}: waiting {hangup_delay}s before hangup");
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs_f64(hangup_delay)) => {}
+            }
+        }
         if let Some(digits) = &dtmf
             && let Err(e) = control.send_dtmf(&uuid, digits)
         {
@@ -306,21 +383,10 @@ pub async fn turn_pipeline(
         .await;
 }
 
-/// Synthesize `text` via the Volcano session. Cancellable.
-///
-/// PCM is **not** forwarded here: the TTS driver loop (inside the Volcano
-/// session) owns the ringbuf `Producer` via the `on_audio` callback installed
-/// in [`crate::actor::init_call`], and pushes 8 kHz i16 PCM directly into the
-/// SPSC ringbuf that `read_frame` drains.
-///
-/// Fire-and-forget: `synthesize_sentence` sends `task_request` and returns
-/// immediately — it does NOT wait for the audio to play (call-lifetime Volcano
-/// session, one `task_request` per turn; `finish_session` only at call end).
-/// The turn flags stay `begin()`-ed here; the driver clears them via
-/// `on_turn_end` once the audio stream goes idle. Media teardown (hangup/
-/// transfer) bridges the gap with [`wait_until_silent`].
+/// Synthesize `text` via the TTS provider. Blocks until the audio is ready.
+/// Cancellable.
 async fn synthesize_and_play(
-    session: &VolcanoBidirectionalSession,
+    tts: &Arc<dyn TtsProvider>,
     uuid: &str,
     text: &str,
     cancel: &CancellationToken,
@@ -328,21 +394,21 @@ async fn synthesize_and_play(
 ) {
     turn_flags.begin();
 
-    let synth_cancel = cancel.clone();
-    match session.synthesize_sentence(text, synth_cancel, false).await {
-        Ok(true) => {
+    match tts.synthesize(text).await {
+        Ok(_audio_bytes) => {
+            if cancel.is_cancelled() {
+                tracing::info!("turn_pipeline {uuid}: TTS synthesize cancelled after fire");
+                turn_flags.end();
+                return;
+            }
+            // Fire-and-forget: TTS request is on the wire. Audio arrives
+            // asynchronously via the driver's on_audio callback (→ ringbuf).
+            // turn_flags are cleared by on_turn_end when the stream goes idle.
             tracing::info!("turn_pipeline {uuid}: TTS synthesize fired");
-        }
-        Ok(false) => {
-            // Cancelled before the task_request was sent — no audio will play,
-            // so no `on_turn_end` will fire. Clear the flags ourselves.
-            tracing::info!("turn_pipeline {uuid}: TTS synthesize cancelled before fire");
-            turn_flags.end();
         }
         Err(e) => {
             tracing::error!("turn_pipeline {uuid}: TTS synthesize failed: {e}");
-            // Clear on error so a later `wait_until_silent` doesn't hang waiting
-            // for audio that will never arrive.
+            // Clear on error so wait_until_silent doesn't hang.
             turn_flags.end();
         }
     }
@@ -367,19 +433,6 @@ async fn wait_until_silent(turn_pending: &AtomicBool, cancel: &CancellationToken
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-}
-
-/// Shared HTTP client for LLM calls. Reused across turns so the TLS
-/// connector + connection pool (keep-alive to the same LLM endpoint) are
-/// amortized instead of rebuilt per speech segment (~50-100ms setup each).
-static LLM_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-fn llm_client() -> &'static reqwest::Client {
-    LLM_CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new())
-    })
 }
 
 /// Return the byte index just past the first sentence boundary in `text`, or
@@ -426,278 +479,201 @@ fn find_sentence_boundary(text: &str) -> Option<usize> {
 ///
 /// `turn_pending` + `tts_audio_active` are set true at the first sentence and
 /// cleared by the driver's `on_turn_end` when the final stream goes idle.
+/// Stream the LLM reply via rig's `CompletionModel::stream()` and fire TTS
+/// per sentence as text deltas arrive. Collects any tool calls emitted by the
+/// model (rig reassembles the streaming tool-call deltas into complete
+/// `ToolCall` events for us).
+///
+/// Uses rig (not raw HTTP) so that:
+///  - audio input serializes correctly (`input_audio`) via the OpenRouter
+///    provider,
+///  - streaming tool-call deltas are reassembled into complete `ToolCall`s,
+///  - the `tools` field IS sent (unlike the old raw-HTTP path), so the model
+///    can emit `speak`/`hangup`/`send_dtmf`/`transfer` on the streaming path.
+///
+/// Returns `(tool_calls, full_reply)`.
 async fn stream_llm_and_synthesize(
+    config: &Config,
+    llm: &Option<Arc<dyn LlmProvider>>,
+    messages: &[ChatMessage],
+    live_audio_b64: &str,
+    transcribed_text: Option<&str>,
+    uuid: &str,
+    tts: Option<&Arc<dyn TtsProvider>>,
+    cancel: &CancellationToken,
+    turn_flags: &crate::actor::TurnFlags,
+) -> Result<(Vec<ToolCall>, String)> {
+    let Some(provider) = llm.as_ref() else {
+        return Ok(canned_response(uuid, messages));
+    };
+
+    // Use DoubaoResponsesLlm's stream_with_tools which handles SSE parsing,
+    // tool call delta reassembly, and incremental speak text extraction.
+    let doubao = provider.as_any().downcast_ref::<crate::doubao_responses::DoubaoResponsesLlm>();
+    let Some(doubao) = doubao else {
+        anyhow::bail!("streaming path requires DoubaoResponsesLlm provider");
+    };
+
+    let system_prompt = config.system_prompt.as_deref();
+    let tts_ref = tts.cloned();
+    let flags_ref = turn_flags.clone();
+    let cancel_ref = cancel.clone();
+    let uuid_ref = uuid.to_string();
+    let sentence_buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let turn_open = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let t0 = std::time::Instant::now();
+    let mut first_token_seen = false;
+
+    let sb = sentence_buffer.clone();
+    let to = turn_open.clone();
+    let result = doubao.stream_with_tools(
+        messages,
+        system_prompt,
+        live_audio_b64,
+        transcribed_text,
+        cancel,
+        &mut move |delta: &str| {
+            let mut buf = sb.lock().unwrap();
+            buf.push_str(delta);
+            while let Some(boundary) = find_sentence_boundary(&buf) {
+                let sentence: String = buf.drain(..boundary).collect();
+                if sentence.trim().is_empty() || cancel_ref.is_cancelled() { continue; }
+                if let Some(ref tts_provider) = tts_ref {
+                    if !to.load(std::sync::atomic::Ordering::Relaxed) {
+                        flags_ref.begin();
+                        to.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    let tts_clone = tts_provider.clone();
+                    let sentence_clone = sentence;
+                    let flags_clone = flags_ref.clone();
+                    let uuid_clone = uuid_ref.clone();
+                    crate::runtime::spawn(async move {
+                        if let Err(e) = tts_clone.synthesize(&sentence_clone).await {
+                            tracing::warn!("turn_pipeline {uuid_clone}: sentence TTS failed: {e}");
+                            flags_clone.end();
+                        }
+                    });
+                }
+            }
+        },
+    ).await;
+
+    match result {
+        Ok((tool_calls, reply)) => {
+            tracing::info!(
+                "LATENCY {uuid}: stage2 LLM stream = {}ms ({} chars, {} tool calls)",
+                t0.elapsed().as_millis(),
+                reply.chars().count(),
+                tool_calls.len()
+            );
+            Ok((tool_calls, reply))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Build rig `Message` vector from our `ChatMessage` history + the current
+/// turn's user input (audio or transcribed text). Shared by the streaming and
+/// non-streaming LLM paths so message format stays in sync.
+fn build_rig_messages(
+    messages: &[ChatMessage],
+    live_audio_b64: &str,
+    transcribed_text: Option<&str>,
+) -> Result<Vec<rig_core::completion::Message>> {
+    use rig_core::OneOrMany;
+    use rig_core::completion::Message;
+    use rig_core::message::{AssistantContent, UserContent};
+
+    let mut rig_messages: Vec<Message> = messages
+        .iter()
+        .map(|m| {
+            if m.role == "system" {
+                Message::System {
+                    content: m.content.clone(),
+                }
+            } else if m.role == "assistant" {
+                Message::Assistant {
+                    id: None,
+                    content: OneOrMany::one(AssistantContent::text(&m.content)),
+                }
+            } else {
+                Message::User {
+                    content: OneOrMany::one(UserContent::text(&m.content)),
+                }
+            }
+        })
+        .collect();
+
+    // Add the user input message (audio or text based on pipeline mode)
+    if let Some(text) = transcribed_text {
+        rig_messages.push(Message::User {
+            content: OneOrMany::one(UserContent::text(text)),
+        });
+    } else {
+        rig_messages.push(Message::User {
+            content: OneOrMany::many(vec![
+                UserContent::audio(live_audio_b64, Some(rig_core::message::AudioMediaType::WAV)),
+                UserContent::text("请识别并回复这段语音内容"),
+            ])
+            .map_err(|e| anyhow::anyhow!("Failed to create audio message: {}", e))?,
+        });
+    }
+
+    Ok(rig_messages)
+}
+
+/// Build a rig `CompletionRequest` from config + messages. Shared by the
+/// streaming and non-streaming LLM paths.
+fn build_completion_request(
     config: &Config,
     messages: &[ChatMessage],
     live_audio_b64: &str,
-    uuid: &str,
-    tts_session: Option<&VolcanoBidirectionalSession>,
-    cancel: &CancellationToken,
-    turn_flags: &crate::actor::TurnFlags,
-) -> Result<String> {
-    use futures::StreamExt;
+    transcribed_text: Option<&str>,
+) -> Result<rig_core::completion::CompletionRequest> {
+    use rig_core::OneOrMany;
 
-    // Build the streaming request: same multimodal messages, but text-only
-    // (no tools — the non-streaming probe already decided tools weren't used)
-    // and `stream: true`.
-    let messages_json = build_llm_messages(messages, live_audio_b64);
-    let mut body = serde_json::json!({
-        "model": config.api.llm_model,
-        "messages": messages_json,
-        "stream": true,
-    });
-    apply_optional_body_fields(&mut body, config);
-
-    let url = chat_completions_url(&config.api.llm_url);
-    let send_result = tokio::select! {
-        biased;
-        _ = cancel.cancelled() => return Ok(String::new()),
-        r = llm_client()
-            .post(&url)
-            .bearer_auth(&config.api.llm_key)
-            .json(&body)
-            .send() => r,
-    };
-    let resp = send_result.context("LLM stream request failed")?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("LLM stream HTTP {status}: {text}");
-    }
-
-    let mut stream = resp.bytes_stream();
-    let mut buffer = String::new();
-    let mut sentence_buffer = String::new();
-    let mut full_reply = String::new();
-    let mut turn_open = false;
-    let t_first_token = std::time::Instant::now();
-    let mut first_token_seen = false;
-
-    loop {
-        let chunk = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => break,
-            c = stream.next() => c,
-        };
-        let bytes = match chunk {
-            Some(c) => c?,
-            None => break,
-        };
-        buffer.push_str(std::str::from_utf8(&bytes).unwrap_or(""));
-        // Normalize CRLF → LF in place (SSE spec uses `\r\n`; stripping `\r`
-        // makes `\n\n` reliably delimit events). Cheaper than `replace` (no
-        // full-buffer realloc).
-        if buffer.contains('\r') {
-            buffer.retain(|c| c != '\r');
-        }
-        // Process every complete SSE event (`\n\n`-delimited).
-        while let Some(pos) = buffer.find("\n\n") {
-            // Drain the event block + the `\n\n` separator in place (no copies).
-            let event_block: String = buffer.drain(..pos).collect();
-            buffer.drain(..2);
-            // Concatenate `data:` lines (SSE spec).
-            let mut assembled = String::new();
-            for raw in event_block.lines() {
-                let line = raw.trim();
-                if line.is_empty() || line.starts_with(':') {
-                    continue;
-                }
-                if let Some(d) = line.strip_prefix("data: ") {
-                    if !assembled.is_empty() {
-                        assembled.push('\n');
-                    }
-                    assembled.push_str(d);
-                }
-            }
-            if assembled.is_empty() {
-                continue;
-            }
-            if assembled == "[DONE]" {
-                buffer.clear();
-                break;
-            }
-            let parsed: serde_json::Value = match serde_json::from_str(&assembled) {
-                Ok(v) => v,
-                Err(_) => continue, // skip keep-alive / unparseable
-            };
-            let choices = match parsed["choices"].as_array() {
-                Some(c) => c,
-                None => continue,
-            };
-            for choice in choices {
-                if let Some(content) = choice["delta"]["content"].as_str() {
-                    if !first_token_seen {
-                        first_token_seen = true;
-                        tracing::info!(
-                            "LATENCY {uuid}: LLM first token = {}ms",
-                            t_first_token.elapsed().as_millis()
-                        );
-                    }
-                    full_reply.push_str(content);
-                    sentence_buffer.push_str(content);
-                    // Dispatch every complete sentence as soon as it forms.
-                    while let Some(boundary) = find_sentence_boundary(&sentence_buffer) {
-                        // Split one sentence off the buffer in place (one alloc
-                        // for the sentence, none for the remainder).
-                        let sentence: String = sentence_buffer.drain(..boundary).collect();
-                        if sentence.trim().is_empty() || cancel.is_cancelled() {
-                            continue;
-                        }
-                        if let Some(session) = tts_session {
-                            if !turn_open {
-                                turn_flags.begin();
-                            }
-                            match session
-                                .synthesize_sentence(&sentence, cancel.clone(), turn_open)
-                                .await
-                            {
-                                Ok(true) => {
-                                    turn_open = true;
-                                }
-                                Ok(false) => {
-                                    // Cancelled before the task_request was sent —
-                                    // no audio will play, so no `on_turn_end` will
-                                    // fire. If this was the turn-opener, undo the
-                                    // `begin()`; on a continuation sentence the
-                                    // earlier sentence's task will retire via its
-                                    // own idle timer, so leave it.
-                                    if !turn_open {
-                                        turn_flags.end();
-                                    }
-                                    // Stop dispatching — the turn is cancelled.
-                                    break;
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "turn_pipeline {uuid}: sentence TTS send failed: {e}"
-                                    );
-                                    if !turn_open {
-                                        // Turn-opener failed before any audio: undo
-                                        // `begin()` (no on_turn_end will fire for a
-                                        // task that was never installed / never sent).
-                                        turn_flags.end();
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Flush the trailing fragment (no terminal punctuation) as a final sentence.
-    let tail = sentence_buffer.trim();
-    if !tail.is_empty()
-        && !cancel.is_cancelled()
-        && let Some(session) = tts_session
-    {
-        if !turn_open {
-            turn_flags.begin();
-        }
-        match session.synthesize_sentence(tail, cancel.clone(), turn_open).await {
-            Ok(true) => {}
-            // On cancel/error, mirror the in-loop handling: undo begin() if this
-            // was the turn-opener (no on_turn_end will fire), then stop.
-            Ok(false) | Err(_) => {
-                if !turn_open {
-                    turn_flags.end();
-                }
-            }
-        }
-    }
-
-    // If the stream produced no text at all (and wasn't cancelled), the server
-    // likely returned a non-SSE body (some endpoints ignore `stream:true` and
-    // reply with a single JSON object). The SSE parser never found a `\n\n`
-    // event boundary, so `full_reply` is empty. Surface this as an error so the
-    // caller falls back / logs rather than silently producing no TTS.
-    if full_reply.is_empty()
-        && !cancel.is_cancelled()
-        && !buffer.is_empty()
-    {
-        tracing::warn!(
-            "LLM stream {uuid}: no SSE events parsed (non-SSE response? trailing buffer: {:?})",
-            &buffer
-        );
-        anyhow::bail!("LLM stream produced no SSE events (non-SSE response?)");
-    }
-
-    Ok(full_reply)
-}
-
-/// Build the `messages` array: prior conversation + a multimodal user turn
-/// carrying the live caller audio as WAV base64. Shared by the streaming and
-/// non-streaming LLM paths so the multimodal message format stays in sync.
-fn build_llm_messages(messages: &[ChatMessage], live_audio_b64: &str) -> Vec<serde_json::Value> {
-    let mut messages_json: Vec<serde_json::Value> = messages
-        .iter()
-        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
-        .collect();
-    messages_json.push(serde_json::json!({
-        "role": "user",
-        "content": [
-            { "type": "input_audio", "input_audio": { "data": live_audio_b64, "format": "wav" } },
-            { "type": "text", "text": "请识别并回复这段语音内容" },
-        ],
-    }));
-    messages_json
-}
-
-/// Apply optional `temperature` + `max_tokens` fields from config to an LLM
-/// request body (shared by the streaming and non-streaming paths).
-fn apply_optional_body_fields(body: &mut serde_json::Value, cfg: &Config) {
-    if let Some(t) = cfg.api.llm_temperature {
-        body["temperature"] = serde_json::json!(t);
-    }
-    if let Some(m) = cfg.api.llm_max_tokens {
-        body["max_tokens"] = serde_json::json!(m);
-    }
+    let rig_messages = build_rig_messages(messages, live_audio_b64, transcribed_text)?;
+    Ok(rig_core::completion::CompletionRequest {
+        model: None,
+        preamble: None,
+        chat_history: OneOrMany::many(rig_messages)
+            .map_err(|e| anyhow::anyhow!("Failed to create chat history: {}", e))?,
+        documents: vec![],
+        tools: tool_definitions_rig(),
+        temperature: config.api.llm_temperature.map(|t| t as f64),
+        max_tokens: config.api.llm_max_tokens.map(|m| m as u64),
+        tool_choice: None,
+        additional_params: None,
+        output_schema: None,
+    })
 }
 
 /// Call the LLM (OpenAI-compatible chat/completions) with conversation +
-/// tool definitions + live audio as multimodal `input_audio`.
+/// tool definitions + live audio as multimodal `input_audio` OR transcribed text.
+///
+/// Uses rig's OpenRouter provider (not OpenAI's) because rig's OpenAI Chat
+/// Completions provider serializes `UserContent::Audio` with `type:"audio"`,
+/// which violates the OpenAI wire spec (`type:"input_audio"`) and is rejected
+/// by Volcano (Doubao) with HTTP 400. The OpenRouter provider names the
+/// variant `InputAudio`, which serializes correctly, and still targets
+/// `/chat/completions`.
 async fn call_llm_with_tools(
-    config: Option<&Config>,
+    llm: Option<&Arc<dyn LlmProvider>>,
     messages: &[ChatMessage],
     live_audio_b64: &str,
     uuid: &str,
 ) -> Result<(Vec<ToolCall>, String)> {
-    let Some(cfg) = config else {
+    let Some(provider) = llm else {
         return Ok(canned_response(uuid, messages));
     };
-    if cfg.api.llm_url.is_empty() || cfg.api.llm_key.is_empty() {
-        return Ok(canned_response(uuid, messages));
-    }
 
-    let messages_json = build_llm_messages(messages, live_audio_b64);
-
-    let mut body = serde_json::json!({
-        "model": cfg.api.llm_model,
-        "messages": messages_json,
-        "tools": tool_definitions(),
-        "tool_choice": "auto",
-    });
-    apply_optional_body_fields(&mut body, cfg);
-    tracing::debug!("LLM request body ({uuid}): {body}");
-
-    let url = chat_completions_url(&cfg.api.llm_url);
-    let resp = llm_client()
-        .post(&url)
-        .bearer_auth(&cfg.api.llm_key)
-        .json(&body)
-        .send()
-        .await
-        .context("LLM HTTP request failed")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("LLM HTTP {status}: {text}");
-    }
-    let json: serde_json::Value = resp.json().await.context("LLM JSON parse failed")?;
-    parse_llm_response(&json)
+    // Convert ChatMessage to serde_json::Value for the LlmProvider trait.
+    let messages_json: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
+        .collect();
+    let result = provider.completion(messages_json, live_audio_b64, None, uuid).await?;
+    Ok((result.0, result.1))
 }
 
 /// Canned fallback when no LLM backend is configured / the HTTP call fails.
@@ -736,77 +712,247 @@ fn encode_wav(audio: &[i16], sample_rate: u32) -> Vec<u8> {
     wav
 }
 
-fn tool_definitions() -> serde_json::Value {
-    serde_json::json!([
-        { "type": "function", "function": {
-            "name": "speak",
-            "description": "Speak the given text to the caller. Use this for ALL verbal replies.",
-            "parameters": { "type": "object", "properties": {
-                "text": { "type": "string", "description": "The text to synthesize and speak." },
-                "asr":  { "type": "string", "description": "Optional: your transcript of what the user said." }
-            }, "required": ["text"] }
-        } },
-        { "type": "function", "function": {
-            "name": "hangup", "description": "Hang up the call.",
-            "parameters": { "type": "object", "properties": {} }
-        } },
-        { "type": "function", "function": {
-            "name": "send_dtmf", "description": "Send DTMF digits on the call.",
-            "parameters": { "type": "object", "properties": {
-                "digits": { "type": "string", "description": "DTMF digits (0-9, *, #)." }
-            }, "required": ["digits"] }
-        } },
-        { "type": "function", "function": {
-            "name": "transfer", "description": "Transfer the call to a new destination.",
-            "parameters": { "type": "object", "properties": {
-                "destination": { "type": "string", "description": "Transfer destination." }
-            }, "required": ["destination"] }
-        } }
-    ])
-}
-
-fn parse_llm_response(json: &serde_json::Value) -> Result<(Vec<ToolCall>, String)> {
-    let choice = json
-        .get("choices")
-        .and_then(|c| c.get(0))
-        .and_then(|c| c.get("message"))
-        .ok_or_else(|| anyhow::anyhow!("LLM response missing choices[0].message"))?;
-    let inline_text = choice
-        .get("content")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let mut tool_calls = Vec::new();
-    if let Some(arr) = choice.get("tool_calls").and_then(|v| v.as_array()) {
-        for tc in arr {
-            let name = tc
-                .get("function")
-                .and_then(|f| f.get("name"))
-                .and_then(|n| n.as_str())
-                .unwrap_or("")
-                .to_string();
-            let arguments = tc
-                .get("function")
-                .and_then(|f| f.get("arguments"))
-                .and_then(|a| a.as_str())
-                .unwrap_or("{}")
-                .to_string();
-            if !name.is_empty() {
-                tool_calls.push(ToolCall { name, arguments });
-            }
-        }
-    }
-    Ok((tool_calls, inline_text))
-}
-
 fn extract_string_arg(arguments_json: &str, field: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(arguments_json).ok()?;
     v.get(field)?.as_str().map(|s| s.to_string())
 }
 
+fn extract_bool_arg(arguments_json: &str, field: &str) -> Option<bool> {
+    let v: serde_json::Value = serde_json::from_str(arguments_json).ok()?;
+    match v.get(field)? {
+        serde_json::Value::Bool(b) => Some(*b),
+        serde_json::Value::String(s) => Some(matches!(s.to_lowercase().as_str(), "true" | "1" | "yes")),
+        _ => None,
+    }
+}
+
+fn extract_number_arg(arguments_json: &str, field: &str) -> Option<f64> {
+    let v: serde_json::Value = serde_json::from_str(arguments_json).ok()?;
+    match v.get(field)? {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Extract the partial `"text"` value from an incomplete JSON arguments
+/// string being built up across `ToolCallDelta` events.
+///
+/// This does NOT parse JSON. It scans the accumulated string for the first
+/// occurrence of `"text"` (the key), then the `:` and opening `"` that follow,
+/// and returns everything after that opening quote up to — but not including —
+/// the closing quote (or, while the string is still incomplete, everything
+/// available). Handles `\"` and `\\` escapes inside the value so a delta that
+/// lands mid-escape doesn't corrupt extraction.
+///
+/// Examples:
+///   `{"text":"你好世`        → `你好世`
+///   `{"text":"hello","asr":` → `hello`
+///   `{"text":"a\"b`          → `a"b`
+///   `{"other":1,"text":"x`   → `x`
+///   `{"text":"done"}`        → `done`
+fn extract_partial_text_from_json(accumulated: &str) -> Option<String> {
+    // Find the first `"text"` key. We search for the literal `"text"` (with
+    // surrounding quotes) to avoid matching a substring of a longer key.
+    let key = "\"text\"";
+    let key_idx = accumulated.find(key)?;
+    let after_key = &accumulated[key_idx + key.len()..];
+
+    // Skip whitespace, then expect ':', then whitespace, then opening '"'.
+    let mut chars = after_key.char_indices();
+    let mut colon_seen = false;
+    let mut quote_idx: Option<usize> = None;
+    while let Some((i, ch)) = chars.next() {
+        if !colon_seen {
+            if ch.is_whitespace() {
+                continue;
+            }
+            if ch == ':' {
+                colon_seen = true;
+                continue;
+            }
+            // Malformed — key not followed by ':'.
+            return None;
+        }
+        // colon_seen
+        if ch.is_whitespace() {
+            continue;
+        }
+        if ch == '"' {
+            // Opening quote of the value. `i` is the byte offset within
+            // `after_key`; the value starts at i+1.
+            quote_idx = Some(i + 1);
+        }
+        break;
+    }
+    let start = quote_idx?;
+    let value = &after_key[start..];
+
+    // Walk the value, stopping at the unescaped closing quote. While the
+    // stream is incomplete there is no closing quote, so we return everything
+    // accumulated so far.
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('/') => out.push('/'),
+                Some('b') => out.push('\u{0008}'),
+                Some('f') => out.push('\u{000C}'),
+                Some('u') => {
+                    // \uXXXX — best effort: take the 4 hex digits if present.
+                    let mut hex = String::with_capacity(4);
+                    for _ in 0..4 {
+                        if let Some(h) = chars.next() {
+                            hex.push(h);
+                        }
+                    }
+                    if let Ok(code) = u32::from_str_radix(&hex, 16)
+                        && let Some(c) = char::from_u32(code)
+                    {
+                        out.push(c);
+                    }
+                }
+                Some(other) => {
+                    // Unknown escape — keep the char literally.
+                    out.push(other);
+                }
+                None => break, // delta ended mid-escape
+            }
+            continue;
+        }
+        if ch == '"' {
+            // Unescaped closing quote — value complete.
+            break;
+        }
+        out.push(ch);
+    }
+    Some(out)
+}
+
+/// Convert rig's tool definitions to our format
+fn tool_definitions_rig() -> Vec<rig_core::completion::request::ToolDefinition> {
+    use rig_core::completion::request::ToolDefinition;
+    vec![
+        ToolDefinition {
+            name: "speak".to_string(),
+            description: "Speak the given text to the caller. Use this for ALL verbal replies."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The text to synthesize and speak."
+                    },
+                    "asr": {
+                        "type": "string",
+                        "description": "Optional: your transcript of what the user said."
+                    }
+                },
+                "required": ["text"]
+            }),
+        },
+        ToolDefinition {
+            name: "hangup".to_string(),
+            description: "Hang up the call.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        ToolDefinition {
+            name: "send_dtmf".to_string(),
+            description: "Send DTMF digits on the call.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "digits": {
+                        "type": "string",
+                        "description": "DTMF digits (0-9, *, #)."
+                    }
+                },
+                "required": ["digits"]
+            }),
+        },
+        ToolDefinition {
+            name: "transfer".to_string(),
+            description: "Transfer the call to a new destination.".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "destination": {
+                        "type": "string",
+                        "description": "Transfer destination."
+                    }
+                },
+                "required": ["destination"]
+            }),
+        },
+    ]
+}
+
+/// Parse rig's completion response into our format
+fn parse_rig_response<T>(
+    response: &rig_core::completion::CompletionResponse<T>,
+) -> Result<(Vec<ToolCall>, String)> {
+    use rig_core::completion::AssistantContent;
+
+    let mut inline_text = String::new();
+    let mut tool_calls = Vec::new();
+
+    for content in response.choice.iter() {
+        match content {
+            AssistantContent::Text(text) => {
+                inline_text.push_str(&text.text);
+            }
+            AssistantContent::ToolCall(tc) => {
+                tool_calls.push(ToolCall {
+                    name: tc.function.name.clone(),
+                    arguments: tc.function.arguments.to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok((tool_calls, inline_text))
+}
+
+/// Transcribe audio using the ASR model
+async fn transcribe_audio(
+    asr_model: &openai::TranscriptionModel,
+    wav_bytes: &[u8],
+    uuid: &str,
+) -> Result<String> {
+    use rig_core::transcription::TranscriptionModel;
+
+    let request = rig_core::transcription::TranscriptionRequest {
+        data: wav_bytes.to_vec(),
+        filename: "audio.wav".to_string(),
+        language: Some("zh".to_string()),
+        prompt: None,
+        temperature: None,
+        additional_params: None,
+    };
+
+    let response = asr_model
+        .transcription(request)
+        .await
+        .context("ASR transcription failed")?;
+
+    tracing::debug!("turn_pipeline {uuid}: ASR response: {}", response.text);
+    Ok(response.text)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::find_sentence_boundary;
+    use super::{extract_partial_text_from_json, find_sentence_boundary};
 
     #[test]
     fn no_boundary_returns_none() {
@@ -824,7 +970,10 @@ mod tests {
 
     #[test]
     fn newline_is_boundary() {
-        assert_eq!(find_sentence_boundary("第一行\n第二行"), Some("第一行\n".len()));
+        assert_eq!(
+            find_sentence_boundary("第一行\n第二行"),
+            Some("第一行\n".len())
+        );
     }
 
     #[test]
@@ -847,5 +996,123 @@ mod tests {
         let s = "你好。世界！";
         let idx = find_sentence_boundary(s).unwrap();
         assert_eq!(&s[..idx], "你好。");
+    }
+
+    // ── extract_partial_text_from_json ──────────────────────────────────
+
+    #[test]
+    fn partial_text_incomplete_value() {
+        // Stream cut mid-value (no closing quote yet).
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":\"你好世"),
+            Some("你好世".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_text_complete_value() {
+        // Closing quote present → value complete.
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":\"hello\"}"),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_text_with_trailing_fields() {
+        // `text` followed by more fields — only `text`'s value is returned.
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":\"你好\",\"asr\":\"喂\"}"),
+            Some("你好".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_text_after_other_key() {
+        // `text` is not the first key.
+        assert_eq!(
+            extract_partial_text_from_json("{\"asr\":\"喂\",\"text\":\"你好"),
+            Some("你好".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_text_handles_escapes() {
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":\"a\\\"b"),
+            Some("a\"b".to_string())
+        );
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":\"line1\\nline2"),
+            Some("line1\nline2".to_string())
+        );
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":\"back\\\\slash"),
+            Some("back\\slash".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_text_unicode_escape() {
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":\"\\u4f60\\u597d"),
+            Some("你好".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_text_no_text_key() {
+        assert_eq!(extract_partial_text_from_json("{\"asr\":\"喂\"}"), None);
+        assert_eq!(extract_partial_text_from_json(""), None);
+    }
+
+    #[test]
+    fn partial_text_key_not_substring_of_longer_key() {
+        // `"text"` must not match inside `"textarea"` or `"context"`.
+        assert_eq!(
+            extract_partial_text_from_json("{\"textarea\":\"x\",\"text\":\"actual"),
+            Some("actual".to_string())
+        );
+    }
+
+    #[test]
+    fn partial_text_incomplete_key_or_colon() {
+        // Key present but colon/quote not yet arrived.
+        assert_eq!(extract_partial_text_from_json("{\"text\""), None);
+        assert_eq!(extract_partial_text_from_json("{\"text\":"), None);
+        assert_eq!(extract_partial_text_from_json("{\"text\": "), None);
+        // Opening quote not yet arrived.
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":"),
+            None
+        );
+    }
+
+    #[test]
+    fn partial_text_empty_value() {
+        // Opening quote present, nothing after.
+        assert_eq!(
+            extract_partial_text_from_json("{\"text\":\""),
+            Some(String::new())
+        );
+    }
+
+    #[test]
+    fn partial_text_incremental_growth() {
+        // Simulate deltas accumulating: each call returns the value known so
+        // far. The stream loop computes the new suffix by stripping the
+        // previous return value as a prefix.
+        let acc1 = "{\"text\":\"你好";
+        let acc2 = "{\"text\":\"你好世界";
+        let acc3 = "{\"text\":\"你好世界。";
+        let p1 = extract_partial_text_from_json(acc1).unwrap();
+        let p2 = extract_partial_text_from_json(acc2).unwrap();
+        let p3 = extract_partial_text_from_json(acc3).unwrap();
+        assert_eq!(p1, "你好");
+        assert_eq!(p2, "你好世界");
+        assert_eq!(p3, "你好世界。");
+        // New-suffix computation the stream loop performs:
+        assert_eq!(p2.strip_prefix(&p1).unwrap(), "世界");
+        assert_eq!(p3.strip_prefix(&p2).unwrap(), "。");
     }
 }

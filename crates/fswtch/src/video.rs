@@ -279,7 +279,8 @@ impl Image {
     pub fn alloc(fmt: ImageFormat, width: u32, height: u32, align: u32) -> Result<Self> {
         // SAFETY: A null `img` argument requests a fresh allocation, which is the owned path we
         // want. The returned pointer is NULL on allocation failure.
-        let raw = unsafe { sys::switch_img_alloc(std::ptr::null_mut(), fmt.raw(), width, height, align) };
+        let raw =
+            unsafe { sys::switch_img_alloc(std::ptr::null_mut(), fmt.raw(), width, height, align) };
         // SAFETY: `raw` is NULL on failure; otherwise it is a live owned image.
         unsafe { Self::from_raw(raw) }.ok_or(SwitchError(crate::GENERR))
     }

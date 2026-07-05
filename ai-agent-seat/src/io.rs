@@ -164,6 +164,12 @@ pub struct CallState {
     /// `write_frame` reads `tts_audio_active` for the VAD echo-gate;
     /// `wait_until_silent` reads `turn_pending`. Writers use `begin()`/`end()`.
     pub turn_flags: crate::actor::TurnFlags,
+    /// Fade-out state for smooth audio interruption (barge-in).
+    /// When barge-in occurs, instead of immediately cutting audio, we apply
+    /// a linear fade-out over `fade_out_samples` to avoid popping sounds.
+    pub fade_out_remaining: u32,
+    /// Total fade-out duration in samples (calculated from config.fade_out_ms).
+    pub fade_out_total: u32,
     /// Loaded configuration snapshot (may be `None` → defaults).
     pub config: Option<Config>,
     /// Per-call actor ref (set by `actor::init_call`). `None` only transiently
@@ -198,8 +204,10 @@ impl CallState {
         let pre_roll_size = (PIPELINE_SAMPLE_RATE * 300 / 1000) as usize;
 
         let vad_config = config.as_ref().map(|c| c.vad.clone()).unwrap_or_default();
+        let audio_config = config.as_ref().map(|c| c.audio.clone()).unwrap_or_default();
         let silence_samples = vad_config.silence_timeout_ms * VAD_SAMPLE_RATE / 1000;
         let barge_in_confirm_samples = vad_config.barge_in_confirm_ms * VAD_SAMPLE_RATE / 1000;
+        let fade_out_total = audio_config.fade_out_ms * PIPELINE_SAMPLE_RATE / 1000;
 
         Ok(Self {
             uuid,
@@ -223,16 +231,26 @@ impl CallState {
             tts_cons: None,
             speech_tx: None,
             turn_flags: crate::actor::TurnFlags::new(),
+            fade_out_remaining: 0,
+            fade_out_total,
             config,
             actor: None,
         })
     }
 
-    /// Drop any buffered TTS audio (barge-in flush). Clears the SPSC ringbuf
-    /// consumer so `read_frame` emits silence on the next frame.
+    /// Trigger fade-out for TTS audio (barge-in). Instead of immediately clearing
+    /// the ringbuf, this starts a fade-out process that will gradually reduce
+    /// the audio volume to zero over `fade_out_total` samples, avoiding popping sounds.
     pub fn clear_tts(&mut self) {
-        if let Some(cons) = self.tts_cons.as_mut() {
-            cons.clear();
+        // Start fade-out if configured
+        if self.fade_out_total > 0 {
+            self.fade_out_remaining = self.fade_out_total;
+            tracing::debug!("fade-out started: {} samples", self.fade_out_remaining);
+        } else {
+            // No fade-out configured - clear immediately
+            if let Some(cons) = self.tts_cons.as_mut() {
+                cons.clear();
+            }
         }
     }
 }
@@ -433,59 +451,12 @@ impl EndpointIoRoutines for AiAgent {
         }
 
         // VAD: accumulate into 256-sample 16 kHz frames and score each.
-        // Skip VAD entirely while TTS audio is flowing — the TTS output leaks
-        // back through the caller's mic (echo) and scores 0.8+ on earshot,
-        // causing false speech segments. Half-duplex is simpler and more
-        // reliable than trying to correlate echo vs real speech. VAD resumes
-        // automatically when tts_audio_active transitions to false (TTS done).
-        let tts_audio_active = state_mut.turn_flags.tts_audio_active.load(Ordering::Relaxed);
-        if tts_audio_active {
-            // AI is speaking — run barge-in detection with higher threshold.
-            // Upsample + predict earshot, require sustained voice (config-driven
-            // `barge_in_confirm_ms`) before interrupting. This prevents coughs,
-            // echo leakage, and background noise from triggering false barge-ins.
-            while state_mut.vad_stage.len() >= EARSHOT_FRAME_SIZE {
-                let frame_slice: [i16; EARSHOT_FRAME_SIZE] = {
-                    let mut buf = [0i16; EARSHOT_FRAME_SIZE];
-                    buf.copy_from_slice(&state_mut.vad_stage[..EARSHOT_FRAME_SIZE]);
-                    buf
-                };
-                state_mut.vad_stage.drain(..EARSHOT_FRAME_SIZE);
-
-                let (score, rms) = score_frame(
-                    state_mut.vad.as_mut(),
-                    &frame_slice,
-                    state_mut.min_speech_rms,
-                );
-                let is_voiced =
-                    score >= BARGE_IN_SCORE_THRESHOLD && rms >= state_mut.min_speech_rms;
-
-                let frame_len = frame_slice.len() as u32;
-                if is_voiced {
-                    state_mut.barge_in_confirm += frame_len;
-                    if state_mut.barge_in_confirm >= state_mut.barge_in_confirm_samples {
-                        tracing::info!(
-                            "VAD: barge-in confirmed for {uuid} (score={score:.3} rms={rms:.4} \
-                             confirm={}/{}samples)",
-                            state_mut.barge_in_confirm,
-                            state_mut.barge_in_confirm_samples
-                        );
-                        state_mut.barge_in_confirm = 0;
-                        // Tell the actor to cancel the current turn + flush TTS.
-                        if let Some(actor) = state_mut.actor.as_ref() {
-                            let actor = actor.clone();
-                            crate::runtime::spawn(async move {
-                                let _ = actor.tell(crate::actor::BargeIn).await;
-                            });
-                        }
-                    }
-                } else {
-                    state_mut.barge_in_confirm = 0;
-                }
-            }
-            return SUCCESS;
-        }
-
+        // VAD is ALWAYS active — no half-duplex suppression. The dialplan's
+        // `preprocess` AEC is expected to suppress TTS echo; the RMS gate
+        // + speech_threshold handle residual echo. When the user speaks during
+        // TTS playback, VAD detects it as a new speech segment and sends it to
+        // the actor (which cancels the in-flight turn via BargeIn). This is
+        // true full-duplex: the user can interrupt at any time.
         while state_mut.vad_stage.len() >= EARSHOT_FRAME_SIZE {
             let frame_slice: [i16; EARSHOT_FRAME_SIZE] = {
                 let mut buf = [0i16; EARSHOT_FRAME_SIZE];
@@ -500,11 +471,8 @@ impl EndpointIoRoutines for AiAgent {
                 state_mut.min_speech_rms,
             );
             // RMS noise gate: skip frames with low energy regardless of VAD
-            // score. This is the primary defense against background noise —
-            // speexdsp in the dialplan preprocess reduces noise, and the RMS
-            // gate catches what's left. Configured via `min_speech_rms` in yaml.
-            // (tts_audio_active is already handled by the early-return branch above,
-            // so here the normal speech_threshold always applies.)
+            // score. This is the primary defense against background noise and
+            // residual TTS echo after AEC.
             let rms_gate = rms >= state_mut.min_speech_rms;
             let threshold = state_mut.speech_threshold;
 
@@ -545,6 +513,17 @@ impl EndpointIoRoutines for AiAgent {
                         state_mut.onset_accum_ms,
                         state_mut.speech_buffer.len()
                     );
+                    // If TTS is playing, cancel it (barge-in) — the user is
+                    // talking over the AI. The actor's BargeIn handler cancels
+                    // the in-flight turn + flushes the TTS ringbuf.
+                    if state_mut.turn_flags.turn_pending.load(Ordering::Relaxed) {
+                        if let Some(actor) = state_mut.actor.as_ref() {
+                            let actor = actor.clone();
+                            crate::runtime::spawn(async move {
+                                let _ = actor.tell(crate::actor::BargeIn).await;
+                            });
+                        }
+                    }
                 }
                 if state_mut.in_speech {
                     state_mut.current_silence = 0;
@@ -628,6 +607,39 @@ impl EndpointIoRoutines for AiAgent {
             *s = 0;
         }
 
+        // Apply fade-out if active (barge-in smooth transition)
+        if state_mut.fade_out_remaining > 0 && written > 0 {
+            let fade_samples = written.min(state_mut.fade_out_remaining as usize);
+            let fade_start = state_mut.fade_out_remaining as f32;
+            // Precompute the reciprocal once per frame (avoid per-sample division).
+            let inv_total = 1.0 / state_mut.fade_out_total as f32;
+
+            // Apply linear fade-out gain to the first `fade_samples` samples
+            for i in 0..fade_samples {
+                let gain = (fade_start - i as f32) * inv_total;
+                buf[i] = (buf[i] as f32 * gain) as i16;
+            }
+
+            // Zero out the rest if fade-out completes mid-frame
+            if fade_samples < written {
+                for s in &mut buf[fade_samples..written] {
+                    *s = 0;
+                }
+            }
+
+            // Update fade-out state
+            if state_mut.fade_out_remaining <= written as u32 {
+                // Fade-out complete - clear the ringbuf
+                state_mut.fade_out_remaining = 0;
+                if let Some(cons) = state_mut.tts_cons.as_mut() {
+                    cons.clear();
+                }
+                tracing::debug!("fade-out completed");
+            } else {
+                state_mut.fade_out_remaining -= written as u32;
+            }
+        }
+
         SUCCESS
     }
 
@@ -665,9 +677,9 @@ impl EndpointIoRoutines for AiAgent {
 
 #[cfg(test)]
 mod tests {
+    use crate::io::rms;
     use ringbuf::traits::{Consumer, Observer, Producer};
     use std::sync::Arc;
-    use crate::io::rms;
 
     /// The ringbuf capacity used in production (from actor::init_call).
     const RINGBUF_CAPACITY: usize = 160000;
@@ -872,7 +884,9 @@ mod tests {
         eprintln!("rms (integer): {rms_ns:.0} ns/call");
         eprintln!("capacity @50Hz/call:");
         eprintln!("  ALL calls talking (full predict): {calls_per_core_full:.0} calls/core");
-        eprintln!("  silent calls (RMS-gated, predict skipped): {silent_calls_per_core:.0} calls/core");
+        eprintln!(
+            "  silent calls (RMS-gated, predict skipped): {silent_calls_per_core:.0} calls/core"
+        );
         eprintln!("  [acc={acc}]"); // prevent dead-code elim
     }
 }

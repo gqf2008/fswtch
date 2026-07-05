@@ -152,7 +152,10 @@ mod caller_extension_tests {
         let wrapped = unsafe { CallerExtension::from_raw(raw) }.expect("non-null raw should wrap");
         assert_eq!(wrapped.name().as_deref(), Some("default"));
         assert_eq!(wrapped.number().as_deref(), Some("1000"));
-        assert_eq!(wrapped.current_application_name().as_deref(), Some("playback"));
+        assert_eq!(
+            wrapped.current_application_name().as_deref(),
+            Some("playback")
+        );
         assert_eq!(
             wrapped.current_application_data().as_deref(),
             Some("ivr/welcome.wav")

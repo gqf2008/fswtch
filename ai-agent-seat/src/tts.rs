@@ -43,12 +43,8 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::handshake::client::Request;
 
-use crate::audio_dsp::PIPELINE_SAMPLE_RATE;
+use crate::audio_dsp::{OnAudio, PIPELINE_SAMPLE_RATE};
 use crate::tts_ws_codec::{EventType, Message, MsgType};
-
-/// Audio-output callback: the TTS driver invokes this for each resampled PCM
-/// chunk, pushing directly into the caller's playback ringbuf (no mpsc/forwarder).
-pub type OnAudio = Box<dyn FnMut(&[i16]) + Send + 'static>;
 
 /// Turn-completion callback: the driver invokes this once the current turn's
 /// audio stream goes idle (no server audio for [`TTS_IDLE_TIMEOUT`] after the
@@ -60,8 +56,8 @@ pub type OnTurnEnd = Box<dyn FnMut() + Send + 'static>;
 // VAD bypass in `io.rs`) — one `unsafe impl Send` in the whole crate.
 use crate::audio_dsp::SendResample;
 
-/// The Volcano bidirectional TTS WebSocket endpoint.
-const ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection";
+/// The default Volcano bidirectional TTS WebSocket endpoint.
+const DEFAULT_ENDPOINT: &str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection";
 
 /// The sample rate (Hz) we request from the Volcano TTS server AND the pipeline
 /// rate. We request 8 kHz to match the pipeline natively — no resampler needed.
@@ -142,6 +138,7 @@ pub struct VolcanoBidirectionalSession {
 }
 
 struct SessionInner {
+    endpoint: String,
     api_key: String,
     resource_id: String,
     speaker: String,
@@ -178,6 +175,7 @@ impl VolcanoBidirectionalSession {
     /// goes idle — the caller clears `ai_speaking` so barge-in detection
     /// resumes.
     pub fn new(
+        endpoint: String,
         api_key: String,
         resource_id: String,
         speaker: String,
@@ -186,11 +184,13 @@ impl VolcanoBidirectionalSession {
         on_turn_end: OnTurnEnd,
     ) -> Self {
         tracing::debug!(
-            "Volcano TTS session constructed: call_uuid={} (session_id=section_id=call_uuid)",
+            "Volcano TTS session constructed: call_uuid={} endpoint={} (session_id=section_id=call_uuid)",
             call_uuid,
+            endpoint,
         );
         Self {
             inner: Arc::new(SessionInner {
+                endpoint,
                 api_key,
                 resource_id,
                 speaker,
@@ -328,14 +328,15 @@ impl VolcanoBidirectionalSession {
         // rustls 0.23 needs an explicit CryptoProvider installed process-wide.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let connect_id = uuid::Uuid::new_v4().to_string();
-        let uri = ENDPOINT
+        let endpoint = &self.inner.endpoint;
+        let uri = endpoint
             .parse::<tokio_tungstenite::tungstenite::http::Uri>()
             .context("Volcano TTS endpoint parse failed")?;
         let host = uri.host().unwrap_or("openspeech.bytedance.com").to_string();
 
         let req = Request::builder()
             .method("GET")
-            .uri(ENDPOINT)
+            .uri(endpoint.as_str())
             .header("Host", &host)
             .header("Upgrade", "websocket")
             .header("Connection", "Upgrade")
@@ -679,12 +680,17 @@ async fn driver_loop(
             st.current.as_ref().and_then(|t| {
                 if t.completed.load(std::sync::atomic::Ordering::Relaxed) {
                     None
-                } else if t.first_audio_received.load(std::sync::atomic::Ordering::Relaxed) {
+                } else if t
+                    .first_audio_received
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                {
                     t.last_audio_at
                         .lock()
                         .map(|at| tokio::time::Instant::from_std(at + TTS_IDLE_TIMEOUT))
                 } else {
-                    Some(tokio::time::Instant::from_std(t.start + TTS_FIRST_AUDIO_TIMEOUT))
+                    Some(tokio::time::Instant::from_std(
+                        t.start + TTS_FIRST_AUDIO_TIMEOUT,
+                    ))
                 }
             })
         };
@@ -811,9 +817,7 @@ async fn fire_turn_complete(state: &Mutex<SessionState>, inner: &std::sync::Weak
             None => false,
         }
     };
-    if fire
-        && let Some(inner) = inner.upgrade()
-    {
+    if fire && let Some(inner) = inner.upgrade() {
         let mut cb = inner.on_turn_end.lock();
         cb();
     }
@@ -1114,13 +1118,16 @@ mod tests {
             ..Message::default()
         });
         let mut resampler = None;
-        let out = route_frame(&frame, &state, &mut resampler, &weak).await.unwrap();
+        let out = route_frame(&frame, &state, &mut resampler, &weak)
+            .await
+            .unwrap();
         assert_eq!(out, Some(pcm), "audio PCM routed to caller");
         // The first-audio flag + last_audio_at must be armed.
         let st = state.lock().await;
         let task = st.current.as_ref().unwrap();
         assert!(
-            task.first_audio_received.load(std::sync::atomic::Ordering::Relaxed),
+            task.first_audio_received
+                .load(std::sync::atomic::Ordering::Relaxed),
             "first_audio_received armed"
         );
         assert!(task.last_audio_at.lock().is_some(), "last_audio_at stamped");
@@ -1145,7 +1152,9 @@ mod tests {
             ..Message::default()
         });
         let mut resampler = None;
-        let out = route_frame(&frame, &state, &mut resampler, &weak).await.unwrap();
+        let out = route_frame(&frame, &state, &mut resampler, &weak)
+            .await
+            .unwrap();
         assert_eq!(out, None, "cancelled turn's audio is discarded");
     }
 
@@ -1167,11 +1176,20 @@ mod tests {
             ..Message::default()
         });
         let mut resampler = None;
-        route_frame(&frame, &state, &mut resampler, &weak).await.unwrap();
+        route_frame(&frame, &state, &mut resampler, &weak)
+            .await
+            .unwrap();
         let st = state.lock().await;
-        assert!(!st.started, "SessionFinished resets started so next turn reopens");
         assert!(
-            st.current.as_ref().unwrap().completed.load(std::sync::atomic::Ordering::Relaxed),
+            !st.started,
+            "SessionFinished resets started so next turn reopens"
+        );
+        assert!(
+            st.current
+                .as_ref()
+                .unwrap()
+                .completed
+                .load(std::sync::atomic::Ordering::Relaxed),
             "SessionFinished fires turn completion"
         );
     }
@@ -1193,12 +1211,17 @@ mod tests {
             ..Message::default()
         });
         let mut resampler = None;
-        route_frame(&frame, &state, &mut resampler, &weak).await.unwrap();
+        route_frame(&frame, &state, &mut resampler, &weak)
+            .await
+            .unwrap();
         let st = state.lock().await;
         assert!(
-            st.current.as_ref().unwrap().completed.load(std::sync::atomic::Ordering::Relaxed),
+            st.current
+                .as_ref()
+                .unwrap()
+                .completed
+                .load(std::sync::atomic::Ordering::Relaxed),
             "TTSSentenceEnd fires turn completion (best-effort early complete)"
         );
     }
 }
-

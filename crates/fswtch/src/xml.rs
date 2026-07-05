@@ -76,4 +76,18 @@ impl<'a> XmlNode<'a> {
             .ok()
             .map(ToOwned::to_owned)
     }
+
+    /// Returns the tag name of this node (e.g. "param", "settings").
+    pub fn name(self) -> Option<String> {
+        // SAFETY: `self.raw` is a live XML node; `name` is a null-terminated tag.
+        let name_ptr = unsafe { (*self.raw.as_ptr()).name };
+        if name_ptr.is_null() {
+            return None;
+        }
+        // SAFETY: FreeSWITCH guarantees `name` is null-terminated when present.
+        unsafe { CStr::from_ptr(name_ptr) }
+            .to_str()
+            .ok()
+            .map(ToOwned::to_owned)
+    }
 }

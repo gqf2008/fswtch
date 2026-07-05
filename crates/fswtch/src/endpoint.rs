@@ -47,8 +47,8 @@ use std::ptr::NonNull;
 
 use crate::command::borrowed_cstr_to_str;
 use crate::{
-    CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallerProfile, CallDirection, Cause, MediaFrame,
-    MediaFrameMut, OriginateFlag, Result, Session, Status, SUCCESS, cstring, sys,
+    CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallDirection, CallerProfile, Cause, MediaFrame,
+    MediaFrameMut, OriginateFlag, Result, SUCCESS, Session, Status, cstring, sys,
 };
 
 /// A borrowed view of a FreeSWITCH media frame in an endpoint I/O callback.
@@ -229,9 +229,8 @@ impl MessageType {
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_TRANSMIT_TEXT);
     pub const INDICATE_ANSWER: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_ANSWER);
-    pub const INDICATE_ACKNOWLEDGE_CALL: Self = Self(
-        sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_ACKNOWLEDGE_CALL,
-    );
+    pub const INDICATE_ACKNOWLEDGE_CALL: Self =
+        Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_ACKNOWLEDGE_CALL);
     pub const INDICATE_PROGRESS: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_PROGRESS);
     pub const INDICATE_BRIDGE: Self =
@@ -262,14 +261,12 @@ impl MessageType {
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_RESPOND);
     pub const INDICATE_BROADCAST: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_BROADCAST);
-    pub const INDICATE_MEDIA_REDIRECT: Self = Self(
-        sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_MEDIA_REDIRECT,
-    );
+    pub const INDICATE_MEDIA_REDIRECT: Self =
+        Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_MEDIA_REDIRECT);
     pub const INDICATE_DEFLECT: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_DEFLECT);
-    pub const INDICATE_VIDEO_REFRESH_REQ: Self = Self(
-        sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_VIDEO_REFRESH_REQ,
-    );
+    pub const INDICATE_VIDEO_REFRESH_REQ: Self =
+        Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_VIDEO_REFRESH_REQ);
     pub const INDICATE_DISPLAY: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_DISPLAY);
     pub const INDICATE_MEDIA_PARAMS: Self =
@@ -281,9 +278,8 @@ impl MessageType {
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_AUDIO_SYNC);
     pub const INDICATE_VIDEO_SYNC: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_VIDEO_SYNC);
-    pub const INDICATE_REQUEST_IMAGE_MEDIA: Self = Self(
-        sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_REQUEST_IMAGE_MEDIA,
-    );
+    pub const INDICATE_REQUEST_IMAGE_MEDIA: Self =
+        Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_REQUEST_IMAGE_MEDIA);
     pub const INDICATE_UUID_CHANGE: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_UUID_CHANGE);
     pub const INDICATE_SIMPLIFY: Self =
@@ -292,9 +288,8 @@ impl MessageType {
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_DEBUG_MEDIA);
     pub const INDICATE_PROXY_MEDIA: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_PROXY_MEDIA);
-    pub const INDICATE_APPLICATION_EXEC: Self = Self(
-        sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_APPLICATION_EXEC,
-    );
+    pub const INDICATE_APPLICATION_EXEC: Self =
+        Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_APPLICATION_EXEC);
     pub const INDICATE_APPLICATION_EXEC_COMPLETE: Self = Self(
         sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_APPLICATION_EXEC_COMPLETE,
     );
@@ -308,9 +303,8 @@ impl MessageType {
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_CLEAR_PROGRESS);
     pub const INDICATE_JITTER_BUFFER: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_JITTER_BUFFER);
-    pub const INDICATE_RECOVERY_REFRESH: Self = Self(
-        sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_RECOVERY_REFRESH,
-    );
+    pub const INDICATE_RECOVERY_REFRESH: Self =
+        Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_RECOVERY_REFRESH);
     pub const INDICATE_SIGNAL_DATA: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_SIGNAL_DATA);
     pub const INDICATE_MESSAGE: Self =
@@ -336,9 +330,8 @@ impl MessageType {
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_BITRATE_ACK);
     pub const INDICATE_CODEC_DEBUG_REQ: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_CODEC_DEBUG_REQ);
-    pub const INDICATE_CODEC_SPECIFIC_REQ: Self = Self(
-        sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_CODEC_SPECIFIC_REQ,
-    );
+    pub const INDICATE_CODEC_SPECIFIC_REQ: Self =
+        Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_CODEC_SPECIFIC_REQ);
     pub const REFER_EVENT: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_REFER_EVENT);
     pub const ANSWER_EVENT: Self =
@@ -355,8 +348,7 @@ impl MessageType {
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_SESSION_ID);
     pub const INDICATE_PROMPT: Self =
         Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_PROMPT);
-    pub const INVALID: Self =
-        Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INVALID);
+    pub const INVALID: Self = Self(sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INVALID);
 
     /// The raw `switch_core_session_message_types_t` value, for FFI.
     #[inline]
@@ -671,11 +663,17 @@ pub struct OutgoingResult {
 impl OutgoingResult {
     /// Refuse the outgoing leg (`SWITCH_CAUSE_REQUESTED_CHAN_UNAVAIL`, no session).
     pub fn refused() -> Self {
-        Self { cause: CAUSE_REQUESTED_CHAN_UNAVAIL, new_session: None }
+        Self {
+            cause: CAUSE_REQUESTED_CHAN_UNAVAIL,
+            new_session: None,
+        }
     }
     /// Accept the outgoing leg, handing `session` to FreeSWITCH.
     pub fn success(session: Session) -> Self {
-        Self { cause: CAUSE_SUCCESS, new_session: Some(session) }
+        Self {
+            cause: CAUSE_SUCCESS,
+            new_session: Some(session),
+        }
     }
 }
 

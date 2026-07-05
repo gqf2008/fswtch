@@ -41,9 +41,15 @@ fn config_cell() -> &'static Mutex<Option<Config>> {
 /// [`Config::default`].
 pub fn load(path: &str) -> Result<()> {
     let config = Config::load(path)?;
+    store(config);
+    Ok(())
+}
+
+/// Store a [`Config`] directly (built from FreeSWITCH XML `<param>` settings,
+/// not from YAML). Replaces any previously loaded value.
+pub fn store(config: Config) {
     let mut guard = config_cell().lock().expect("config mutex poisoned");
     *guard = Some(config);
-    Ok(())
 }
 
 /// Snapshot the loaded [`Config`].

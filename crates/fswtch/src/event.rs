@@ -27,7 +27,8 @@ impl EventType {
     pub const CHANNEL_CREATE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CREATE);
     pub const CHANNEL_DESTROY: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_DESTROY);
     pub const CHANNEL_STATE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_STATE);
-    pub const CHANNEL_CALLSTATE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CALLSTATE);
+    pub const CHANNEL_CALLSTATE: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CALLSTATE);
     pub const CHANNEL_ANSWER: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_ANSWER);
     pub const CHANNEL_HANGUP: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_HANGUP);
     pub const CHANNEL_HANGUP_COMPLETE: Self =
@@ -38,7 +39,8 @@ impl EventType {
     pub const CHANNEL_HOLD: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_HOLD);
     pub const CHANNEL_UNHOLD: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_UNHOLD);
     pub const CHANNEL_BRIDGE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_BRIDGE);
-    pub const CHANNEL_UNBRIDGE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_UNBRIDGE);
+    pub const CHANNEL_UNBRIDGE: Self =
+        Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_UNBRIDGE);
     pub const CHANNEL_PROGRESS: Self =
         Self(sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_PROGRESS);
     pub const CHANNEL_PROGRESS_MEDIA: Self =
@@ -76,11 +78,9 @@ impl EventType {
     pub const ROSTER: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_ROSTER);
     pub const CODEC: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CODEC);
     pub const BACKGROUND_JOB: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_BACKGROUND_JOB);
-    pub const DETECTED_SPEECH: Self =
-        Self(sys::switch_event_types_t::SWITCH_EVENT_DETECTED_SPEECH);
+    pub const DETECTED_SPEECH: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_DETECTED_SPEECH);
     pub const DETECTED_TONE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_DETECTED_TONE);
-    pub const PRIVATE_COMMAND: Self =
-        Self(sys::switch_event_types_t::SWITCH_EVENT_PRIVATE_COMMAND);
+    pub const PRIVATE_COMMAND: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_PRIVATE_COMMAND);
     pub const HEARTBEAT: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_HEARTBEAT);
     pub const TRAP: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_TRAP);
     pub const ADD_SCHEDULE: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_ADD_SCHEDULE);
@@ -210,13 +210,8 @@ impl Event {
         let subclass = cstring(subclass)?;
         let mut raw = std::ptr::null_mut();
         // SAFETY: FreeSWITCH initializes `raw` for the custom subclass when the call succeeds.
-        let status = unsafe {
-            create_event(
-                &mut raw,
-                EventType::CUSTOM,
-                Some(subclass.as_c_str()),
-            )
-        };
+        let status =
+            unsafe { create_event(&mut raw, EventType::CUSTOM, Some(subclass.as_c_str())) };
         status_to_result(status)?;
         Ok(Self {
             raw: NonNull::new(raw),

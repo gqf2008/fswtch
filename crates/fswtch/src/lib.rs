@@ -53,21 +53,20 @@ pub use console::{
 pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable, set_variable};
 pub use core_db::{CoreDb, Stmt, StmtRows};
 pub use endpoint::{
-    Dtmf, DtmfSource, EndpointIoBuilder, EndpointIoRoutines, EndpointInterfaceRef, Frame,
-    FrameMut, IoFlags, IoRoutinesBuilder, MessageType, OutgoingResult, SessionMessage,
-    StateHandlerTable, request_session,
+    Dtmf, DtmfSource, EndpointInterfaceRef, EndpointIoBuilder, EndpointIoRoutines, Frame, FrameMut,
+    IoFlags, IoRoutinesBuilder, MessageType, OutgoingResult, SessionMessage, StateHandlerTable,
+    request_session,
 };
 pub use estimators::{CusumDetector, KalmanEstimator, is_slow_link};
 pub use event::{
-    Event, EventBinder, EventType, EventRef, EventXml, HeaderIter, Priority,
-    binary_deserialize, bind_permanent, channel_bind, channel_broadcast, channel_deliver,
-    channel_permission_clear, channel_permission_modify, channel_permission_verify,
-    channel_unbind, event_name, event_running, name_event, unbind_callback,
+    Event, EventBinder, EventRef, EventType, EventXml, HeaderIter, Priority, binary_deserialize,
+    bind_permanent, channel_bind, channel_broadcast, channel_deliver, channel_permission_clear,
+    channel_permission_modify, channel_permission_verify, channel_unbind, event_name,
+    event_running, name_event, unbind_callback,
 };
 pub use ivr::{
     DigitActionTarget, DigitMachine, DmachineMatch, IvrMenu, IvrMenuConfig, MediaFlag,
-    OriginateOutcome, block_dtmf_session, broadcast, broadcast_in_thread, capture_text,
-    check_hold,
+    OriginateOutcome, block_dtmf_session, broadcast, broadcast_in_thread, capture_text, check_hold,
     check_presence_mapping, collect_digits_callback, collect_digits_count, delay_echo,
     detect_speech, detect_speech_disable_all_grammars, detect_speech_disable_grammar,
     detect_speech_enable_grammar, detect_speech_init, detect_speech_load_grammar,
@@ -119,8 +118,8 @@ pub use scheduler::{
 };
 pub use session::{Session, SessionGuard};
 pub use status::{
-    CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallDirection, Cause, ChannelState, OriginateFlag,
-    Result, Status, SwitchError, FALSE, GENERR, SUCCESS, false_on_success, status_to_result,
+    CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallDirection, Cause, ChannelState, FALSE, GENERR,
+    OriginateFlag, Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result,
     switch_bool,
 };
 pub use stream::{ApiStream, Stream, write_stream_response};
@@ -143,9 +142,10 @@ macro_rules! api_callback {
             session_raw: *mut $crate::sys::switch_core_session_t,
             stream_raw: *mut $crate::sys::switch_stream_handle_t,
         ) -> $crate::sys::switch_status_t {
-            let body = |$cmd: Option<String>, $session: Option<$crate::Session>, $stream: Option<$crate::ApiStream>| -> $crate::Status {
-                $body
-            };
+            let body = |$cmd: Option<String>,
+                        $session: Option<$crate::Session>,
+                        $stream: Option<$crate::ApiStream>|
+             -> $crate::Status { $body };
             let $cmd = unsafe { $crate::command_text(cmd_raw) };
             let $session = unsafe { $crate::Session::from_raw(session_raw) };
             let $stream = unsafe { $crate::ApiStream::from_raw(stream_raw) };
@@ -177,9 +177,8 @@ macro_rules! chat_callback {
             event_raw: *mut $crate::sys::switch_event_t,
             data_raw: *const ::std::ffi::c_char,
         ) -> $crate::sys::switch_status_t {
-            let body = |$event: $crate::EventRef, $data: Option<String>| -> $crate::Status {
-                $body
-            };
+            let body =
+                |$event: $crate::EventRef, $data: Option<String>| -> $crate::Status { $body };
             let $event = unsafe { $crate::EventRef::from_raw(event_raw) };
             let $data = unsafe { $crate::command_text(data_raw) };
             body($event, $data).raw()

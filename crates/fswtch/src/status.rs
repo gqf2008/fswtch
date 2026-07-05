@@ -106,8 +106,7 @@ impl Cause {
         Self(sys::switch_call_cause_t_SWITCH_CAUSE_CALL_AWARDED_DELIVERED);
     pub const NORMAL_CLEARING: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_NORMAL_CLEARING);
     pub const USER_BUSY: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_USER_BUSY);
-    pub const NO_USER_RESPONSE: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_NO_USER_RESPONSE);
+    pub const NO_USER_RESPONSE: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_NO_USER_RESPONSE);
     pub const NO_ANSWER: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_NO_ANSWER);
     pub const SUBSCRIBER_ABSENT: Self =
         Self(sys::switch_call_cause_t_SWITCH_CAUSE_SUBSCRIBER_ABSENT);
@@ -175,33 +174,25 @@ impl Cause {
     pub const ORIGINATOR_CANCEL: Self =
         Self(sys::switch_call_cause_t_SWITCH_CAUSE_ORIGINATOR_CANCEL);
     pub const CRASH: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_CRASH);
-    pub const SYSTEM_SHUTDOWN: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_SYSTEM_SHUTDOWN);
+    pub const SYSTEM_SHUTDOWN: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_SYSTEM_SHUTDOWN);
     pub const LOSE_RACE: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_LOSE_RACE);
-    pub const MANAGER_REQUEST: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_MANAGER_REQUEST);
+    pub const MANAGER_REQUEST: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_MANAGER_REQUEST);
     pub const MEDIA_TIMEOUT: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_MEDIA_TIMEOUT);
     pub const PICKED_OFF: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_PICKED_OFF);
     pub const USER_NOT_REGISTERED: Self =
         Self(sys::switch_call_cause_t_SWITCH_CAUSE_USER_NOT_REGISTERED);
-    pub const PROGRESS_TIMEOUT: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_PROGRESS_TIMEOUT);
-    pub const INVALID_GATEWAY: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_INVALID_GATEWAY);
+    pub const PROGRESS_TIMEOUT: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_PROGRESS_TIMEOUT);
+    pub const INVALID_GATEWAY: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_INVALID_GATEWAY);
     pub const GATEWAY_DOWN: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_GATEWAY_DOWN);
     pub const INVALID_URL: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_INVALID_URL);
-    pub const INVALID_PROFILE: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_INVALID_PROFILE);
+    pub const INVALID_PROFILE: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_INVALID_PROFILE);
     pub const NO_PICKUP: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_NO_PICKUP);
-    pub const SRTP_READ_ERROR: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_SRTP_READ_ERROR);
+    pub const SRTP_READ_ERROR: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_SRTP_READ_ERROR);
     pub const BOWOUT: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_BOWOUT);
-    pub const ALLOTTED_TIMEOUT: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_ALLOTTED_TIMEOUT);
+    pub const ALLOTTED_TIMEOUT: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_ALLOTTED_TIMEOUT);
     pub const RECOVERY_ON_TIMER_EXPIRE: Self =
         Self(sys::switch_call_cause_t_SWITCH_CAUSE_RECOVERY_ON_TIMER_EXPIRE);
-    pub const INVALID_IDENTITY: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_INVALID_IDENTITY);
+    pub const INVALID_IDENTITY: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_INVALID_IDENTITY);
     pub const BAD_IDENTITY_INFO: Self =
         Self(sys::switch_call_cause_t_SWITCH_CAUSE_BAD_IDENTITY_INFO);
     pub const NO_IDENTITY: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_NO_IDENTITY);
@@ -216,8 +207,7 @@ impl Cause {
         Self(sys::switch_call_cause_t_SWITCH_CAUSE_MESSAGE_TYPE_NONEXIST);
     pub const IE_NONEXIST: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_IE_NONEXIST);
     pub const NOT_ACCEPTABLE: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_NOT_ACCEPTABLE);
-    pub const WRONG_CALL_STATE: Self =
-        Self(sys::switch_call_cause_t_SWITCH_CAUSE_WRONG_CALL_STATE);
+    pub const WRONG_CALL_STATE: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_WRONG_CALL_STATE);
     pub const WRONG_MESSAGE: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_WRONG_MESSAGE);
     pub const USER_CHALLENGE: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_USER_CHALLENGE);
     pub const BLIND_TRANSFER: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_BLIND_TRANSFER);
@@ -428,7 +418,7 @@ pub struct SwitchError(pub Status);
 
 impl fmt::Display for SwitchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FreeSWITCH returned status {:?}", self.0 .0)
+        write!(f, "FreeSWITCH returned status {:?}", self.0.0)
     }
 }
 
