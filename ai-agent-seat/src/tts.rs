@@ -986,6 +986,7 @@ mod tests {
     /// public constructor + a no-op `on_audio`/`on_turn_end`.
     fn session_no_connect() -> VolcanoBidirectionalSession {
         VolcanoBidirectionalSession::new(
+            "wss://test.example.com/tts".into(),
             "key".into(),
             "res".into(),
             "speaker".into(),
@@ -1057,6 +1058,7 @@ mod tests {
     async fn fire_turn_complete_invokes_on_turn_end_once() {
         let fired = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let session = VolcanoBidirectionalSession::new(
+            "wss://test.example.com/tts".into(),
             "key".into(),
             "res".into(),
             "speaker".into(),
