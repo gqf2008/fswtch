@@ -137,19 +137,39 @@ macro_rules! api_callback {
         // FFI boundary: returns `sys::switch_status_t` (raw). The user's `$body` runs in an
         // inner closure that returns `fswtch::Status`; early `return Status::X` inside the
         // body returns from the closure, and `.raw()` translates it here.
+        // The whole body — including the `from_raw` conversions and the user's `$body` — is
+        // wrapped in `catch_unwind` so a panic cannot unwind across the `unsafe extern "C"`
+        // boundary into FreeSWITCH (which is UB / aborts the whole FS process). On panic we
+        // log via `fswtch::log_error` and return `Status::GENERR`. This relies on the
+        // downstream crate being built with `panic = "unwind"` (the default; the mod_* crates
+        // set it explicitly).
         unsafe extern "C" fn $name(
             cmd_raw: *const ::std::ffi::c_char,
             session_raw: *mut $crate::sys::switch_core_session_t,
             stream_raw: *mut $crate::sys::switch_stream_handle_t,
         ) -> $crate::sys::switch_status_t {
-            let body = |$cmd: Option<String>,
-                        $session: Option<$crate::Session>,
-                        $stream: Option<$crate::ApiStream>|
-             -> $crate::Status { $body };
-            let $cmd = unsafe { $crate::command_text(cmd_raw) };
-            let $session = unsafe { $crate::Session::from_raw(session_raw) };
-            let $stream = unsafe { $crate::ApiStream::from_raw(stream_raw) };
-            body($cmd, $session, $stream).raw()
+            let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                let body = |$cmd: Option<String>,
+                            $session: Option<$crate::Session>,
+                            $stream: Option<$crate::ApiStream>|
+                 -> $crate::Status {
+                    $body
+                };
+                let $cmd = unsafe { $crate::command_text(cmd_raw) };
+                let $session = unsafe { $crate::Session::from_raw(session_raw) };
+                let $stream = unsafe { $crate::ApiStream::from_raw(stream_raw) };
+                body($cmd, $session, $stream)
+            }));
+            match result {
+                ::std::result::Result::Ok(status) => status.raw(),
+                ::std::result::Result::Err(panic) => {
+                    $crate::log_error(
+                        "fswtch",
+                        ::std::format!("panic in api callback {}: {:?}", stringify!($name), panic),
+                    );
+                    $crate::Status::GENERR.raw()
+                }
+            }
         }
     };
 }
@@ -157,13 +177,24 @@ macro_rules! api_callback {
 #[macro_export]
 macro_rules! app_callback {
     (fn $name:ident($session:ident, $data:ident) $body:block) => {
+        // See `api_callback!` — the body is wrapped in `catch_unwind` so a panic cannot
+        // unwind across the `unsafe extern "C"` boundary into FreeSWITCH. app callbacks
+        // return unit, so on panic we just log and return.
         unsafe extern "C" fn $name(
             $session: *mut $crate::sys::switch_core_session_t,
             $data: *const ::std::ffi::c_char,
         ) {
-            let $session = unsafe { $crate::Session::from_raw($session) };
-            let $data = unsafe { $crate::command_text($data) };
-            $body
+            let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                let $session = unsafe { $crate::Session::from_raw($session) };
+                let $data = unsafe { $crate::command_text($data) };
+                $body
+            }));
+            if let ::std::result::Result::Err(panic) = result {
+                $crate::log_error(
+                    "fswtch",
+                    ::std::format!("panic in app callback {}: {:?}", stringify!($name), panic),
+                );
+            }
         }
     };
 }
@@ -171,17 +202,30 @@ macro_rules! app_callback {
 #[macro_export]
 macro_rules! chat_callback {
     (fn $name:ident($event:ident, $data:ident) $body:block) => {
-        // See `api_callback!` — FFI boundary returns raw; the body runs in a closure
-        // returning `fswtch::Status`.
+        // See `api_callback!` — returning `fswtch::Status`, wrapped in `catch_unwind` so a panic cannot unwind
+        // across the `unsafe extern "C"` boundary into FreeSWITCH.
         unsafe extern "C" fn $name(
             event_raw: *mut $crate::sys::switch_event_t,
             data_raw: *const ::std::ffi::c_char,
         ) -> $crate::sys::switch_status_t {
-            let body =
-                |$event: $crate::EventRef, $data: Option<String>| -> $crate::Status { $body };
-            let $event = unsafe { $crate::EventRef::from_raw(event_raw) };
-            let $data = unsafe { $crate::command_text(data_raw) };
-            body($event, $data).raw()
+            let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                let body = |$event: $crate::EventRef, $data: Option<String>| -> $crate::Status {
+                    $body
+                };
+                let $event = unsafe { $crate::EventRef::from_raw(event_raw) };
+                let $data = unsafe { $crate::command_text(data_raw) };
+                body($event, $data)
+            }));
+            match result {
+                ::std::result::Result::Ok(status) => status.raw(),
+                ::std::result::Result::Err(panic) => {
+                    $crate::log_error(
+                        "fswtch",
+                        ::std::format!("panic in chat callback {}: {:?}", stringify!($name), panic),
+                    );
+                    $crate::Status::GENERR.raw()
+                }
+            }
         }
     };
 }
@@ -192,9 +236,20 @@ macro_rules! chat_callback {
 #[macro_export]
 macro_rules! event_callback {
     (fn $name:ident($event:ident) $body:block) => {
+        // See `api_callback!` — the body is wrapped in `catch_unwind` so a panic cannot
+        // unwind across the `unsafe extern "C"` boundary into FreeSWITCH. Event callbacks
+        // return unit, so on panic we just log and return.
         unsafe extern "C" fn $name($event: *mut $crate::sys::switch_event_t) {
-            let $event = unsafe { $crate::EventRef::from_raw($event) };
-            $body
+            let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                let $event = unsafe { $crate::EventRef::from_raw($event) };
+                $body
+            }));
+            if let ::std::result::Result::Err(panic) = result {
+                $crate::log_error(
+                    "fswtch",
+                    ::std::format!("panic in event callback {}: {:?}", stringify!($name), panic),
+                );
+            }
         }
     };
 }
