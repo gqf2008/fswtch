@@ -4,7 +4,7 @@
 //! functions. They operate on process-global core state and need no handle, pool, or session.
 
 use crate::command::{borrowed_cstr_to_string, strdup_to_string};
-use crate::{Result, cstring, sys};
+use crate::{HupType, Result, cstring, sys};
 
 /// Retrieves a global core variable into an owned [`String`].
 ///
@@ -99,6 +99,96 @@ pub fn get_switchname() -> Option<String> {
     // SAFETY: No arguments; returns null or a static null-terminated string.
     let ptr = unsafe { sys::switch_core_get_switchname() };
     borrowed_cstr_to_string(ptr)
+}
+
+/// The number of currently active channels in the core.
+///
+/// Wraps `switch_core_session_count`. Thread-safe — it reads an atomic core counter.
+pub fn session_count() -> u32 {
+    // SAFETY: No arguments; reads a process-global counter.
+    unsafe { sys::switch_core_session_count() }
+}
+
+/// FreeSWITCH process uptime, following the upstream `switch_time_t` semantics of
+/// `switch_core_uptime` (seconds on current FreeSWITCH releases).
+pub fn uptime() -> i64 {
+    // SAFETY: No arguments; returns a `switch_time_t` (a 64-bit integer).
+    unsafe { sys::switch_core_uptime() }
+}
+
+/// Reads or sets the sessions-per-second limit. Pass `0` to read the current value without
+/// modifying it; pass a nonzero limit to apply it, returning the previous value.
+///
+/// Wraps `switch_core_sessions_per_second`. Thread-safe.
+pub fn sessions_per_second(limit: u32) -> u32 {
+    // SAFETY: `limit` is a plain `u32`; the function reads/updates a core counter.
+    unsafe { sys::switch_core_sessions_per_second(limit) }
+}
+
+/// Hangs up **every** active session with `cause`.
+///
+/// Wraps `switch_core_session_hupall`. Thread-safe — the core holds the session-manager lock while
+/// iterating. Prefer the more targeted [`hupall_matching_var`] / [`hupall_endpoint`] when you only
+/// need a subset; this is a blunt instrument (typically `SYSTEM_SHUTDOWN`).
+pub fn hupall(cause: crate::Cause) {
+    // SAFETY: `cause.raw()` is a valid `switch_call_cause_t`; no pointers. The core takes the
+    // session-manager lock internally.
+    unsafe { sys::switch_core_session_hupall(cause.raw()) };
+}
+
+/// Hangs up every session belonging to `endpoint` with `cause`.
+///
+/// Wraps `switch_core_session_hupall_endpoint`. Useful for shutting down a custom endpoint's legs
+/// on module unload.
+pub fn hupall_endpoint(endpoint: &crate::EndpointInterfaceRef, cause: crate::Cause) {
+    // SAFETY: `endpoint.as_ptr()` is a live endpoint interface; `cause.raw()` is valid. `*mut`
+    // coerces to the FFI's `*const`. Core takes the session-manager lock internally.
+    unsafe { sys::switch_core_session_hupall_endpoint(endpoint.as_ptr(), cause.raw()) };
+}
+
+/// Hangs up every session whose channel variable `var_name == var_val`, selected by `hup_type`.
+///
+/// Wraps `switch_core_session_hupall_matching_var_ans`. Returns the number of sessions hung up.
+/// Pass [`crate::HupType::ANSWERED`] | [`crate::HupType::UNANSWERED`] to match both legs — this
+/// reproduces the upstream `switch_core_session_hupall_matching_var` macro (a `#define` bindgen
+/// drops). Interior NUL in either string is rejected.
+pub fn hupall_matching_var(
+    var_name: impl AsRef<str>,
+    var_val: impl AsRef<str>,
+    cause: crate::Cause,
+    hup_type: HupType,
+) -> Result<u32> {
+    let var_name = cstring(var_name)?;
+    let var_val = cstring(var_val)?;
+    // SAFETY: both C strings are valid NUL-terminated values for the call; `cause.raw()` and
+    // `hup_type.bits()` are plain integers. Core takes the session-manager lock internally.
+    let n = unsafe {
+        sys::switch_core_session_hupall_matching_var_ans(
+            var_name.as_ptr(),
+            var_val.as_ptr(),
+            cause.raw(),
+            hup_type.bits(),
+        )
+    };
+    Ok(n)
+}
+
+/// Hangs up every session matching **all** key/value pairs in `vars` (a FreeSWITCH event used as a
+/// header bag), selected by `hup_type`.
+///
+/// Wraps `switch_core_session_hupall_matching_vars_ans`. Returns the number of sessions hung up.
+/// `vars` is borrowed for the call; pass [`crate::HupType::ANSWERED`] | [`crate::HupType::UNANSWERED`]
+/// to match both legs.
+pub fn hupall_matching_vars(vars: &crate::Event, cause: crate::Cause, hup_type: HupType) -> u32 {
+    // SAFETY: `vars.as_ptr()` is a live event handle for the call; `cause.raw()` and
+    // `hup_type.bits()` are plain integers. Core takes the session-manager lock internally.
+    unsafe {
+        sys::switch_core_session_hupall_matching_vars_ans(
+            vars.as_ptr(),
+            cause.raw(),
+            hup_type.bits(),
+        )
+    }
 }
 
 // NOTE: `switch_core_sprintf(pool, fmt, ...)` is intentionally NOT wrapped. It is variadic and
