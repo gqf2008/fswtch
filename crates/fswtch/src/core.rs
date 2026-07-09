@@ -101,6 +101,30 @@ pub fn get_switchname() -> Option<String> {
     borrowed_cstr_to_string(ptr)
 }
 
+/// The number of currently active channels in the core.
+///
+/// Wraps `switch_core_session_count`. Thread-safe — it reads an atomic core counter.
+pub fn session_count() -> u32 {
+    // SAFETY: No arguments; reads a process-global counter.
+    unsafe { sys::switch_core_session_count() }
+}
+
+/// FreeSWITCH process uptime, following the upstream `switch_time_t` semantics of
+/// `switch_core_uptime` (seconds on current FreeSWITCH releases).
+pub fn uptime() -> i64 {
+    // SAFETY: No arguments; returns a `switch_time_t` (a 64-bit integer).
+    unsafe { sys::switch_core_uptime() }
+}
+
+/// Reads or sets the sessions-per-second limit. Pass `0` to read the current value without
+/// modifying it; pass a nonzero limit to apply it, returning the previous value.
+///
+/// Wraps `switch_core_sessions_per_second`. Thread-safe.
+pub fn sessions_per_second(limit: u32) -> u32 {
+    // SAFETY: `limit` is a plain `u32`; the function reads/updates a core counter.
+    unsafe { sys::switch_core_sessions_per_second(limit) }
+}
+
 // NOTE: `switch_core_sprintf(pool, fmt, ...)` is intentionally NOT wrapped. It is variadic and
 // requires a `switch_memory_pool_t*` (a FreeSWITCH/APR memory pool), which is not part of this
 // module's surface. Once a `Pool` wrapper exists, a safe `sprintf(pool, fmt, args)` helper can be

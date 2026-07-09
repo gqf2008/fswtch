@@ -48,9 +48,12 @@ pub use command::{
     strdup_to_string,
 };
 pub use console::{
-    CompletionFunc, CompletionMatches, complete, execute, expand_alias, free_matches,
+    CompletionFunc, CompletionMatches, complete, execute, execute_api, expand_alias, free_matches,
 };
-pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable, set_variable};
+pub use core::{
+    get_domain, get_hostname, get_switchname, get_uuid, get_variable, session_count,
+    sessions_per_second, set_variable, uptime,
+};
 pub use core_db::{CoreDb, Stmt, StmtRows};
 pub use endpoint::{
     Dtmf, DtmfSource, EndpointInterfaceRef, EndpointIoBuilder, EndpointIoRoutines, Frame, FrameMut,
