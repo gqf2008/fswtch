@@ -126,6 +126,9 @@ fswtch::app_callback! {
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
         fswtch::log_info("mod_media_bug_meter", "rust_media_bug_meter_stats invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write(
             &format!(
                 "attached={} closed={} read_frames={} write_frames={} read_audio_bytes={} write_audio_bytes={}\n",

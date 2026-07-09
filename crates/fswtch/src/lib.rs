@@ -165,9 +165,7 @@ macro_rules! api_callback {
                 let body = |$cmd: Option<String>,
                             $session: Option<$crate::Session>,
                             $stream: Option<$crate::ApiStream>|
-                 -> $crate::Status {
-                    $body
-                };
+                 -> $crate::Status { $body };
                 let $cmd = unsafe { $crate::command_text(cmd_raw) };
                 let $session = unsafe { $crate::Session::from_raw(session_raw) };
                 let $stream = unsafe { $crate::ApiStream::from_raw(stream_raw) };
@@ -222,9 +220,8 @@ macro_rules! chat_callback {
             data_raw: *const ::std::ffi::c_char,
         ) -> $crate::sys::switch_status_t {
             let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
-                let body = |$event: $crate::EventRef, $data: Option<String>| -> $crate::Status {
-                    $body
-                };
+                let body =
+                    |$event: $crate::EventRef, $data: Option<String>| -> $crate::Status { $body };
                 let $event = unsafe { $crate::EventRef::from_raw(event_raw) };
                 let $data = unsafe { $crate::command_text(data_raw) };
                 body($event, $data)

@@ -6,6 +6,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn ping_api(_cmd, _session, stream) {
         fswtch::log_info("mod_api_suite", "rust_ping invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write("pong\n")
     }
 }
@@ -13,6 +16,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn echo_api(cmd, _session, stream) {
         fswtch::log_info("mod_api_suite", "rust_echo invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let text = cmd.unwrap_or_default();
         stream.write(&format!("{text}\n"))
     }
@@ -21,6 +27,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn upper_api(cmd, _session, stream) {
         fswtch::log_info("mod_api_suite", "rust_upper invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let text = cmd.unwrap_or_default();
         stream.write(&format!("{}\n", text.to_uppercase()))
     }

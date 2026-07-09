@@ -27,6 +27,9 @@ impl Default for Config {
 fswtch::api_callback! {
     fn show_api(_cmd, _session, stream) {
         fswtch::log_info("mod_config_xml", "rust_config_xml_show invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let config = CONFIG
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -42,6 +45,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn reload_api(_cmd, _session, stream) {
         fswtch::log_info("mod_config_xml", "rust_config_xml_reload invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         match load_config() {
             Ok(config) => {
                 *CONFIG

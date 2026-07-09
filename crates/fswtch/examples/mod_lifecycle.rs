@@ -16,6 +16,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
         fswtch::log_info("mod_lifecycle", "rust_lifecycle_stats invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write(
             &format!(
                 "loads={} runtime_ticks={} shutdowns={}\n",
@@ -40,15 +43,18 @@ fswtch::module_load! {
     }
 }
 
-// SAFETY: FreeSWITCH invokes runtime callbacks using the module function-table ABI.
-unsafe extern "C" fn switch_module_runtime() -> Status {
+// FreeSWITCH invokes runtime callbacks using the module function-table ABI. Unlike `shutdown`,
+// the `runtime` field has no newtype trampoline in `module_exports!`, so it returns the raw
+// `switch_status_t` directly.
+unsafe extern "C" fn switch_module_runtime() -> fswtch::sys::switch_status_t {
     RUNTIME_TICKS.fetch_add(1, Ordering::Relaxed);
     fswtch::log_info("mod_lifecycle", "runtime tick");
-    SUCCESS
+    SUCCESS.raw()
 }
 
-// SAFETY: FreeSWITCH invokes shutdown callbacks using the module function-table ABI.
-unsafe extern "C" fn switch_module_shutdown() -> Status {
+// FreeSWITCH invokes shutdown callbacks using the module function-table ABI; the `module_exports!`
+// macro bridges this safe `extern "C" fn` (returning `fswtch::Status`) to the raw status return.
+extern "C" fn switch_module_shutdown() -> Status {
     SHUTDOWNS.fetch_add(1, Ordering::Relaxed);
     fswtch::log_info("mod_lifecycle", "shutdown callback invoked");
     SUCCESS

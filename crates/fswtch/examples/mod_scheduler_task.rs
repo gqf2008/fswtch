@@ -43,6 +43,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn spawn_api(_cmd, _session, stream) {
         fswtch::log_info("mod_scheduler_task", "rust_scheduler_spawn invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         let outcome: Result<String, String> = (|| {
             // `runtime == 0` fires immediately; `TaskConfig::new` leaks the static C strings once.
@@ -67,6 +70,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn count_api(_cmd, _session, stream) {
         fswtch::log_info("mod_scheduler_task", "rust_scheduler_count invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let count = COUNTER.load(Ordering::Relaxed);
         let last = LAST_TASK_ID.load(Ordering::Relaxed);
         stream.write(&format!("count={count} last_task_id={last}\n"))

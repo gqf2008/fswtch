@@ -17,8 +17,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use fswtch::sys;
-
 /// Total number of `CHANNEL_CREATE` events observed since the module loaded. Incremented from the
 /// event callback (which FreeSWITCH invokes on its own thread).
 static EVENTS_SEEN: AtomicU64 = AtomicU64::new(0);
@@ -52,6 +50,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn status_api(_cmd, _session, stream) {
         fswtch::log_info("mod_event_listener", "rust_event_status invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let bound = BOUND.load(Ordering::Relaxed);
         let seen = EVENTS_SEEN.load(Ordering::Relaxed);
         stream.write(&format!(
@@ -71,7 +72,7 @@ fswtch::module_load! {
         // signature does not pass it back to the callback (see fswtch::EventBinder docs).
         fswtch::EventBinder::bind(
             "mod_event_listener",
-            sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CREATE,
+            fswtch::EventType::CHANNEL_CREATE,
             None,
             Some(on_channel_create),
             std::ptr::null_mut(),

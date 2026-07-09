@@ -6,6 +6,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn hello_api(_cmd, _session, stream) {
         fswtch::log_info("mod_hello", "rust_hello invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write("hello from Rust\n")
     }
 }

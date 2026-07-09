@@ -22,6 +22,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn show_api(_cmd, session, stream) {
         fswtch::log_info("mod_channel_vars", "rust_channel_show invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         let Some(session) = session else {
             return stream.write(

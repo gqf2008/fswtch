@@ -39,6 +39,9 @@ fswtch::api_callback! {
             "mod_app_playback_control",
             "rust_playback_control_info invoked",
         );
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write("application rust_playback_control registered; use from dialplan with a file path\n")
     }
 }

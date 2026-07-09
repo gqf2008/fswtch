@@ -16,6 +16,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn buffer_demo_api(_cmd, _session, stream) {
         fswtch::log_info("mod_buffer_demo", "rust_buffer_demo invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         // Build a 1 KiB dynamic FIFO buffer and push two payloads into the tail.
         let buffer = match fswtch::Buffer::new(1024) {
@@ -56,6 +59,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn buffer_toss_api(_cmd, _session, stream) {
         fswtch::log_info("mod_buffer_demo", "rust_buffer_toss invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         let buffer = match fswtch::Buffer::new(1024) {
             Ok(buffer) => buffer,

@@ -59,6 +59,9 @@ impl HttpUrl {
 fswtch::api_callback! {
     fn post_api(cmd, _session, stream) {
         fswtch::log_info("mod_http_webhook", "rust_webhook_post invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(request) = cmd.as_deref().and_then(WebhookRequest::parse) else {
             fswtch::log_info("mod_http_webhook", "invalid webhook command");
             let status = stream.write("usage: rust_webhook_post <http-url> <json-body>\n");
@@ -92,6 +95,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
         fswtch::log_info("mod_http_webhook", "rust_webhook_stats invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write(
             &format!(
                 "queued={} sent={} failed={}\n",

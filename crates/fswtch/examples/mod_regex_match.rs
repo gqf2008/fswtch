@@ -14,6 +14,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn regex_match_api(cmd, _session, stream) {
         fswtch::log_info("mod_regex_match", "rust_regex_match invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         // `cmd` is the full API command line (everything after the command name).
         // Treat it as "<pattern> <subject>", splitting on the first space.
@@ -78,6 +81,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn regex_test_api(cmd, _session, stream) {
         fswtch::log_info("mod_regex_match", "rust_regex_test invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         // A boolean-only convenience: `rust_regex_test <pattern> <subject>`
         // reports match / no-match via `Regex::is_match`.

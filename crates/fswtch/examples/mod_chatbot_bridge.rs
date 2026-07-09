@@ -55,6 +55,9 @@ fswtch::chat_callback! {
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
         fswtch::log_info("mod_chatbot_bridge", "rust_chatbot_bridge_stats invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write(
             &format!(
                 "chatbot_bridge_registered=true messages_bridged={}\n",

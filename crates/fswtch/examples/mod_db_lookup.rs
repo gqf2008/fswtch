@@ -19,6 +19,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn db_lookup_api(cmd, _session, stream) {
         fswtch::log_info("mod_db_lookup", "rust_db_lookup invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         let outcome: Result<String, String> = (|| {
             let cmd = cmd.unwrap_or_default();

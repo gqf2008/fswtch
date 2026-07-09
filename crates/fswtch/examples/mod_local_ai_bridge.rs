@@ -235,6 +235,9 @@ struct TtsResult {
 fswtch::api_callback! {
     fn status_api(_cmd, _session, stream) {
         fswtch::log_info("mod_local_ai_bridge", "rust_local_ai_status invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let asr = STATE
             .asr
             .lock()
@@ -267,6 +270,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn asr_api(cmd, _session, stream) {
         fswtch::log_info("mod_local_ai_bridge", "rust_local_asr invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(path) = cmd else {
             let status = stream.write("usage: rust_local_asr <pcm16le-file>\n");
             return fswtch::false_on_success(status);
@@ -305,6 +311,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn tts_api(cmd, _session, stream) {
         fswtch::log_info("mod_local_ai_bridge", "rust_local_tts invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(text) = cmd else {
             let status = stream.write("usage: rust_local_tts <text>\n");
             return fswtch::false_on_success(status);
@@ -351,6 +360,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn nlp_api(cmd, _session, stream) {
         fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(prompt) = cmd else {
             let status = stream.write("usage: rust_local_nlp <prompt>\n");
             return fswtch::false_on_success(status);
@@ -380,6 +392,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn nlp_sync_api(cmd, _session, stream) {
         fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp_sync invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(prompt) = cmd else {
             let status = stream.write("usage: rust_local_nlp_sync <prompt>\n");
             return fswtch::false_on_success(status);

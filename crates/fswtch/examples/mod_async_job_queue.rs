@@ -114,6 +114,9 @@ fn prune_oldest_result(results: &mut HashMap<u64, JobResult>) {
 fswtch::api_callback! {
     fn submit_api(cmd, _session, stream) {
         fswtch::log_info("mod_async_job_queue", "rust_job_submit invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(payload) = cmd else {
             fswtch::log_info("mod_async_job_queue", "missing job payload");
             let status = stream.write("usage: rust_job_submit <payload>\n");
@@ -133,6 +136,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn status_api(cmd, _session, stream) {
         fswtch::log_info("mod_async_job_queue", "rust_job_status invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(id) = cmd.and_then(|text| text.parse::<u64>().ok()) else {
             let status = stream.write("usage: rust_job_status <id>\n");
             return fswtch::false_on_success(status);

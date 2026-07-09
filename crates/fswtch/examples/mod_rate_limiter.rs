@@ -49,6 +49,9 @@ impl LimitRequest {
 fswtch::api_callback! {
     fn allow_api(cmd, _session, stream) {
         fswtch::log_info("mod_rate_limiter", "rust_rate_limit invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(request) = cmd.as_deref().and_then(LimitRequest::parse) else {
             let status = stream.write("usage: rust_rate_limit <key> [limit] [window-secs]\n");
             return fswtch::false_on_success(status);
@@ -98,6 +101,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn reset_api(_cmd, _session, stream) {
         fswtch::log_info("mod_rate_limiter", "rust_rate_limit_reset invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         LIMITERS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

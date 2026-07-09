@@ -19,6 +19,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn vad_detect_api(_cmd, _session, stream) {
         fswtch::log_info("mod_vad_detect", "rust_vad_detect invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         // Build a VAD for 8 kHz, mono. `Vad::new` allocates a `switch_vad_t`; the handle owns it
         // and destroys it on drop.

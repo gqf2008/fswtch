@@ -19,6 +19,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn utils_demo_api(_cmd, _session, stream) {
         fswtch::log_info("mod_utils_demo", "rust_utils_demo invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
 
         // String-utility free functions (each returns Result<String> / Option).
         let escaped = match fswtch::escape_string("he said \"hi\" & bye") {

@@ -12,6 +12,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn emit_api(cmd, _session, stream) {
         fswtch::log_info("mod_event_sink", "rust_event_sink_emit invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(request) = cmd.as_deref().and_then(EventRequest::parse) else {
             fswtch::log_info("mod_event_sink", "invalid event sink command");
             let status = stream.write("usage: rust_event_sink_emit <subclass> <json-object>\n");
@@ -35,6 +38,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
         fswtch::log_info("mod_event_sink", "rust_event_sink_stats invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write(
             &format!("events_fired={}\n", EVENTS_FIRED.load(Ordering::Relaxed)),
         )

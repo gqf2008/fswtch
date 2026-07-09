@@ -18,6 +18,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn start_vad_api(cmd, _session, stream) {
         fswtch::log_info("mod_remote_vad", "rust_vad_start invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(config) = cmd.as_deref().and_then(VadConfig::parse) else {
             fswtch::log_info("mod_remote_vad", "invalid command syntax");
             let status =

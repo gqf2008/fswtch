@@ -4,15 +4,17 @@ use fswtch::sys;
 unsafe extern "C" fn kill_channel(
     _session: *mut sys::switch_core_session_t,
     _sig: std::os::raw::c_int,
-) -> fswtch::Status {
+) -> sys::switch_status_t {
     fswtch::log_info("mod_endpoint_skeleton", "kill_channel invoked");
-    fswtch::SUCCESS
+    fswtch::SUCCESS.raw()
 }
 
 /// Trampoline for the `state_change` I/O routine: logs the transition and returns success.
-unsafe extern "C" fn state_change(_session: *mut sys::switch_core_session_t) -> fswtch::Status {
+unsafe extern "C" fn state_change(
+    _session: *mut sys::switch_core_session_t,
+) -> sys::switch_status_t {
     fswtch::log_info("mod_endpoint_skeleton", "state_change invoked");
-    fswtch::SUCCESS
+    fswtch::SUCCESS.raw()
 }
 
 fswtch::module_exports! {
@@ -26,6 +28,9 @@ fswtch::api_callback! {
             "mod_endpoint_skeleton",
             "rust_endpoint_skeleton_info invoked",
         );
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write(
             "endpoint rust_endpoint_skeleton registered with kill_channel + state_change routines\n",
         )
@@ -45,7 +50,11 @@ fswtch::module_load! {
             .build()
             .and_then(|io| {
                 module
-                    .endpoint("rust_endpoint_skeleton", io)
+                    .endpoint(
+                        "rust_endpoint_skeleton",
+                        io,
+                        fswtch::StateHandlerTable::new_null(),
+                    )
                     .inspect(|_| {
                         fswtch::log_info(
                             "mod_endpoint_skeleton",

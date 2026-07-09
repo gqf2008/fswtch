@@ -13,6 +13,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn check_registration_api(cmd, _session, stream) {
         fswtch::log_info("mod_registration_check", "rust_check_registration invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(request) = cmd.as_deref().and_then(RegistrationRequest::parse) else {
             fswtch::log_info("mod_registration_check", "invalid command syntax");
             let status =

@@ -15,6 +15,9 @@ fswtch::module_exports! {
 fswtch::api_callback! {
     fn hit_api(cmd, _session, stream) {
         fswtch::log_info("mod_metrics", "rust_metrics_hit invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(name) = cmd else {
             let status = stream.write("usage: rust_metrics_hit <name>\n");
             return fswtch::false_on_success(status);
@@ -41,6 +44,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn show_api(_cmd, _session, stream) {
         fswtch::log_info("mod_metrics", "rust_metrics_show invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let metrics = METRICS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());

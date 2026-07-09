@@ -21,6 +21,9 @@ struct EnrichedCdr {
 fswtch::api_callback! {
     fn enrich_api(cmd, _session, stream) {
         fswtch::log_info("mod_cdr_enricher", "rust_cdr_enrich invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         let Some(text) = cmd else {
             fswtch::log_info("mod_cdr_enricher", "missing CDR JSON");
             let status = stream.write("usage: rust_cdr_enrich <json-cdr>\n");
@@ -57,6 +60,9 @@ fswtch::api_callback! {
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
         fswtch::log_info("mod_cdr_enricher", "rust_cdr_enricher_stats invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
         stream.write(
             &format!("cdrs_enriched={}\n", CDRS_ENRICHED.load(Ordering::Relaxed)),
         )
