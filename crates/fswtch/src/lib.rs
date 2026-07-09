@@ -18,6 +18,8 @@ mod limit;
 mod logging;
 mod media;
 mod module;
+mod nat;
+mod network_list;
 mod packetizer;
 mod plc;
 mod pool;
@@ -39,8 +41,8 @@ pub use fswtch_sys as sys;
 pub use buffer::Buffer;
 pub use caller::{CallerExtension, CallerProfile};
 pub use channel::{
-    CallState, Channel, ChannelFlag, bind_device_state_handler, cause_to_str, str_to_cause,
-    unbind_device_state_handler,
+    CallState, Channel, ChannelFlag, bind_device_state_handler, callstate_to_str, cause_to_str,
+    str_to_callstate, str_to_cause, unbind_device_state_handler,
 };
 pub use codec::Codec;
 pub use command::{
@@ -48,10 +50,14 @@ pub use command::{
     strdup_to_string,
 };
 pub use console::{
-    CompletionFunc, CompletionMatches, complete, execute, expand_alias, free_matches,
+    CompletionFunc, CompletionMatches, complete, execute, execute_api, expand_alias, free_matches,
 };
-pub use core::{get_domain, get_hostname, get_switchname, get_uuid, get_variable, set_variable};
-pub use core_db::{CoreDb, Stmt, StmtRows};
+pub use core::{
+    get_domain, get_hostname, get_switchname, get_uuid, get_variable, hupall, hupall_endpoint,
+    hupall_matching_var, hupall_matching_vars, session_count, sessions_per_second, set_variable,
+    uptime,
+};
+pub use core_db::{CacheDbType, CoreDb, Stmt, StmtRows, TableRows, cache_db_type};
 pub use endpoint::{
     Dtmf, DtmfSource, EndpointInterfaceRef, EndpointIoBuilder, EndpointIoRoutines, Frame, FrameMut,
     IoFlags, IoRoutinesBuilder, MessageType, OutgoingResult, SessionMessage, StateHandlerTable,
@@ -103,6 +109,13 @@ pub use module::{
     SpeechInterface, SpeechOpenFn, SpeechReadTtsFn, TimerCheckFn, TimerDestroyFn, TimerInitFn,
     TimerInterface, TimerNextFn, TimerStepFn, TimerSyncFn,
 };
+pub use nat::{
+    NatIpProto, add_mapping as nat_add_mapping, del_mapping as nat_del_mapping, init as nat_init,
+    is_initialized as nat_is_initialized, late_init as nat_late_init, reinit as nat_reinit,
+    republish as nat_republish, set_mapping as nat_set_mapping, shutdown as nat_shutdown,
+    type_str as nat_type_str,
+};
+pub use network_list::{AclVerdict, NetworkList};
 pub use packetizer::{BitstreamType, Packetizer};
 pub use plc::Plc;
 pub use pool::Pool;
@@ -119,8 +132,8 @@ pub use scheduler::{
 pub use session::{Session, SessionGuard};
 pub use status::{
     CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallDirection, Cause, ChannelState, FALSE, GENERR,
-    OriginateFlag, Result, SUCCESS, Status, SwitchError, false_on_success, status_to_result,
-    switch_bool,
+    HupType, OriginateFlag, Result, SUCCESS, Status, SwitchError, false_on_success,
+    status_to_result, switch_bool,
 };
 pub use stream::{ApiStream, Stream, write_stream_response};
 pub use timer::Timer;

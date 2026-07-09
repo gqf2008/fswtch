@@ -41,6 +41,27 @@ fn alloc_chunk() -> Result<*mut u8> {
     Ok(ptr.cast())
 }
 
+/// Builds a `switch_stream_handle_t` replicating FreeSWITCH's `SWITCH_STANDARD_STREAM` macro: a
+/// zeroed struct over a malloc'd `STREAM_CHUNK_LEN` buffer, with both console writers installed.
+///
+/// Returns the handle and the original buffer pointer. The writers may `realloc` `stream.data`
+/// away from the returned buffer, so callers that read output must always use the final
+/// `stream.data` / `stream.data_len` rather than this pointer.
+fn standard_stream() -> Result<(sys::switch_stream_handle, *mut u8)> {
+    let buffer = alloc_chunk()?;
+    let stream = sys::switch_stream_handle {
+        data: buffer.cast(),
+        end: buffer.cast(),
+        data_size: STREAM_CHUNK_LEN,
+        write_function: Some(sys::switch_console_stream_write),
+        raw_write_function: Some(sys::switch_console_stream_raw_write),
+        alloc_len: STREAM_CHUNK_LEN,
+        alloc_chunk: STREAM_CHUNK_LEN,
+        ..Default::default()
+    };
+    Ok((stream, buffer))
+}
+
 /// Runs a FreeSWITCH API command — the same string typed at the `fs_cli` console — and returns its
 /// captured output.
 ///
@@ -57,20 +78,7 @@ pub fn execute(cmd: impl AsRef<str>) -> Result<String> {
     let mut cmd_bytes = cstring(cmd)?.into_bytes_with_nul();
     let cmd_ptr = cmd_bytes.as_mut_ptr().cast::<c_char>();
 
-    let buffer = alloc_chunk()?;
-
-    // Build a `switch_stream_handle_t` by hand, replicating `SWITCH_STANDARD_STREAM`: zeroed struct,
-    // a malloc'd 1KiB buffer, and FreeSWITCH's console stream writers.
-    let mut stream = sys::switch_stream_handle {
-        data: buffer.cast(),
-        end: buffer.cast(),
-        data_size: STREAM_CHUNK_LEN,
-        write_function: Some(sys::switch_console_stream_write),
-        raw_write_function: Some(sys::switch_console_stream_raw_write),
-        alloc_len: STREAM_CHUNK_LEN,
-        alloc_chunk: STREAM_CHUNK_LEN,
-        ..Default::default()
-    };
+    let (mut stream, _buffer) = standard_stream()?;
 
     // SAFETY: `stream` is a fully initialized handle with a valid buffer and the console writers
     // installed; `cmd_ptr` is a writable, NUL-terminated C string valid for the duration of the
@@ -84,6 +92,61 @@ pub fn execute(cmd: impl AsRef<str>) -> Result<String> {
     let output = if !data_ptr.is_null() {
         // SAFETY: `data_ptr` is null or points at the null-terminated buffer the writers maintain;
         // `data_len` is the number of bytes written.
+        let bytes = unsafe { std::slice::from_raw_parts(data_ptr, len) };
+        String::from_utf8_lossy(bytes).into_owned()
+    } else {
+        String::new()
+    };
+
+    // SAFETY: `stream.data` is the current buffer (possibly realloc'd from `buffer`) allocated by
+    // the libc allocator and now no longer referenced.
+    if !data_ptr.is_null() {
+        unsafe { free(data_ptr.cast()) };
+    }
+
+    status_to_result(status)?;
+    Ok(output)
+}
+
+/// Runs a FreeSWITCH API command via `switch_api_execute`, with the command name and argument
+/// passed separately and an optional session for command context.
+///
+/// Unlike [`execute`] (which drives `switch_console_execute` over a single combined command
+/// line), this mirrors the `fs_cli` `cmd arg` split: some API commands behave differently when
+/// the name and argument are separated, and a subset rely on a live session being attached.
+/// Pass `None` for `session` when no session context is needed.
+///
+/// A private `switch_stream_handle_t` is constructed inline (mirroring `SWITCH_STANDARD_STREAM`),
+/// the command is executed against it, and the accumulated text is copied out before the stream
+/// buffer is freed. Neither `cmd` nor `arg` may contain an interior NUL.
+///
+/// Returns the command's textual output, which may be empty. Failure (stream setup failure or a
+/// non-success status from `switch_api_execute`) is reported via `Err`.
+pub fn execute_api(
+    cmd: impl AsRef<str>,
+    arg: impl AsRef<str>,
+    session: Option<&crate::Session>,
+) -> Result<String> {
+    let cmd = cstring(cmd)?;
+    let arg = cstring(arg)?;
+    // A borrowed `Session` is a non-owning handle valid for the call duration; null when absent.
+    let session_ptr = session.map_or(std::ptr::null_mut(), |s| s.as_ptr());
+
+    let (mut stream, _buffer) = standard_stream()?;
+
+    // SAFETY: `stream` is a fully initialized handle with a valid buffer and the console writers
+    // installed; `cmd`/`arg` are valid, NUL-terminated C strings for the call; `session_ptr` is
+    // null or a live session handle.
+    let status =
+        unsafe { sys::switch_api_execute(cmd.as_ptr(), arg.as_ptr(), session_ptr, &mut stream) };
+
+    // Read the accumulated output before tearing the stream down. `data` may have been realloc'd
+    // by the writers, so always free the final `data` pointer rather than the original `buffer`.
+    let data_ptr = stream.data.cast::<u8>();
+    let len = stream.data_len;
+    let output = if !data_ptr.is_null() {
+        // SAFETY: `data_ptr` is null or points at the buffer the writers maintain; `data_len` is
+        // the number of bytes written.
         let bytes = unsafe { std::slice::from_raw_parts(data_ptr, len) };
         String::from_utf8_lossy(bytes).into_owned()
     } else {

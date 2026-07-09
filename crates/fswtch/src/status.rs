@@ -543,4 +543,83 @@ mod tests {
         assert!(OriginateFlag::NONE.contains(OriginateFlag::NONE));
         assert!(!f.contains(OriginateFlag::NONE));
     }
+
+    #[test]
+    fn hup_type_combine_and_contains() {
+        let both = HupType::ANSWERED | HupType::UNANSWERED;
+        assert!(both.contains(HupType::ANSWERED));
+        assert!(both.contains(HupType::UNANSWERED));
+        assert!(!both.contains(HupType::NONE));
+        // NONE contains only itself.
+        assert!(HupType::NONE.contains(HupType::NONE));
+        assert_eq!(both.bits(), 3);
+    }
+}
+
+// ── HupType (bitmask) ────────────────────────────────────────────────────
+
+/// Which legs a batch hangup applies to — a bitmask over `switch_hup_type_t`.
+///
+/// Used by [`crate::hupall_matching_var`] / [`crate::hupall_matching_vars`]. Combine with `|`:
+/// `HupType::ANSWERED | HupType::UNANSWERED` matches both legs (the default of the upstream
+/// `switch_core_session_hupall_matching_var` macro, which Rust cannot call since bindgen drops
+/// the `#define`).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct HupType(pub sys::switch_hup_type_t);
+
+impl HupType {
+    pub const NONE: Self = Self(sys::switch_hup_type_t_SHT_NONE);
+    pub const UNANSWERED: Self = Self(sys::switch_hup_type_t_SHT_UNANSWERED);
+    pub const ANSWERED: Self = Self(sys::switch_hup_type_t_SHT_ANSWERED);
+
+    /// The raw bitset value, for FFI.
+    #[inline]
+    pub const fn bits(self) -> sys::switch_hup_type_t {
+        self.0
+    }
+
+    /// Wraps a raw bitset.
+    #[inline]
+    pub const fn from_raw(v: sys::switch_hup_type_t) -> Self {
+        Self(v)
+    }
+
+    /// Returns `true` when every bit set in `flag` is also set in `self`. `NONE` contains
+    /// only itself.
+    #[inline]
+    pub const fn contains(self, flag: Self) -> bool {
+        if flag.0 == 0 {
+            self.0 == 0
+        } else {
+            (self.0 & flag.0) == flag.0
+        }
+    }
+}
+
+impl std::ops::BitOr for HupType {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for HupType {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl std::ops::BitAnd for HupType {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self {
+        Self(self.0 & rhs.0)
+    }
+}
+
+impl std::ops::Not for HupType {
+    type Output = Self;
+    fn not(self) -> Self {
+        Self(!self.0)
+    }
 }

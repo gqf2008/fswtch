@@ -178,6 +178,117 @@ impl CoreDb {
         // SAFETY: `self.raw` is a live connection.
         unsafe { sys::switch_core_db_last_insert_rowid(self.raw.as_ptr()) }
     }
+
+    /// Opens a SQLite database **file** via `switch_core_db_open_file`.
+    ///
+    /// Unlike [`open`](Self::open) (which uses `sqlite3_open`), this is FreeSWITCH's convenience
+    /// wrapper. Fails if the file cannot be opened (returns `Err` on a null handle).
+    pub fn open_file(filename: impl AsRef<str>) -> Result<Self> {
+        let filename = cstring(filename)?;
+        // SAFETY: `filename` is a valid C string. The returned pointer is null on failure or a
+        // heap-allocated sqlite3 handle that `CoreDb::Drop` will close.
+        let raw = unsafe { sys::switch_core_db_open_file(filename.as_ptr()) };
+        // SAFETY: when non-null, `raw` is a freshly opened handle we take ownership of.
+        unsafe { Self::from_raw(raw) }.ok_or(SwitchError(GENERR))
+    }
+
+    /// Opens an **in-memory** SQLite database via `switch_core_db_open_in_memory`.
+    pub fn open_in_memory(uri: impl AsRef<str>) -> Result<Self> {
+        let uri = cstring(uri)?;
+        // SAFETY: `uri` is a valid C string. The returned pointer is null on failure or a
+        // heap-allocated sqlite3 handle that `CoreDb::Drop` will close.
+        let raw = unsafe { sys::switch_core_db_open_in_memory(uri.as_ptr()) };
+        // SAFETY: when non-null, `raw` is a freshly opened handle we take ownership of.
+        unsafe { Self::from_raw(raw) }.ok_or(SwitchError(GENERR))
+    }
+
+    /// Executes `sql` repeatedly until it succeeds or `retries` is exhausted (handles
+    /// `SQLITE_BUSY`/`SQLITE_LOCKED`).
+    pub fn persistant_execute(&self, sql: &str, retries: u32) -> Result<()> {
+        let mut sql_bytes = cstring(sql)?.into_bytes_with_nul();
+        let sql_ptr = sql_bytes.as_mut_ptr().cast::<std::ffi::c_char>();
+        // SAFETY: `self.as_ptr()` is a live handle; `sql_ptr` is a writable NUL-terminated string
+        // (the FFI takes `*mut`); `retries` is a plain u32.
+        let status =
+            unsafe { sys::switch_core_db_persistant_execute(self.as_ptr(), sql_ptr, retries) };
+        crate::status_to_result(status)
+    }
+
+    /// Like [`persistant_execute`](Self::persistant_execute) but wraps the statement in a
+    /// transaction (`BEGIN`/`COMMIT`).
+    pub fn persistant_execute_trans(&self, sql: &str, retries: u32) -> Result<()> {
+        let mut sql_bytes = cstring(sql)?.into_bytes_with_nul();
+        let sql_ptr = sql_bytes.as_mut_ptr().cast::<std::ffi::c_char>();
+        // SAFETY: as above.
+        let status = unsafe {
+            sys::switch_core_db_persistant_execute_trans(self.as_ptr(), sql_ptr, retries)
+        };
+        crate::status_to_result(status)
+    }
+
+    /// Runs `test_sql`; if it errors (schema mismatch), runs `drop_sql` then `reactive_sql`.
+    ///
+    /// The canonical "create table if it doesn't exist" pattern: `test_sql` = a SELECT against
+    /// the table, `drop_sql` = `DROP TABLE IF EXISTS ...`, `reactive_sql` = `CREATE TABLE ...`.
+    pub fn test_reactive(&self, test_sql: &str, drop_sql: &str, reactive_sql: &str) -> Result<()> {
+        let mut t = cstring(test_sql)?.into_bytes_with_nul();
+        let mut d = cstring(drop_sql)?.into_bytes_with_nul();
+        let mut r = cstring(reactive_sql)?.into_bytes_with_nul();
+        // SAFETY: `self.as_ptr()` live; three writable NUL-terminated strings; FFI takes `*mut`.
+        unsafe {
+            sys::switch_core_db_test_reactive(
+                self.as_ptr(),
+                t.as_mut_ptr().cast::<std::ffi::c_char>(),
+                d.as_mut_ptr().cast::<std::ffi::c_char>(),
+                r.as_mut_ptr().cast::<std::ffi::c_char>(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Runs `sql` (typically a `SELECT`) and returns the whole result set as a [`TableRows`]
+    /// guard that frees itself on drop.
+    ///
+    /// Mirrors sqlite3's `get_table` flat layout: the result holds `column_count` column names
+    /// followed by `row_count * column_count` values. Returns `Err` on a non-zero sqlite3 result;
+    /// in that case the error message (if any) is reported and freed via `switch_core_db_free`
+    /// (the engine's own free, matching how [`exec`](Self::exec) releases its `errmsg`).
+    pub fn get_table(&self, sql: &str) -> Result<TableRows> {
+        let sql = cstring(sql)?;
+        let mut result: *mut *mut std::ffi::c_char = std::ptr::null_mut();
+        let mut nrow: std::ffi::c_int = 0;
+        let mut ncolumn: std::ffi::c_int = 0;
+        let mut errmsg: *mut std::ffi::c_char = std::ptr::null_mut();
+        // SAFETY: `self.as_ptr()` live; `sql` valid C string; the four out-params are valid
+        // writable locals. On success `result` is sqlite3-allocated and freed by `TableRows::drop`.
+        let rc = unsafe {
+            sys::switch_core_db_get_table(
+                self.as_ptr(),
+                sql.as_ptr(),
+                &mut result,
+                &mut nrow,
+                &mut ncolumn,
+                &mut errmsg,
+            )
+        };
+        if rc != 0 {
+            // Failure: free errmsg if present, and the (possibly allocated) result table too.
+            if !errmsg.is_null() {
+                // SAFETY: `errmsg` is sqlite3-allocated (matching its free), null-checked above.
+                unsafe { sys::switch_core_db_free(errmsg) };
+            }
+            if !result.is_null() {
+                // SAFETY: `result` is sqlite3-allocated when non-null, null-checked above.
+                unsafe { sys::switch_core_db_free_table(result) };
+            }
+            return Err(SwitchError(GENERR));
+        }
+        Ok(TableRows {
+            raw: result,
+            row_count: nrow.max(0) as usize,
+            column_count: ncolumn.max(0) as usize,
+        })
+    }
 }
 
 impl Drop for CoreDb {
@@ -186,6 +297,71 @@ impl Drop for CoreDb {
         // All `Stmt`s borrowing this connection are guaranteed dropped first by the borrow checker.
         unsafe {
             sys::switch_core_db_close(self.raw.as_ptr());
+        }
+    }
+}
+
+/// Rows returned by [`CoreDb::get_table`], freed automatically on drop.
+///
+/// Mirrors sqlite3's `get_table` flat layout: the first `column_count` entries are column names,
+/// followed by `row_count` rows of `column_count` values each.
+pub struct TableRows {
+    raw: *mut *mut std::ffi::c_char,
+    row_count: usize,
+    column_count: usize,
+}
+
+impl TableRows {
+    /// Number of data rows (excluding the header row of column names).
+    pub fn row_count(&self) -> usize {
+        self.row_count
+    }
+    /// Number of columns.
+    pub fn column_count(&self) -> usize {
+        self.column_count
+    }
+    /// The column name at `idx`, or `None` if out of range.
+    pub fn column_name(&self, idx: usize) -> Option<&str> {
+        if idx >= self.column_count {
+            return None;
+        }
+        // SAFETY: the raw array has `column_count` name entries before the data rows.
+        let ptr = unsafe { *self.raw.add(idx) };
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: `ptr` is a valid C string owned by the result table, valid for `&self`'s life.
+        Some(
+            unsafe { std::ffi::CStr::from_ptr(ptr) }
+                .to_str()
+                .unwrap_or(""),
+        )
+    }
+    /// The value at `(row, col)`, or `None` if out of range or a null cell.
+    pub fn get(&self, row: usize, col: usize) -> Option<&str> {
+        if row >= self.row_count || col >= self.column_count {
+            return None;
+        }
+        let idx = self.column_count + row * self.column_count + col;
+        // SAFETY: `idx` is within `[0, column_count * (1 + row_count))`.
+        let ptr = unsafe { *self.raw.add(idx) };
+        if ptr.is_null() {
+            return None;
+        }
+        // SAFETY: `ptr` is a valid C string owned by the result table, valid for `&self`'s life.
+        Some(
+            unsafe { std::ffi::CStr::from_ptr(ptr) }
+                .to_str()
+                .unwrap_or(""),
+        )
+    }
+}
+
+impl Drop for TableRows {
+    fn drop(&mut self) {
+        // SAFETY: `self.raw` was allocated by `switch_core_db_get_table` and is freed exactly once.
+        if !self.raw.is_null() {
+            unsafe { sys::switch_core_db_free_table(self.raw) };
         }
     }
 }
@@ -449,4 +625,38 @@ mod tests {
         // SQLite returns "not an error" after a successful call.
         assert!(db.errmsg().is_some());
     }
+}
+
+/// The runtime-configured FreeSWITCH database backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CacheDbType {
+    /// Bundled SQLite (`SCDB_TYPE_CORE_DB = 0`).
+    CoreDb,
+    /// ODBC (`SCDB_TYPE_ODBC = 1`).
+    Odbc,
+    /// Pluggable database interface (`SCDB_TYPE_DATABASE_INTERFACE = 2`).
+    DatabaseInterface,
+    /// Any unrecognized value a future FreeSWITCH may add.
+    Unknown(u32),
+}
+
+impl From<sys::switch_cache_db_handle_type_t> for CacheDbType {
+    fn from(v: sys::switch_cache_db_handle_type_t) -> Self {
+        match v {
+            sys::switch_cache_db_handle_type_t_SCDB_TYPE_CORE_DB => Self::CoreDb,
+            sys::switch_cache_db_handle_type_t_SCDB_TYPE_ODBC => Self::Odbc,
+            sys::switch_cache_db_handle_type_t_SCDB_TYPE_DATABASE_INTERFACE => {
+                Self::DatabaseInterface
+            }
+            other => Self::Unknown(other),
+        }
+    }
+}
+
+/// Reports the runtime-configured database backend (independent of any open connection).
+///
+/// Wraps `switch_core_dbtype`.
+pub fn cache_db_type() -> CacheDbType {
+    // SAFETY: no arguments; returns a plain enum-discriminant u32.
+    CacheDbType::from(unsafe { sys::switch_core_dbtype() })
 }

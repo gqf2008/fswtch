@@ -250,6 +250,63 @@ impl Channel {
         ChannelState::from_raw(r)
     }
 
+    /// Sets the channel's call-state (`CCS_*`) and fires the associated event/log.
+    ///
+    /// This updates the call-progress marker only; it does **not** drive the channel state machine
+    /// (`CS_*`) — that is [`set_state`](Self::set_state)'s job.
+    pub fn set_callstate(self, state: CallState) {
+        // SAFETY: `self.raw` is a live channel; `state.raw()` is a valid callstate; the source
+        // strings are static C strings. Note arg order: (channel, callstate, file, func, line) —
+        // callstate precedes the locator, unlike `switch_channel_perform_set_state`.
+        unsafe {
+            sys::switch_channel_perform_set_callstate(
+                self.raw.as_ptr(),
+                state.raw(),
+                c"fswtch-rs".as_ptr(),
+                c"Channel::set_callstate".as_ptr(),
+                line!() as _,
+            )
+        };
+    }
+
+    /// Fires a presence event for the channel (SIP PUBLISH/NOTIFY).
+    ///
+    /// `rpid` is the RFC 3863 RPID icon hint, `status` the human-readable status text, and `id` the
+    /// presence identity. Any may be `None` (passed as null).
+    pub fn presence(
+        self,
+        rpid: Option<&str>,
+        status: Option<&str>,
+        id: Option<&str>,
+    ) -> Result<()> {
+        let rpid = match rpid {
+            Some(s) => Some(cstring(s)?),
+            None => None,
+        };
+        let status = match status {
+            Some(s) => Some(cstring(s)?),
+            None => None,
+        };
+        let id = match id {
+            Some(s) => Some(cstring(s)?),
+            None => None,
+        };
+        // SAFETY: `self.raw` is a live channel; the three string args are valid C strings or null
+        // (null is permitted by the ABI for "unspecified"); locator strings are static.
+        unsafe {
+            sys::switch_channel_perform_presence(
+                self.raw.as_ptr(),
+                rpid.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                status.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                id.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                c"fswtch-rs".as_ptr(),
+                c"Channel::presence".as_ptr(),
+                line!() as _,
+            );
+        }
+        Ok(())
+    }
+
     /// Hangs up the channel with the given cause. Returns the resulting state.
     pub fn hangup(self, cause: Cause) -> ChannelState {
         // SAFETY: `self.raw` is a live channel; source strings are static C strings.
@@ -1312,6 +1369,23 @@ pub fn str_to_cause(name: impl AsRef<str>) -> Result<Cause> {
 pub fn cause_to_str(cause: Cause) -> Option<&'static str> {
     // SAFETY: `switch_channel_cause2str` returns a static string literal.
     let ptr = unsafe { sys::switch_channel_cause2str(cause.raw()) };
+    // SAFETY: `ptr` is null or a static null-terminated string.
+    unsafe { borrowed_cstr_to_str(ptr) }
+}
+
+/// Translates a call-state name (e.g. `"ringing"`) into a [`CallState`].
+pub fn str_to_callstate(name: impl AsRef<str>) -> Result<CallState> {
+    let name = cstring(name)?;
+    // SAFETY: `name` is a valid C string for the call.
+    Ok(CallState::from_raw(unsafe {
+        sys::switch_channel_str2callstate(name.as_ptr())
+    }))
+}
+
+/// Translates a [`CallState`] into its canonical name. The returned string borrows static storage.
+pub fn callstate_to_str(state: CallState) -> Option<&'static str> {
+    // SAFETY: `switch_channel_callstate2str` returns a static string literal.
+    let ptr = unsafe { sys::switch_channel_callstate2str(state.raw()) };
     // SAFETY: `ptr` is null or a static null-terminated string.
     unsafe { borrowed_cstr_to_str(ptr) }
 }
