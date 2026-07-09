@@ -230,6 +230,10 @@ impl CoreDb {
     ///
     /// The canonical "create table if it doesn't exist" pattern: `test_sql` = a SELECT against
     /// the table, `drop_sql` = `DROP TABLE IF EXISTS ...`, `reactive_sql` = `CREATE TABLE ...`.
+    ///
+    /// Returns `Ok(())` unconditionally: the underlying `switch_core_db_test_reactive` is `void`,
+    /// so errors from `reactive_sql` are not surfaced. For error feedback, drive the statements
+    /// individually via [`exec`](Self::exec) / [`prepare`](Self::prepare).
     pub fn test_reactive(&self, test_sql: &str, drop_sql: &str, reactive_sql: &str) -> Result<()> {
         let mut t = cstring(test_sql)?.into_bytes_with_nul();
         let mut d = cstring(drop_sql)?.into_bytes_with_nul();
@@ -320,7 +324,7 @@ impl TableRows {
     pub fn column_count(&self) -> usize {
         self.column_count
     }
-    /// The column name at `idx`, or `None` if out of range.
+    /// The column name at `idx`, or `None` if out of range or not valid UTF-8.
     pub fn column_name(&self, idx: usize) -> Option<&str> {
         if idx >= self.column_count {
             return None;
@@ -331,13 +335,11 @@ impl TableRows {
             return None;
         }
         // SAFETY: `ptr` is a valid C string owned by the result table, valid for `&self`'s life.
-        Some(
-            unsafe { std::ffi::CStr::from_ptr(ptr) }
-                .to_str()
-                .unwrap_or(""),
-        )
+        // SQLite column names are ASCII, but `to_str().ok()` degrades non-UTF-8 to `None` rather
+        // than silently producing an empty string.
+        unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str().ok()
     }
-    /// The value at `(row, col)`, or `None` if out of range or a null cell.
+    /// The value at `(row, col)`, or `None` if out of range, a null cell, or not valid UTF-8.
     pub fn get(&self, row: usize, col: usize) -> Option<&str> {
         if row >= self.row_count || col >= self.column_count {
             return None;
@@ -349,11 +351,8 @@ impl TableRows {
             return None;
         }
         // SAFETY: `ptr` is a valid C string owned by the result table, valid for `&self`'s life.
-        Some(
-            unsafe { std::ffi::CStr::from_ptr(ptr) }
-                .to_str()
-                .unwrap_or(""),
-        )
+        // Non-UTF-8 cell values (e.g. BLOB columns) degrade to `None` rather than an empty string.
+        unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str().ok()
     }
 }
 

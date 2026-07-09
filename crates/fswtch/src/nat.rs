@@ -57,6 +57,9 @@ pub fn is_initialized() -> bool {
 /// actually-allocated port is returned (which may differ). Pass `None` to let the NAT device pick
 /// and ignore the returned value. `sticky = true` marks the mapping persistent. Requires NAT to
 /// be initialized ([`is_initialized`] returns `true`).
+///
+/// Note: `Some(0)` requests port 0, whose behavior is device-dependent and unspecified — prefer
+/// `None` when you want the device to choose.
 pub fn add_mapping(
     port: u16,
     proto: NatIpProto,
@@ -87,17 +90,23 @@ pub fn del_mapping(port: u16, proto: NatIpProto) -> Result<()> {
     status_to_result(unsafe { sys::switch_nat_del_mapping(port, proto.raw()) })
 }
 
-/// The current active NAT mechanism (`"upnp"` / `"pmp"` / `"n/a"`), as a borrowed static C string.
+/// The current active NAT mechanism (`"upnp"` / `"pmp"` / `"n/a"`), as an owned [`String`].
 ///
-/// Wraps `switch_nat_get_type`, which returns a const string that must not be freed.
-pub fn type_str() -> Option<&'static CStr> {
-    // SAFETY: returns null or a static const C string.
+/// Wraps `switch_nat_get_type`. The string is copied out of FreeSWITCH storage so its lifetime is
+/// not tied to any assumption about the source — the header documents the pointer as `const`
+/// (not to be freed by the caller) but does not guarantee static storage.
+pub fn type_str() -> Option<String> {
+    // SAFETY: no arguments; returns null or a const C string pointer.
     let ptr = unsafe { sys::switch_nat_get_type() };
     if ptr.is_null() {
         None
     } else {
-        // SAFETY: `ptr` is null or a static const C string.
-        Some(unsafe { CStr::from_ptr(ptr) })
+        // SAFETY: `ptr` is a non-null C string per the call contract above.
+        Some(
+            unsafe { CStr::from_ptr(ptr) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 }
 

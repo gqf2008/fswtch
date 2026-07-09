@@ -110,6 +110,9 @@ impl<'pool> NetworkList<'pool> {
 
     /// Looks up `ip` against the list (longest-prefix match, default fallback). The returned
     /// [`AclVerdict`] borrows the matching rule's token for `self`'s lifetime.
+    ///
+    /// `ip` is converted to network byte order (`u32::from_be_bytes`) matching FreeSWITCH's
+    /// internal `switch_test_subnet`, which compares against CIDRs parsed via `inet_pton`.
     pub fn validate_ipv4(&self, ip: Ipv4Addr) -> AclVerdict<'_> {
         let ip_u32 = u32::from_be_bytes(ip.octets());
         let mut token_ptr: *const std::ffi::c_char = std::ptr::null();
