@@ -10,7 +10,7 @@ use std::ffi::CString;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use crate::command::{borrowed_cstr_to_string, free_cstr};
+use crate::command::borrowed_cstr_to_string;
 use crate::{GENERR, Result, SwitchError, cstring, sys};
 
 /// SQLite result code: `SWITCH_CORE_DB_OK` (0) — the only value FreeSWITCH treats as success for
@@ -129,9 +129,12 @@ impl CoreDb {
                 &mut errmsg,
             )
         };
-        // SAFETY: `free_cstr` is null-safe; when set, `errmsg` is malloc'd by SQLite and owned by
-        // us until freed.
-        unsafe { free_cstr(errmsg) };
+        // SAFETY: SQLite allocates `errmsg` with its own allocator (sqlite3_malloc), so it must be
+        // freed with `switch_core_db_free` (= sqlite3_free), not libc `free`. The call is
+        // null-safe per sqlite3's contract.
+        if !errmsg.is_null() {
+            unsafe { sys::switch_core_db_free(errmsg) };
+        }
         db_result(code)
     }
 

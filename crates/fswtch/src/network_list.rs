@@ -6,7 +6,7 @@
 //! is bounded by the pool and enforced by the borrow checker (`'pool`).
 
 use std::ffi::CStr;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::ptr::NonNull;
 
 use crate::{GENERR, Pool, Result, SwitchError, cstring, status_to_result, sys};
@@ -34,11 +34,9 @@ impl<'a> AclVerdict<'a> {
 /// An IP/ACL network list, borrowing storage from a [`Pool`].
 ///
 /// Rules added via [`add_cidr`](Self::add_cidr) / [`add_host`](Self::add_host) are matched in
-/// longest-prefix order by [`validate_ipv4`](Self::validate_ipv4). The list lives as long as
-/// `'pool`; there is no `destroy` — the pool reclaims everything on drop.
-///
-/// IPv6 lookup is not yet wrapped (the `ip_t` union's generated field path is unstable across
-/// bindgen versions); use IPv4 for now.
+/// longest-prefix order by [`validate_ipv4`](Self::validate_ipv4) /
+/// [`validate_ipv6`](Self::validate_ipv6). The list lives as long as `'pool`; there is no
+/// `destroy` — the pool reclaims everything on drop.
 pub struct NetworkList<'pool> {
     raw: NonNull<sys::switch_network_list_t>,
     _pool: &'pool Pool,
@@ -123,6 +121,35 @@ impl<'pool> NetworkList<'pool> {
         } != sys::switch_bool_t_SWITCH_FALSE;
         // SAFETY: `token_ptr` is null or points at pool-backed storage tied to this list's
         // lifetime (`'pool`, which outlives `&self`); see `cstr_ptr_to_option`'s contract.
+        let token = unsafe { cstr_ptr_to_option(token_ptr) };
+        AclVerdict { allowed, token }
+    }
+
+    /// IPv6 variant of [`validate_ipv4`](Self::validate_ipv4).
+    ///
+    /// `ip` is laid into the `v6` variant of FreeSWITCH's `ip_t` union (network byte order, as
+    /// `Ipv6Addr::octets()` is big-endian) matching `switch_testv6_subnet`'s expectation.
+    pub fn validate_ipv6(&self, ip: Ipv6Addr) -> AclVerdict<'_> {
+        let mut ip_val = sys::ip_t::default();
+        // SAFETY: `ip_t` is a union whose `v6` variant is an `in6_addr` (16 bytes) laid out at the
+        // union's start; writing the 16 address bytes to the union's start therefore fully
+        // initializes the `v6` variant. The union is at least 16 bytes (it holds `in6_addr`).
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                ip.octets().as_ptr(),
+                &mut ip_val as *mut sys::ip_t as *mut u8,
+                16,
+            );
+        }
+        let mut token_ptr: *const std::ffi::c_char = std::ptr::null();
+        // SAFETY: `self.raw` is a live list; `ip_val` is an initialized `ip_t` (v6 variant);
+        // `&mut token_ptr` is a valid out-param (null when no rule matches). The returned
+        // switch_bool_t is 0/1.
+        let allowed = unsafe {
+            sys::switch_network_list_validate_ip6_token(self.raw.as_ptr(), ip_val, &mut token_ptr)
+        } != sys::switch_bool_t_SWITCH_FALSE;
+        // SAFETY: as in `validate_ipv4` — `token_ptr` is null or pool-backed storage tied to this
+        // list's lifetime.
         let token = unsafe { cstr_ptr_to_option(token_ptr) };
         AclVerdict { allowed, token }
     }
