@@ -12,6 +12,7 @@ mod endpoint;
 mod estimators;
 mod event;
 mod exports;
+mod file;
 mod ivr;
 mod jitterbuffer;
 mod limit;
@@ -70,6 +71,7 @@ pub use event::{
     channel_permission_modify, channel_permission_verify, channel_unbind, event_name,
     event_running, name_event, unbind_callback,
 };
+pub use file::*;
 pub use ivr::{
     DigitActionTarget, DigitMachine, DmachineMatch, IvrMenu, IvrMenuConfig, MediaFlag,
     OriginateOutcome, block_dtmf_session, broadcast, broadcast_in_thread, capture_text, check_hold,
