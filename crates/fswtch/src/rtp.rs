@@ -586,3 +586,52 @@ mod packet_tests {
         assert_eq!(pkt.as_ptr() as *const _, &raw as *const _);
     }
 }
+
+// ── rtp control (high-frequency) ───────────────────────────────────────────
+// Wrap `switch_rtp_*` control helpers on an existing [`Rtp`] engine. Take `&Rtp` (the engine is
+// `!Copy`); all `unsafe` stays inside.
+
+pub fn rtp_flush(rtp: &Rtp) {
+    // SAFETY: `rtp.as_ptr()` is a live RTP engine.
+    unsafe { sys::switch_rtp_flush(rtp.as_ptr()) };
+}
+pub fn rtp_reset(rtp: &Rtp) {
+    // SAFETY: live RTP engine.
+    unsafe { sys::switch_rtp_reset(rtp.as_ptr()) };
+}
+pub fn rtp_break(rtp: &Rtp) {
+    // SAFETY: live RTP engine.
+    unsafe { sys::switch_rtp_break(rtp.as_ptr()) };
+}
+pub fn rtp_ping(rtp: &Rtp) {
+    // SAFETY: live RTP engine.
+    unsafe { sys::switch_rtp_ping(rtp.as_ptr()) };
+}
+pub fn rtp_get_ssrc(rtp: &Rtp) -> u32 {
+    // SAFETY: live RTP engine.
+    unsafe { sys::switch_rtp_get_ssrc(rtp.as_ptr()) }
+}
+pub fn rtp_set_ssrc(rtp: &Rtp, ssrc: u32) -> Result<()> {
+    // SAFETY: live RTP engine; plain u32.
+    status_to_result(unsafe { sys::switch_rtp_set_ssrc(rtp.as_ptr(), ssrc) })
+}
+pub fn rtp_set_remote_ssrc(rtp: &Rtp, ssrc: u32) -> Result<()> {
+    // SAFETY: live RTP engine; plain u32.
+    status_to_result(unsafe { sys::switch_rtp_set_remote_ssrc(rtp.as_ptr(), ssrc) })
+}
+pub fn rtp_sync_stats(rtp: &Rtp) -> Result<()> {
+    // SAFETY: live RTP engine.
+    status_to_result(unsafe { sys::switch_rtp_sync_stats(rtp.as_ptr()) })
+}
+pub fn rtp_test_flag(rtp: &Rtp, flags: sys::switch_rtp_flag_t) -> bool {
+    // SAFETY: live RTP engine; valid flag bitmask.
+    unsafe { sys::switch_rtp_test_flag(rtp.as_ptr(), flags) != 0 }
+}
+pub fn rtp_set_flag(rtp: &Rtp, flag: sys::switch_rtp_flag_t) {
+    // SAFETY: live RTP engine; valid flag.
+    unsafe { sys::switch_rtp_set_flag(rtp.as_ptr(), flag) };
+}
+pub fn rtp_clear_flag(rtp: &Rtp, flag: sys::switch_rtp_flag_t) {
+    // SAFETY: live RTP engine; valid flag.
+    unsafe { sys::switch_rtp_clear_flag(rtp.as_ptr(), flag) };
+}

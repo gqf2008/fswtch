@@ -115,7 +115,7 @@ pub use resample::{
     change_sln_volume_granular, char_to_float, float_to_char, float_to_short, generate_sln_silence,
     merge_sln, mux_channels, short_to_float, swap_linear, unmerge_sln,
 };
-pub use rtp::{Rtp, RtpConfig, RtpPacket, request_port};
+pub use rtp::*;
 pub use scheduler::{
     Task, TaskConfig, TaskFlags, TaskHandle, TaskHandler, cancel_group, spawn, start, stop,
 };
