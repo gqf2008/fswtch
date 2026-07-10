@@ -510,6 +510,7 @@ dependencies = [
 name = "fswtch-aec3"
 version = "0.1.8"
 dependencies = [
+ "fswtch",
  "fswtch-aec3-sys",
 ]
 
