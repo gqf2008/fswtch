@@ -36,6 +36,7 @@ set(AEC3_HELPER_SRCS
     wrapper/aec3_c_api.cc
     common_audio/third_party/ooura/fft_size_128/ooura_fft.cc
     common_audio/channel_buffer.cc
+    common_audio/audio_util.cc
     modules/audio_processing/audio_buffer.cc
     modules/audio_processing/high_pass_filter.cc
     modules/audio_processing/splitting_filter.cc
