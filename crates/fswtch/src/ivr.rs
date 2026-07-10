@@ -1607,7 +1607,13 @@ pub fn speak_text(
     let text = cstring(text)?;
     // SAFETY: live session; three valid C strings; `args` is null or a valid args struct.
     status_to_result(unsafe {
-        sys::switch_ivr_speak_text(session.as_ptr(), tts.as_ptr(), voice.as_ptr(), text.as_ptr(), args)
+        sys::switch_ivr_speak_text(
+            session.as_ptr(),
+            tts.as_ptr(),
+            voice.as_ptr(),
+            text.as_ptr(),
+            args,
+        )
     })
 }
 
@@ -1615,7 +1621,11 @@ pub fn speak_text(
 /// music-on-hold while held.
 pub fn hold(session: Session, message: impl AsRef<str>, moh: bool) -> Result<()> {
     let message = cstring(message)?;
-    let moh = if moh { sys::switch_bool_t_SWITCH_TRUE } else { sys::switch_bool_t_SWITCH_FALSE };
+    let moh = if moh {
+        sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        sys::switch_bool_t_SWITCH_FALSE
+    };
     // SAFETY: live session; valid C string; valid bool.
     status_to_result(unsafe { sys::switch_ivr_hold(session.as_ptr(), message.as_ptr(), moh) })
 }
@@ -1624,7 +1634,11 @@ pub fn hold(session: Session, message: impl AsRef<str>, moh: bool) -> Result<()>
 pub fn hold_uuid(uuid: impl AsRef<str>, message: impl AsRef<str>, moh: bool) -> Result<()> {
     let uuid = cstring(uuid)?;
     let message = cstring(message)?;
-    let moh = if moh { sys::switch_bool_t_SWITCH_TRUE } else { sys::switch_bool_t_SWITCH_FALSE };
+    let moh = if moh {
+        sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        sys::switch_bool_t_SWITCH_FALSE
+    };
     // SAFETY: valid uuid C string; valid message; valid bool.
     status_to_result(unsafe { sys::switch_ivr_hold_uuid(uuid.as_ptr(), message.as_ptr(), moh) })
 }
@@ -1633,9 +1647,15 @@ pub fn hold_uuid(uuid: impl AsRef<str>, message: impl AsRef<str>, moh: bool) -> 
 pub fn hold_toggle_uuid(uuid: impl AsRef<str>, message: impl AsRef<str>, moh: bool) -> Result<()> {
     let uuid = cstring(uuid)?;
     let message = cstring(message)?;
-    let moh = if moh { sys::switch_bool_t_SWITCH_TRUE } else { sys::switch_bool_t_SWITCH_FALSE };
+    let moh = if moh {
+        sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        sys::switch_bool_t_SWITCH_FALSE
+    };
     // SAFETY: valid uuid; valid message; valid bool.
-    status_to_result(unsafe { sys::switch_ivr_hold_toggle_uuid(uuid.as_ptr(), message.as_ptr(), moh) })
+    status_to_result(unsafe {
+        sys::switch_ivr_hold_toggle_uuid(uuid.as_ptr(), message.as_ptr(), moh)
+    })
 }
 
 /// Unholds `session`.
@@ -1662,11 +1682,16 @@ pub fn session_transfer(
     let dp = cstring(dialplan)?;
     let ctx = cstring(context)?;
     // SAFETY: live session; three valid C strings.
-    status_to_result(unsafe { sys::switch_ivr_session_transfer(session.as_ptr(), ext.as_ptr(), dp.as_ptr(), ctx.as_ptr()) })
+    status_to_result(unsafe {
+        sys::switch_ivr_session_transfer(session.as_ptr(), ext.as_ptr(), dp.as_ptr(), ctx.as_ptr())
+    })
 }
 
 /// Bridges two sessions by UUID (originator ↔ originatee).
-pub fn uuid_bridge(originator_uuid: impl AsRef<str>, originatee_uuid: impl AsRef<str>) -> Result<()> {
+pub fn uuid_bridge(
+    originator_uuid: impl AsRef<str>,
+    originatee_uuid: impl AsRef<str>,
+) -> Result<()> {
     let a = cstring(originator_uuid)?;
     let b = cstring(originatee_uuid)?;
     // SAFETY: two valid uuid C strings.
@@ -1676,7 +1701,9 @@ pub fn uuid_bridge(originator_uuid: impl AsRef<str>, originatee_uuid: impl AsRef
 /// Signal-bridges `session` and `peer_session` (no media bridge, just signalling).
 pub fn signal_bridge(session: Session, peer_session: Session) -> Result<()> {
     // SAFETY: both sessions live.
-    status_to_result(unsafe { sys::switch_ivr_signal_bridge(session.as_ptr(), peer_session.as_ptr()) })
+    status_to_result(unsafe {
+        sys::switch_ivr_signal_bridge(session.as_ptr(), peer_session.as_ptr())
+    })
 }
 
 /// Soft-holds `session` with an `unhold_key` (DTMF that releases) and MOH for each leg.
@@ -1690,7 +1717,9 @@ pub fn soft_hold(
     let a = cstring(moh_a)?;
     let b = cstring(moh_b)?;
     // SAFETY: live session; three valid C strings.
-    status_to_result(unsafe { sys::switch_ivr_soft_hold(session.as_ptr(), k.as_ptr(), a.as_ptr(), b.as_ptr()) })
+    status_to_result(unsafe {
+        sys::switch_ivr_soft_hold(session.as_ptr(), k.as_ptr(), a.as_ptr(), b.as_ptr())
+    })
 }
 
 /// Hangs up the session identified by `uuid` with `cause`.
@@ -1710,7 +1739,9 @@ pub fn gentones(
 ) -> Result<()> {
     let script = cstring(script)?;
     // SAFETY: live session; valid C string; plain int; `args` null or valid.
-    status_to_result(unsafe { sys::switch_ivr_gentones(session.as_ptr(), script.as_ptr(), loops, args) })
+    status_to_result(unsafe {
+        sys::switch_ivr_gentones(session.as_ptr(), script.as_ptr(), loops, args)
+    })
 }
 
 /// Inserts `insert_file` into `file` at `sample_point` (records one into the other).
@@ -1724,7 +1755,12 @@ pub fn insert_file(
     let ins = cstring(insert_file)?;
     // SAFETY: live session; two valid C strings; plain size.
     status_to_result(unsafe {
-        sys::switch_ivr_insert_file(session.as_ptr(), file.as_ptr(), ins.as_ptr(), sample_point as sys::switch_size_t)
+        sys::switch_ivr_insert_file(
+            session.as_ptr(),
+            file.as_ptr(),
+            ins.as_ptr(),
+            sample_point as sys::switch_size_t,
+        )
     })
 }
 
@@ -1752,9 +1788,19 @@ pub fn enterprise_originate(
     // SAFETY: live session; all args per caller contract; valid C string.
     status_to_result(unsafe {
         sys::switch_ivr_enterprise_originate(
-            session.as_ptr(), bleg, cause, bt.as_ptr(), timelimit_sec, table,
-            cid_name_override, cid_num_override, caller_profile_override, ovars,
-            flags, cancel_cause, hl,
+            session.as_ptr(),
+            bleg,
+            cause,
+            bt.as_ptr(),
+            timelimit_sec,
+            table,
+            cid_name_override,
+            cid_num_override,
+            caller_profile_override,
+            ovars,
+            flags,
+            cancel_cause,
+            hl,
         )
     })
 }
@@ -1769,7 +1815,9 @@ pub fn enterprise_orig_and_bridge(
 ) -> Result<()> {
     let data = cstring(data)?;
     // SAFETY: live session; valid C string; `hl`/`cause` per caller.
-    status_to_result(unsafe { sys::switch_ivr_enterprise_orig_and_bridge(session.as_ptr(), data.as_ptr(), hl, cause) })
+    status_to_result(unsafe {
+        sys::switch_ivr_enterprise_orig_and_bridge(session.as_ptr(), data.as_ptr(), hl, cause)
+    })
 }
 
 /// Originates and bridges in one call. `data` is the dial string; `dh` a dial handle (may be
@@ -1782,7 +1830,9 @@ pub fn orig_and_bridge(
 ) -> Result<()> {
     let data = cstring(data)?;
     // SAFETY: live session; valid C string; `dh`/`cause` per caller.
-    status_to_result(unsafe { sys::switch_ivr_orig_and_bridge(session.as_ptr(), data.as_ptr(), dh, cause) })
+    status_to_result(unsafe {
+        sys::switch_ivr_orig_and_bridge(session.as_ptr(), data.as_ptr(), dh, cause)
+    })
 }
 
 /// Eavesdrops on the session `uuid` from `session`. `require_group` restricts to a spy group
@@ -1796,31 +1846,66 @@ pub fn eavesdrop_session(
     let uuid = cstring(uuid)?;
     let group = cstring(require_group)?;
     // SAFETY: live session; two valid C strings; `flags` valid bitmask.
-    status_to_result(unsafe { sys::switch_ivr_eavesdrop_session(session.as_ptr(), uuid.as_ptr(), group.as_ptr(), flags) })
+    status_to_result(unsafe {
+        sys::switch_ivr_eavesdrop_session(session.as_ptr(), uuid.as_ptr(), group.as_ptr(), flags)
+    })
 }
 
 /// Intercepts `uuid` onto `session`. `bleg` intercepts the b-leg too.
 pub fn intercept_session(session: Session, uuid: impl AsRef<str>, bleg: bool) -> Result<()> {
     let uuid = cstring(uuid)?;
-    let bleg = if bleg { sys::switch_bool_t_SWITCH_TRUE } else { sys::switch_bool_t_SWITCH_FALSE };
+    let bleg = if bleg {
+        sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        sys::switch_bool_t_SWITCH_FALSE
+    };
     // SAFETY: live session; valid uuid; valid bool.
-    status_to_result(unsafe { sys::switch_ivr_intercept_session(session.as_ptr(), uuid.as_ptr(), bleg) })
+    status_to_result(unsafe {
+        sys::switch_ivr_intercept_session(session.as_ptr(), uuid.as_ptr(), bleg)
+    })
 }
 
 /// Schedules a broadcast of `path` onto `uuid` at `runtime` (epoch seconds). Returns the task id.
-pub fn schedule_broadcast(runtime: i64, uuid: impl AsRef<str>, path: impl AsRef<str>, flags: sys::switch_media_flag_t) -> u32 {
-    let uuid = match cstring(uuid) { Ok(s) => s, Err(_) => return 0 };
-    let path = match cstring(path) { Ok(s) => s, Err(_) => return 0 };
+pub fn schedule_broadcast(
+    runtime: i64,
+    uuid: impl AsRef<str>,
+    path: impl AsRef<str>,
+    flags: sys::switch_media_flag_t,
+) -> u32 {
+    let uuid = match cstring(uuid) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let path = match cstring(path) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     // SAFETY: plain int; two valid C strings; valid flags.
-    unsafe { sys::switch_ivr_schedule_broadcast(runtime as sys::time_t, uuid.as_ptr(), path.as_ptr(), flags) }
+    unsafe {
+        sys::switch_ivr_schedule_broadcast(
+            runtime as sys::time_t,
+            uuid.as_ptr(),
+            path.as_ptr(),
+            flags,
+        )
+    }
 }
 
 /// Schedules a hangup of `uuid` at `runtime` with `cause` (optionally the b-leg). Returns task id.
 pub fn schedule_hangup(runtime: i64, uuid: impl AsRef<str>, cause: Cause, bleg: bool) -> u32 {
-    let uuid = match cstring(uuid) { Ok(s) => s, Err(_) => return 0 };
-    let bleg = if bleg { sys::switch_bool_t_SWITCH_TRUE } else { sys::switch_bool_t_SWITCH_FALSE };
+    let uuid = match cstring(uuid) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    let bleg = if bleg {
+        sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        sys::switch_bool_t_SWITCH_FALSE
+    };
     // SAFETY: plain int; valid uuid; valid cause; valid bool.
-    unsafe { sys::switch_ivr_schedule_hangup(runtime as sys::time_t, uuid.as_ptr(), cause.raw(), bleg) }
+    unsafe {
+        sys::switch_ivr_schedule_hangup(runtime as sys::time_t, uuid.as_ptr(), cause.raw(), bleg)
+    }
 }
 
 /// Schedules a transfer of `uuid` at `runtime`. `extension`/`dialplan`/`context` are owned C
@@ -1836,23 +1921,62 @@ pub unsafe fn schedule_transfer(
     dialplan_ptr: *mut std::os::raw::c_char,
     context_ptr: *mut std::os::raw::c_char,
 ) -> u32 {
-    let uuid = match cstring(uuid) { Ok(s) => s, Err(_) => return 0 };
+    let uuid = match cstring(uuid) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
     // SAFETY: caller guarantees the three ptrs are heap-allocated + FS-owned; valid uuid.
-    unsafe { sys::switch_ivr_schedule_transfer(runtime as sys::time_t, uuid.as_ptr(), extension_ptr, dialplan_ptr, context_ptr) }
+    unsafe {
+        sys::switch_ivr_schedule_transfer(
+            runtime as sys::time_t,
+            uuid.as_ptr(),
+            extension_ptr,
+            dialplan_ptr,
+            context_ptr,
+        )
+    }
 }
 
 /// Detects audio above `thresh` for `audio_hits` frames within `timeout_ms` on `session`,
 /// optionally recording to `file` (empty for none).
-pub fn detect_audio(session: Session, thresh: u32, audio_hits: u32, timeout_ms: u32, file: impl AsRef<str>) -> Result<()> {
+pub fn detect_audio(
+    session: Session,
+    thresh: u32,
+    audio_hits: u32,
+    timeout_ms: u32,
+    file: impl AsRef<str>,
+) -> Result<()> {
     let file = cstring(file)?;
     // SAFETY: live session; plain ints; valid C string.
-    status_to_result(unsafe { sys::switch_ivr_detect_audio(session.as_ptr(), thresh, audio_hits, timeout_ms, file.as_ptr()) })
+    status_to_result(unsafe {
+        sys::switch_ivr_detect_audio(
+            session.as_ptr(),
+            thresh,
+            audio_hits,
+            timeout_ms,
+            file.as_ptr(),
+        )
+    })
 }
 
 /// Detects silence below `thresh` for `silence_hits` frames within `timeout_ms` on `session`,
 /// optionally recording to `file`.
-pub fn detect_silence(session: Session, thresh: u32, silence_hits: u32, timeout_ms: u32, file: impl AsRef<str>) -> Result<()> {
+pub fn detect_silence(
+    session: Session,
+    thresh: u32,
+    silence_hits: u32,
+    timeout_ms: u32,
+    file: impl AsRef<str>,
+) -> Result<()> {
     let file = cstring(file)?;
     // SAFETY: live session; plain ints; valid C string.
-    status_to_result(unsafe { sys::switch_ivr_detect_silence(session.as_ptr(), thresh, silence_hits, timeout_ms, file.as_ptr()) })
+    status_to_result(unsafe {
+        sys::switch_ivr_detect_silence(
+            session.as_ptr(),
+            thresh,
+            silence_hits,
+            timeout_ms,
+            file.as_ptr(),
+        )
+    })
 }

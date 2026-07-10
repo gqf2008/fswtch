@@ -95,19 +95,33 @@ impl ApiStream {
 // ── stream system/file helpers ─────────────────────────────────────────────
 
 pub fn stream_system(cmd: impl AsRef<str>, stream: *mut crate::sys::switch_stream_handle_t) -> i32 {
-    let cmd = match crate::cstring(cmd) { Ok(s) => s, Err(_) => return -1 };
+    let cmd = match crate::cstring(cmd) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
     // SAFETY: valid C string; `stream` per caller.
     unsafe { crate::sys::switch_stream_system(cmd.as_ptr(), stream) }
 }
 
-pub fn stream_system_fork(cmd: impl AsRef<str>, stream: *mut crate::sys::switch_stream_handle_t) -> i32 {
-    let cmd = match crate::cstring(cmd) { Ok(s) => s, Err(_) => return -1 };
+pub fn stream_system_fork(
+    cmd: impl AsRef<str>,
+    stream: *mut crate::sys::switch_stream_handle_t,
+) -> i32 {
+    let cmd = match crate::cstring(cmd) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
     // SAFETY: valid C string; `stream` per caller.
     unsafe { crate::sys::switch_stream_system_fork(cmd.as_ptr(), stream) }
 }
 
-pub fn stream_write_file_contents(stream: *mut crate::sys::switch_stream_handle_t, path: impl AsRef<str>) -> crate::Result<()> {
+pub fn stream_write_file_contents(
+    stream: *mut crate::sys::switch_stream_handle_t,
+    path: impl AsRef<str>,
+) -> crate::Result<()> {
     let path = crate::cstring(path)?;
     // SAFETY: `stream` per caller; valid C string.
-    crate::status_to_result(unsafe { crate::sys::switch_stream_write_file_contents(stream, path.as_ptr()) })
+    crate::status_to_result(unsafe {
+        crate::sys::switch_stream_write_file_contents(stream, path.as_ptr())
+    })
 }

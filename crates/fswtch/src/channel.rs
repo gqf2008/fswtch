@@ -1480,7 +1480,9 @@ pub fn has_dtmf(channel: Channel) -> u64 {
 /// Queues a DTMF digit struct onto `channel` (`dtmf` borrowed).
 pub fn queue_dtmf(channel: Channel, dtmf: *const crate::sys::switch_dtmf_t) -> crate::Result<()> {
     // SAFETY: live channel; valid dtmf ptr per caller.
-    crate::status_to_result(unsafe { crate::sys::switch_channel_queue_dtmf(channel.as_ptr(), dtmf) })
+    crate::status_to_result(unsafe {
+        crate::sys::switch_channel_queue_dtmf(channel.as_ptr(), dtmf)
+    })
 }
 
 /// Queues a DTMF string (e.g. `"123#"`) onto `channel`.

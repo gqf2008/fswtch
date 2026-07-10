@@ -940,9 +940,8 @@ pub fn parse_spy_fmt(name: impl AsRef<str>) -> Result<sys::switch_vid_spy_fmt_t>
 // ── raw frame alloc/free/dup ───────────────────────────────────────────────
 
 pub fn frame_alloc(frame: &mut *mut sys::switch_frame_t, size: u64) -> Result<()> {
-    let mut s: sys::switch_size_t = size as _;
-    // SAFETY: `&mut frame` valid out; plain size.
-    status_to_result(unsafe { sys::switch_frame_alloc(frame, &mut s) })
+    // SAFETY: `&mut frame` valid out; `size` is a plain value (by-value in the C API).
+    status_to_result(unsafe { sys::switch_frame_alloc(frame, size as sys::switch_size_t) })
 }
 
 pub fn frame_free(frame: &mut *mut sys::switch_frame_t) -> Result<()> {
@@ -950,7 +949,10 @@ pub fn frame_free(frame: &mut *mut sys::switch_frame_t) -> Result<()> {
     status_to_result(unsafe { sys::switch_frame_free(frame) })
 }
 
-pub fn frame_dup(orig: *mut sys::switch_frame_t, clone: &mut *mut sys::switch_frame_t) -> Result<()> {
+pub fn frame_dup(
+    orig: *mut sys::switch_frame_t,
+    clone: &mut *mut sys::switch_frame_t,
+) -> Result<()> {
     // SAFETY: `orig` live; `&mut clone` valid out.
     status_to_result(unsafe { sys::switch_frame_dup(orig, clone) })
 }

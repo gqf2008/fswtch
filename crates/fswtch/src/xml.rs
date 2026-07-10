@@ -98,7 +98,9 @@ impl<'a> XmlNode<'a> {
     pub fn add_child(self, name: impl AsRef<str>, off: u64) -> Option<Self> {
         let name = cstring(name).ok()?;
         // SAFETY: `self.raw` live; `name` valid C string; `off` plain size.
-        let child = unsafe { sys::switch_xml_add_child(self.raw.as_ptr(), name.as_ptr(), off as sys::switch_size_t) };
+        let child = unsafe {
+            sys::switch_xml_add_child(self.raw.as_ptr(), name.as_ptr(), off as sys::switch_size_t)
+        };
         NonNull::new(child).map(Self::new)
     }
 
@@ -107,7 +109,9 @@ impl<'a> XmlNode<'a> {
     pub fn add_child_d(self, name: impl AsRef<str>, off: u64) -> Option<Self> {
         let name = cstring(name).ok()?;
         // SAFETY: as above.
-        let child = unsafe { sys::switch_xml_add_child_d(self.raw.as_ptr(), name.as_ptr(), off as sys::switch_size_t) };
+        let child = unsafe {
+            sys::switch_xml_add_child_d(self.raw.as_ptr(), name.as_ptr(), off as sys::switch_size_t)
+        };
         NonNull::new(child).map(Self::new)
     }
 
@@ -128,12 +132,19 @@ impl<'a> XmlNode<'a> {
 
     /// Finds a descendant by `childname` whose `attrname` matches `value`. Returns the match or
     /// `None`.
-    pub fn find_child(self, childname: impl AsRef<str>, attrname: impl AsRef<str>, value: impl AsRef<str>) -> Option<Self> {
+    pub fn find_child(
+        self,
+        childname: impl AsRef<str>,
+        attrname: impl AsRef<str>,
+        value: impl AsRef<str>,
+    ) -> Option<Self> {
         let cn = cstring(childname).ok()?;
         let an = cstring(attrname).ok()?;
         let v = cstring(value).ok()?;
         // SAFETY: `self.raw` live; three valid C strings.
-        let found = unsafe { sys::switch_xml_find_child(self.raw.as_ptr(), cn.as_ptr(), an.as_ptr(), v.as_ptr()) };
+        let found = unsafe {
+            sys::switch_xml_find_child(self.raw.as_ptr(), cn.as_ptr(), an.as_ptr(), v.as_ptr())
+        };
         NonNull::new(found).map(Self::new)
     }
 
@@ -147,7 +158,13 @@ impl<'a> XmlNode<'a> {
     /// Inserts this node into `dest` at `off`. Returns the inserted node.
     pub fn insert(self, dest: Self, off: u64) -> Option<Self> {
         // SAFETY: both nodes live; plain size.
-        let ins = unsafe { sys::switch_xml_insert(self.raw.as_ptr(), dest.raw.as_ptr(), off as sys::switch_size_t) };
+        let ins = unsafe {
+            sys::switch_xml_insert(
+                self.raw.as_ptr(),
+                dest.raw.as_ptr(),
+                off as sys::switch_size_t,
+            )
+        };
         NonNull::new(ins).map(Self::new)
     }
 
@@ -159,7 +176,10 @@ impl<'a> XmlNode<'a> {
             return None;
         }
         // SAFETY: null or a C string.
-        unsafe { CStr::from_ptr(ptr) }.to_str().ok().map(ToOwned::to_owned)
+        unsafe { CStr::from_ptr(ptr) }
+            .to_str()
+            .ok()
+            .map(ToOwned::to_owned)
     }
 
     /// Like [`attr`](Self::attr) but returns an empty string instead of `None` when the attribute
@@ -175,7 +195,9 @@ impl<'a> XmlNode<'a> {
             return String::new();
         }
         // SAFETY: null or a C string (never null in practice — returns "" for absent).
-        unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned()
     }
 }
 
@@ -185,7 +207,10 @@ pub fn xml_new(name: impl AsRef<str>) -> Option<XmlNode<'static>> {
     let name = cstring(name).ok()?;
     // SAFETY: `name` valid C string; returns null or a new owned XML node.
     let node = unsafe { sys::switch_xml_new(name.as_ptr()) };
-    NonNull::new(node).map(|raw| XmlNode { raw, _owner: PhantomData })
+    NonNull::new(node).map(|raw| XmlNode {
+        raw,
+        _owner: PhantomData,
+    })
 }
 
 /// Frees an XML node allocated by [`xml_new`], [`XmlNode::cut`], or [`XmlNode::dup`]. Nodes that

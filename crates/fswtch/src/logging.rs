@@ -202,7 +202,11 @@ pub fn log_bind_logger(
     level: crate::sys::switch_log_level_t,
     is_console: bool,
 ) -> crate::Result<()> {
-    let ic = if is_console { crate::sys::switch_bool_t_SWITCH_TRUE } else { crate::sys::switch_bool_t_SWITCH_FALSE };
+    let ic = if is_console {
+        crate::sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        crate::sys::switch_bool_t_SWITCH_FALSE
+    };
     // SAFETY: valid fn ptr; valid level; valid bool.
     crate::status_to_result(unsafe { crate::sys::switch_log_bind_logger(function, level, ic) })
 }

@@ -182,7 +182,9 @@ pub fn caller_extension_clone(
     pool: &crate::pool::Pool,
 ) -> crate::Result<()> {
     // SAFETY: valid out-param; `orig` live; `pool.as_ptr()` live.
-    crate::status_to_result(unsafe { crate::sys::switch_caller_extension_clone(new_ext, orig, pool.as_ptr()) })
+    crate::status_to_result(unsafe {
+        crate::sys::switch_caller_extension_clone(new_ext, orig, pool.as_ptr())
+    })
 }
 
 pub fn caller_extension_add_application(
@@ -193,10 +195,16 @@ pub fn caller_extension_add_application(
 ) -> crate::Result<()> {
     let name = crate::cstring(application_name)?;
     let extra = crate::cstring(extra_data)?;
-    // SAFETY: live session; valid ext; two valid C strings.
-    crate::status_to_result(unsafe {
-        crate::sys::switch_caller_extension_add_application(session.as_ptr(), ext, name.as_ptr(), extra.as_ptr())
-    })
+    // SAFETY: live session; valid ext; two valid C strings. Returns void.
+    unsafe {
+        crate::sys::switch_caller_extension_add_application(
+            session.as_ptr(),
+            ext,
+            name.as_ptr(),
+            extra.as_ptr(),
+        );
+    }
+    Ok(())
 }
 
 pub fn caller_profile_dup(
