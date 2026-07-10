@@ -1,13 +1,13 @@
 //! Safe Rust bindings over WebRTC AEC3 (acoustic echo cancellation).
 //!
-//! AEC3 is built from the vendored C++ tree via the FFI bridge in [`fswtch-aec3-sys`]; this crate
+//! AEC3 is built from the vendored C++ tree via the FFI bridge in `fswtch-aec3-sys`; this crate
 //! wraps the raw `extern "C"` ABI in owned, RAII handles that follow the `fswtch` conventions
-//! ([`NonNull`] handles, [`Drop`] frees the C object, `# Safety` contracts on public `unsafe fn`).
+//! ([`std::ptr::NonNull`] handles, [`Drop`] frees the C object, `# Safety` contracts on public `unsafe fn`).
 //!
 //! Status: the C++ toolchain is wired up (Phase 0), the Ooura 128-point FFT closure compiles
 //! (Phase 1), the full AEC3 C++ closure converges (Phase 2), a thin C ABI over
 //! [`EchoCanceller3`] is exposed (Phase 3), and the owned RAII safe wrapper is layered on top
-//! (Phase 4, see [`aec3`]). The lower-level `api_version`/`ooura_smoke` entrypoints remain as
+//! (Phase 4, see [`EchoCanceller3`]). The lower-level `api_version`/`ooura_smoke` entrypoints remain as
 //! pipeline smoke checks.
 
 pub use fswtch_aec3_sys as sys;
