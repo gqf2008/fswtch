@@ -336,4 +336,55 @@ mod tests {
         let mut aec = EchoCanceller3::new(RATE, CH, CH).expect("create");
         aec.set_delay(50);
     }
+
+    /// Functional echo-cancellation check (Phase 5). Feeds deterministic broadband noise as the
+    /// render (far-end) and a delayed copy of it as the capture (pure echo, no near-end). A
+    /// correctly-wired wrapper plus a working AEC3 must suppress the echo: post-convergence
+    /// output energy should be well below input energy (high ERLE). If the framing/buffering were
+    /// wrong, the adaptive filter could never align render with capture and ERLE would stay near
+    /// 0 dB. (>6 dB is lenient; AEC3 on pure broadband echo typically reaches >15 dB.)
+    #[test]
+    fn cancels_a_real_echo() {
+        let mut aec = EchoCanceller3::new(RATE, CH, CH).expect("create");
+        const N_FRAMES: usize = 300; // 3 s
+        const WARMUP: usize = 150; // 1.5 s for filter convergence
+        const ECHO_DELAY: usize = 64; // 4 ms, within AEC3's delay search range
+        // Deterministic LCG so the test is reproducible.
+        let mut lcg = 1u32;
+        let mut render = vec![0i16; N_FRAMES * FRAME];
+        for s in render.iter_mut() {
+            lcg = lcg.wrapping_mul(1664525).wrapping_add(1013904223);
+            *s = (((lcg >> 16) as i32 % 8000) - 4000) as i16;
+        }
+        // capture = render delayed by ECHO_DELAY (pure echo); zero before the delay fills.
+        let mut capture = vec![0i16; N_FRAMES * FRAME];
+        capture[ECHO_DELAY..].copy_from_slice(&render[..render.len() - ECHO_DELAY]);
+
+        let mut in_energy = 0.0_f64;
+        let mut out_energy = 0.0_f64;
+        for f in 0..N_FRAMES {
+            let r = &render[f * FRAME..(f + 1) * FRAME];
+            let c = &mut capture[f * FRAME..(f + 1) * FRAME];
+            aec.analyze_render(r, CH).expect("analyze_render");
+            if f >= WARMUP {
+                for &s in c.iter() {
+                    in_energy += (s as f64) * (s as f64);
+                }
+            }
+            aec.process_capture(c, CH, false).expect("process_capture");
+            if f >= WARMUP {
+                for &s in c.iter() {
+                    out_energy += (s as f64) * (s as f64);
+                }
+            }
+        }
+        let erle_db = 10.0 * (in_energy / out_energy.max(1e-12)).log10();
+        // Observed ~67 dB on aarch64 (pure echo, no near-end → near-full cancellation). >15 dB is
+        // a safe-but-meaningful bar: a broken wrapper (out-of-sync render/capture) stays ~0 dB.
+        assert!(
+            erle_db > 15.0,
+            "AEC3 did not suppress the echo: ERLE = {erle_db:.1} dB \
+             (in_energy={in_energy:.0}, out_energy={out_energy:.0})"
+        );
+    }
 }
