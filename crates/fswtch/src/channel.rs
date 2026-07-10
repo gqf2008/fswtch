@@ -1468,3 +1468,79 @@ mod tests {
         assert!(CallState::UNHELD.is_down());
     }
 }
+
+// ── channel high-frequency helpers ────────────────────────────────────────
+
+/// Number of DTMF digits queued on `channel`.
+pub fn has_dtmf(channel: Channel) -> u64 {
+    // SAFETY: live channel.
+    unsafe { crate::sys::switch_channel_has_dtmf(channel.as_ptr()) as u64 }
+}
+
+/// Queues a DTMF digit struct onto `channel` (`dtmf` borrowed).
+pub fn queue_dtmf(channel: Channel, dtmf: *const crate::sys::switch_dtmf_t) -> crate::Result<()> {
+    // SAFETY: live channel; valid dtmf ptr per caller.
+    crate::status_to_result(unsafe { crate::sys::switch_channel_queue_dtmf(channel.as_ptr(), dtmf) })
+}
+
+/// Queues a DTMF string (e.g. `"123#"`) onto `channel`.
+pub fn queue_dtmf_string(channel: Channel, dtmf: impl AsRef<str>) -> crate::Result<()> {
+    let dtmf = crate::cstring(dtmf)?;
+    // SAFETY: live channel; valid C string.
+    crate::status_to_result(unsafe {
+        crate::sys::switch_channel_queue_dtmf_string(channel.as_ptr(), dtmf.as_ptr())
+    })
+}
+
+/// The Q.850 hangup cause code for `channel`.
+pub fn get_cause_q850(channel: Channel) -> crate::Cause {
+    // SAFETY: live channel.
+    crate::Cause::from_raw(unsafe { crate::sys::switch_channel_get_cause_q850(channel.as_ptr()) })
+}
+
+/// Converts a cause to its Q.850 representation.
+pub fn cause_q850(cause: crate::Cause) -> crate::Cause {
+    // SAFETY: `cause.raw()` is valid.
+    crate::Cause::from_raw(unsafe { crate::sys::switch_channel_cause_q850(cause.raw()) })
+}
+
+/// The name of a device state (borrowed static string).
+pub fn device_state2str(state: crate::sys::switch_device_state_t) -> Option<&'static str> {
+    // SAFETY: returns null or a static string.
+    let ptr = unsafe { crate::sys::switch_channel_device_state2str(state) };
+    // SAFETY: null or a static C string.
+    unsafe { crate::borrowed_cstr_to_str(ptr) }
+}
+
+/// The session backing `channel`.
+pub fn channel_get_session(channel: Channel) -> Option<crate::Session> {
+    // SAFETY: live channel; returns null or a live session handle.
+    let ptr = unsafe { crate::sys::switch_channel_get_session(channel.as_ptr()) };
+    // SAFETY: null or a live session borrowed from the channel.
+    unsafe { crate::Session::from_raw(ptr) }
+}
+
+/// Marks `channel` on/off hold.
+pub fn mark_hold(channel: Channel, on: bool) {
+    let on = if on {
+        crate::sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        crate::sys::switch_bool_t_SWITCH_FALSE
+    };
+    // SAFETY: live channel; valid bool.
+    unsafe { crate::sys::switch_channel_mark_hold(channel.as_ptr(), on) };
+}
+
+/// The name of a channel state (borrowed static string).
+pub fn state_name(state: crate::sys::switch_channel_state_t) -> Option<&'static str> {
+    // SAFETY: returns null or a static string.
+    let ptr = unsafe { crate::sys::switch_channel_state_name(state) };
+    // SAFETY: null or a static C string.
+    unsafe { crate::borrowed_cstr_to_str(ptr) }
+}
+
+/// Transfers `channel` to a caller extension (`ext` borrowed for the call).
+pub fn transfer_to_extension(channel: Channel, ext: *mut crate::sys::switch_caller_extension_t) {
+    // SAFETY: live channel; valid ext ptr per caller.
+    unsafe { crate::sys::switch_channel_transfer_to_extension(channel.as_ptr(), ext) };
+}

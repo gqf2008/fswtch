@@ -41,10 +41,7 @@ pub use fswtch_sys as sys;
 
 pub use buffer::Buffer;
 pub use caller::{CallerExtension, CallerProfile};
-pub use channel::{
-    CallState, Channel, ChannelFlag, bind_device_state_handler, callstate_to_str, cause_to_str,
-    str_to_callstate, str_to_cause, unbind_device_state_handler,
-};
+pub use channel::*;
 pub use codec::Codec;
 pub use command::{
     StaticCStr, borrowed_cstr_to_str, borrowed_cstr_to_string, command_text, cstring, free_cstr,
