@@ -1,7 +1,7 @@
 use std::ffi::c_char;
 use std::ptr::NonNull;
 
-use crate::{Result, cstring, status_to_result, sys};
+use crate::{Result, cstring, status_to_result, strdup_to_string, sys};
 
 #[derive(Copy, Clone)]
 pub struct Session {
@@ -375,4 +375,127 @@ pub fn execute_application_async(
     // the message on the target session's state machine (NULL uuid → SWITCH_STATUS_FALSE).
     let status = unsafe { sys::switch_core_session_message_send(uuid.as_ptr(), &mut msg) };
     status_to_result(status)
+}
+
+// ── session event/message queue + lookup (high-frequency) ─────────────────
+// These wrap the session-level event/message queue + session-lookup helpers. Pointers returned
+// as `*mut sys::...` are owned by the caller and must be destroyed with the matching FreeSWITCH
+// free call (e.g. `switch_event_destroy`); they are passed through raw because fswtch does not
+// yet RAII every FS container type.
+
+/// Dequeues one event from `session`'s event queue. Returns an owned `*mut switch_event_t` the
+/// caller must destroy (`switch_event_destroy`), or `None` if empty. `force` bypasses
+/// private-event filtering.
+pub fn dequeue_event(session: Session, force: bool) -> Result<Option<*mut sys::switch_event_t>> {
+    let mut ev: *mut sys::switch_event_t = std::ptr::null_mut();
+    let force = if force {
+        sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        sys::switch_bool_t_SWITCH_FALSE
+    };
+    // SAFETY: `session.as_ptr()` live; `&mut ev` valid out-param; `force` valid bool.
+    let s = unsafe { sys::switch_core_session_dequeue_event(session.as_ptr(), &mut ev, force) };
+    status_to_result(s)?;
+    Ok(if ev.is_null() { None } else { Some(ev) })
+}
+
+/// Queues an event onto `session`'s queue (ownership of `*event` transfers to the queue).
+pub fn queue_event(session: Session, event: &mut *mut sys::switch_event_t) -> Result<()> {
+    // SAFETY: live session; `event` is a valid `*mut *mut` per caller.
+    status_to_result(unsafe { sys::switch_core_session_queue_event(session.as_ptr(), event) })
+}
+
+/// Receives an event into `session` (ownership of `*event` transfers).
+pub fn receive_event(session: Session, event: &mut *mut sys::switch_event_t) -> Result<()> {
+    // SAFETY: live session; `event` valid `*mut *mut`.
+    status_to_result(unsafe { sys::switch_core_session_receive_event(session.as_ptr(), event) })
+}
+
+/// Number of events queued on `session`.
+pub fn event_count(session: Session) -> u32 {
+    // SAFETY: live session.
+    unsafe { sys::switch_core_session_event_count(session.as_ptr()) }
+}
+
+/// Sends an event to the session identified by `uuid` (ownership of `*event` transfers).
+pub fn event_send(uuid: impl AsRef<str>, event: &mut *mut sys::switch_event_t) -> Result<()> {
+    let uuid = cstring(uuid)?;
+    // SAFETY: valid C string; `event` valid `*mut *mut`.
+    status_to_result(unsafe { sys::switch_core_session_event_send(uuid.as_ptr(), event) })
+}
+
+/// Number of messages waiting on `session`.
+pub fn messages_waiting(session: Session) -> u32 {
+    // SAFETY: live session.
+    unsafe { sys::switch_core_session_messages_waiting(session.as_ptr()) }
+}
+
+/// Dequeues one message from `session`. Returns an owned `*mut switch_core_session_message_t`
+/// (caller frees via `switch_core_session_free_message`), or `None` if empty.
+pub fn dequeue_message(
+    session: Session,
+) -> Result<Option<*mut sys::switch_core_session_message_t>> {
+    let mut m: *mut sys::switch_core_session_message_t = std::ptr::null_mut();
+    // SAFETY: live session; `&mut m` valid out.
+    let s = unsafe { sys::switch_core_session_dequeue_message(session.as_ptr(), &mut m) };
+    status_to_result(s)?;
+    Ok(if m.is_null() { None } else { Some(m) })
+}
+
+/// Queues a message onto `session` (`message` borrowed for the call).
+pub fn queue_message(
+    session: Session,
+    message: *mut sys::switch_core_session_message_t,
+) -> Result<()> {
+    // SAFETY: live session; `message` valid per caller.
+    status_to_result(unsafe { sys::switch_core_session_queue_message(session.as_ptr(), message) })
+}
+
+/// Finds every session whose channel variable `var_name == var_val`. Returns a
+/// `*mut switch_console_callback_match_t` (null if none) the caller must destroy via
+/// `switch_console_callback_match_destroy`.
+pub fn findall_matching_var(
+    var_name: impl AsRef<str>,
+    var_val: impl AsRef<str>,
+) -> Result<*mut sys::switch_console_callback_match_t> {
+    let n = cstring(var_name)?;
+    let v = cstring(var_val)?;
+    // SAFETY: both valid C strings; returns null or a match struct the caller destroys.
+    Ok(unsafe { sys::switch_core_session_findall_matching_var(n.as_ptr(), v.as_ptr()) })
+}
+
+/// Finds every active session. Returns a match struct (null if none) the caller destroys.
+pub fn findall() -> *mut sys::switch_console_callback_match_t {
+    // SAFETY: no args.
+    unsafe { sys::switch_core_session_findall() }
+}
+
+/// Looks up an application's flags by name. Returns the flags bitmask, or `Err` if the app is
+/// not registered.
+pub fn get_app_flags(app: impl AsRef<str>) -> Result<i32> {
+    let app = cstring(app)?;
+    let mut flags: i32 = 0;
+    // SAFETY: valid C string; `&mut flags` valid out.
+    status_to_result(unsafe { sys::switch_core_session_get_app_flags(app.as_ptr(), &mut flags) })?;
+    Ok(flags)
+}
+
+/// The session's application log (a `*mut switch_app_log_t` borrowed from the session; do not free).
+pub fn get_app_log(session: Session) -> *mut sys::switch_app_log_t {
+    // SAFETY: live session; the returned pointer borrows session storage.
+    unsafe { sys::switch_core_session_get_app_log(session.as_ptr()) }
+}
+
+/// URL-encodes `url` against the session's vars (substitutes `${var}` etc.). Returns the owned
+/// string, or `None` if encoding produced nothing.
+pub fn session_url_encode(session: Session, url: impl AsRef<str>) -> Option<String> {
+    let url = match cstring(url) {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    // SAFETY: live session; valid C string; returns null or a malloc'd C string.
+    let ptr = unsafe { sys::switch_core_session_url_encode(session.as_ptr(), url.as_ptr()) };
+    // SAFETY: `ptr` is null or a malloc'd C string; `strdup_to_string` copies it out and frees
+    // the original.
+    unsafe { strdup_to_string(ptr) }
 }
