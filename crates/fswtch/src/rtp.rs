@@ -635,3 +635,95 @@ pub fn rtp_clear_flag(rtp: &Rtp, flag: sys::switch_rtp_flag_t) {
     // SAFETY: live RTP engine; valid flag.
     unsafe { sys::switch_rtp_clear_flag(rtp.as_ptr(), flag) };
 }
+
+pub fn rtp_set_interval(rtp: &Rtp, ms_per_packet: u32, samples_per_interval: u32) -> Result<()> {
+    // SAFETY: live RTP engine; two plain u32s.
+    status_to_result(unsafe {
+        sys::switch_rtp_set_interval(rtp.as_ptr(), ms_per_packet, samples_per_interval)
+    })
+}
+
+pub fn rtp_change_interval(rtp: &Rtp, ms_per_packet: u32, samples_per_interval: u32) -> Result<()> {
+    // SAFETY: live RTP engine; two plain u32s.
+    status_to_result(unsafe {
+        sys::switch_rtp_change_interval(rtp.as_ptr(), ms_per_packet, samples_per_interval)
+    })
+}
+
+/// RTP stats (borrowed from the engine; do not free). Requires a `pool` for scratch.
+pub fn rtp_get_stats(rtp: &Rtp, pool: &Pool) -> *mut sys::switch_rtp_stats_t {
+    // SAFETY: live RTP engine; live pool.
+    unsafe { sys::switch_rtp_get_stats(rtp.as_ptr(), pool.as_ptr()) }
+}
+
+/// The media timer backing this RTP engine (borrowed; do not free).
+pub fn rtp_get_media_timer(rtp: &Rtp) -> *mut sys::switch_timer_t {
+    // SAFETY: live RTP engine.
+    unsafe { sys::switch_rtp_get_media_timer(rtp.as_ptr()) }
+}
+
+/// The session backing this RTP engine.
+pub fn rtp_get_core_session(rtp: &Rtp) -> Option<crate::Session> {
+    // SAFETY: live RTP engine; returns null or a live session handle.
+    let ptr = unsafe { sys::switch_rtp_get_core_session(rtp.as_ptr()) };
+    // SAFETY: null or a live session borrowed from the RTP engine.
+    unsafe { crate::Session::from_raw(ptr) }
+}
+
+pub fn rtp_get_default_payload(rtp: &Rtp) -> u32 {
+    // SAFETY: live RTP engine.
+    unsafe { sys::switch_rtp_get_default_payload(rtp.as_ptr()) }
+}
+
+pub fn rtp_set_default_payload(rtp: &Rtp, payload: sys::switch_payload_t) {
+    // SAFETY: live RTP engine; valid payload.
+    unsafe { sys::switch_rtp_set_default_payload(rtp.as_ptr(), payload) };
+}
+
+pub fn rtp_has_dtmf(rtp: &Rtp) -> u64 {
+    // SAFETY: live RTP engine.
+    unsafe { sys::switch_rtp_has_dtmf(rtp.as_ptr()) as u64 }
+}
+
+pub fn rtp_dequeue_dtmf(rtp: &Rtp, dtmf: *mut sys::switch_dtmf_t) -> u64 {
+    // SAFETY: live RTP engine; `dtmf` valid out per caller.
+    unsafe { sys::switch_rtp_dequeue_dtmf(rtp.as_ptr(), dtmf) as u64 }
+}
+
+pub fn rtp_disable_vad(rtp: &Rtp) -> Result<()> {
+    // SAFETY: live RTP engine.
+    status_to_result(unsafe { sys::switch_rtp_disable_vad(rtp.as_ptr()) })
+}
+
+pub fn rtp_set_media_timeout(rtp: &Rtp, ms: u32) {
+    // SAFETY: live RTP engine; plain u32.
+    unsafe { sys::switch_rtp_set_media_timeout(rtp.as_ptr(), ms) };
+}
+
+/// Releases an RTP port back to the pool. `ip` is the bind address string.
+pub fn rtp_release_port(ip: impl AsRef<str>, port: sys::switch_port_t) {
+    let ip = match cstring(ip) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    // SAFETY: valid C string; plain port.
+    unsafe { sys::switch_rtp_release_port(ip.as_ptr(), port) };
+}
+
+pub fn rtp_write_raw(
+    rtp: &Rtp,
+    data: *const std::ffi::c_void,
+    bytes: &mut u64,
+    process_encryption: bool,
+) -> Result<()> {
+    let mut n: sys::switch_size_t = *bytes as _;
+    let enc = if process_encryption {
+        sys::switch_bool_t_SWITCH_TRUE
+    } else {
+        sys::switch_bool_t_SWITCH_FALSE
+    };
+    // SAFETY: live RTP engine; `data` valid for `*bytes`; `&mut n` valid in/out.
+    let s = unsafe { sys::switch_rtp_write_raw(rtp.as_ptr(), data.cast_mut(), &mut n, enc) };
+    *bytes = n as u64;
+    status_to_result(s)
+}
