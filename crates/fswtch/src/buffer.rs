@@ -319,3 +319,27 @@ mod tests {
         assert!(buf.is_empty());
     }
 }
+
+// ── buffer lock/peek helpers ─────────────────────────────────────────────
+
+pub fn buffer_lock(buffer: &Buffer) {
+    // SAFETY: live buffer.
+    unsafe { crate::sys::switch_buffer_lock(buffer.as_ptr()) };
+}
+
+pub fn buffer_trylock(buffer: &Buffer) -> crate::Result<()> {
+    // SAFETY: live buffer.
+    crate::status_to_result(unsafe { crate::sys::switch_buffer_trylock(buffer.as_ptr()) })
+}
+
+pub fn buffer_unlock(buffer: &Buffer) {
+    // SAFETY: live buffer.
+    unsafe { crate::sys::switch_buffer_unlock(buffer.as_ptr()) };
+}
+
+pub fn buffer_peek_zerocopy(buffer: &Buffer) -> (*const std::ffi::c_void, u64) {
+    let mut ptr: *const std::ffi::c_void = std::ptr::null();
+    // SAFETY: live buffer; `&mut ptr` valid out.
+    let len = unsafe { crate::sys::switch_buffer_peek_zerocopy(buffer.as_ptr(), &mut ptr) };
+    (ptr, len as u64)
+}

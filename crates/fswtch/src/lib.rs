@@ -39,7 +39,7 @@ mod xml;
 
 pub use fswtch_sys as sys;
 
-pub use buffer::Buffer;
+pub use buffer::*;
 pub use caller::*;
 pub use channel::*;
 pub use codec::*;
@@ -74,19 +74,8 @@ pub use jitterbuffer::{JbFlag, JbFrames, JbKind, JitterBuffer, JitterBufferConfi
 pub use limit::{
     Usage, backend, fire_event, incr, init, interval_reset, release, reset, status, usage,
 };
-pub use logging::{
-    LogLevel, log, log_alert, log_console, log_critical, log_debug, log_debug1, log_debug2,
-    log_debug3, log_debug4, log_debug5, log_debug6, log_debug7, log_debug8, log_debug9,
-    log_debug10, log_error, log_example, log_example_error, log_info, log_notice, log_warning,
-};
-pub use media::{
-    MediaBug, MediaBugAction, MediaBugConfig, MediaBugContext, MediaBugFlags, MediaBugHandler,
-    MediaFrame, MediaFrameMut, attach_media_bug, count_media_bugs, enumerate_media_bugs,
-    exec_all_media_bugs, flush_all_media_bugs, parse_spy_fmt, patch_video_media_bugs,
-    pause_media_bugs, pop_media_bug, prune_media_bugs, remove_media_bug,
-    remove_media_bugs_by_callback, remove_media_bugs_by_function, resume_media_bugs, set_spy_fmt,
-    transfer_media_bug_callback,
-};
+pub use logging::*;
+pub use media::*;
 pub use module::{
     ApiInterface, ApplicationInfo, ApplicationInterface, AsrCloseFn, AsrFeedFn, AsrInterface,
     AsrLoadGrammarFn, AsrOpenFn, AsrUnloadGrammarFn, ChatApplicationInterface, ChatInterface,
@@ -125,7 +114,7 @@ pub use status::{
     HupType, OriginateFlag, Result, SUCCESS, Status, SwitchError, false_on_success,
     status_to_result, switch_bool,
 };
-pub use stream::{ApiStream, Stream, write_stream_response};
+pub use stream::*;
 pub use timer::Timer;
 pub use utils::{escape_string, find_end_paren, format_number, url_encode};
 pub use vad::{SpeechSegment, Vad, VadState, snap_segments};

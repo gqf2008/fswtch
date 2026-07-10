@@ -176,3 +176,38 @@ unsafe fn log_printf(level: sys::switch_log_level_t, text: *const std::ffi::c_ch
         text,
     ));
 }
+
+// ── log level conversion + logger bind/unbind ─────────────────────────────
+
+pub fn log_level2str(level: crate::sys::switch_log_level_t) -> Option<&'static str> {
+    // SAFETY: returns null or a static string.
+    let ptr = unsafe { crate::sys::switch_log_level2str(level) };
+    unsafe { crate::borrowed_cstr_to_str(ptr) }
+}
+
+pub fn log_str2level(s: impl AsRef<str>) -> crate::Result<crate::sys::switch_log_level_t> {
+    let s = crate::cstring(s)?;
+    // SAFETY: valid C string.
+    Ok(unsafe { crate::sys::switch_log_str2level(s.as_ptr()) })
+}
+
+pub fn log_str2mask(s: impl AsRef<str>) -> crate::Result<u32> {
+    let s = crate::cstring(s)?;
+    // SAFETY: valid C string.
+    Ok(unsafe { crate::sys::switch_log_str2mask(s.as_ptr()) })
+}
+
+pub fn log_bind_logger(
+    function: crate::sys::switch_log_function_t,
+    level: crate::sys::switch_log_level_t,
+    is_console: bool,
+) -> crate::Result<()> {
+    let ic = if is_console { crate::sys::switch_bool_t_SWITCH_TRUE } else { crate::sys::switch_bool_t_SWITCH_FALSE };
+    // SAFETY: valid fn ptr; valid level; valid bool.
+    crate::status_to_result(unsafe { crate::sys::switch_log_bind_logger(function, level, ic) })
+}
+
+pub fn log_unbind_logger(function: crate::sys::switch_log_function_t) -> crate::Result<()> {
+    // SAFETY: valid fn ptr.
+    crate::status_to_result(unsafe { crate::sys::switch_log_unbind_logger(function) })
+}
