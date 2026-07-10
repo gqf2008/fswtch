@@ -95,7 +95,11 @@ pub use logging::{
 };
 pub use media::{
     MediaBug, MediaBugAction, MediaBugConfig, MediaBugContext, MediaBugFlags, MediaBugHandler,
-    MediaFrame, MediaFrameMut, attach_media_bug,
+    MediaFrame, MediaFrameMut, attach_media_bug, count_media_bugs, enumerate_media_bugs,
+    exec_all_media_bugs, flush_all_media_bugs, parse_spy_fmt, patch_video_media_bugs,
+    pause_media_bugs, pop_media_bug, prune_media_bugs, remove_media_bug,
+    remove_media_bugs_by_callback, remove_media_bugs_by_function, resume_media_bugs, set_spy_fmt,
+    transfer_media_bug_callback,
 };
 pub use module::{
     ApiInterface, ApplicationInfo, ApplicationInterface, AsrCloseFn, AsrFeedFn, AsrInterface,
