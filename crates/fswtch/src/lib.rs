@@ -29,6 +29,7 @@ mod resample;
 mod rtp;
 mod scheduler;
 mod session;
+mod speex;
 mod status;
 mod stream;
 mod timer;
@@ -109,6 +110,7 @@ pub use scheduler::{
     Task, TaskConfig, TaskFlags, TaskHandle, TaskHandler, cancel_group, spawn, start, stop,
 };
 pub use session::*;
+pub use speex::*;
 pub use status::{
     CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallDirection, Cause, ChannelState, FALSE, GENERR,
     HupType, OriginateFlag, Result, SUCCESS, Status, SwitchError, false_on_success,
