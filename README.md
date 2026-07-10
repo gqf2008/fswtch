@@ -132,7 +132,7 @@ fswtch::attach_media_bug(session, config, Meter)?;
 | Media bug | `MediaBug`, `MediaBugConfig`, `MediaBugFlags`, `MediaBugHandler`, `attach_media_bug` | [`mod_media_bug_meter.rs`](crates/fswtch/examples/mod_media_bug_meter.rs) |
 | Resample / AGC | `Resample`, `Agc`, `AgcConfig`, `change_sln_volume`, `mux_channels` | [`mod_stream_tools.rs`](crates/fswtch/examples/mod_stream_tools.rs) |
 | VAD | `Vad`, `VadState` | [`mod_vad_detect.rs`](crates/fswtch/examples/mod_vad_detect.rs) |
-| ASR → ESL + ESL → TTS | `Event`, `EventBinder`, `event_callback!`, `SessionGuard`, `Session::execute_application`, `EventType::DETECTED_SPEECH` | [`mod_vad_esl.rs`](crates/fswtch/examples/mod_vad_esl.rs) |
+| ASR → ESL + ESL → TTS | `Event`, `EventBinder`, `event_callback!`, `Session::execute_application`, `execute_application_async`, `EventType::DETECTED_SPEECH` | [`mod_vad_esl.rs`](crates/fswtch/examples/mod_vad_esl.rs) |
 | Video | `Chromakey`, `Color`, `Image`, `ImageFormat` | [`mod_endpoint_skeleton.rs`](crates/fswtch/examples/mod_endpoint_skeleton.rs) |
 | Jitter buffer | `JitterBuffer`, `JitterBufferConfig`, `JbFrames`, `JbFlag`, `JbKind` | [`mod_endpoint_skeleton.rs`](crates/fswtch/examples/mod_endpoint_skeleton.rs) |
 | IVR | `park`, `record_file` | [`mod_app_playback_control.rs`](crates/fswtch/examples/mod_app_playback_control.rs) |

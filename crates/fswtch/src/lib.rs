@@ -129,7 +129,7 @@ pub use rtp::{Rtp, RtpConfig, RtpPacket, request_port};
 pub use scheduler::{
     Task, TaskConfig, TaskFlags, TaskHandle, TaskHandler, cancel_group, spawn, start, stop,
 };
-pub use session::{Session, SessionGuard};
+pub use session::{Session, SessionGuard, execute_application_async};
 pub use status::{
     CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallDirection, Cause, ChannelState, FALSE, GENERR,
     HupType, OriginateFlag, Result, SUCCESS, Status, SwitchError, false_on_success,

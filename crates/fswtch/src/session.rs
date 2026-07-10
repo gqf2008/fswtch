@@ -344,3 +344,35 @@ impl Drop for SessionGuard {
         }
     }
 }
+
+/// Queues a dialplan application to run on a session by UUID — the Rust face of FreeSWITCH's
+/// `sendmsg` `call-command: execute`.
+///
+/// Wraps `switch_core_session_message_send` with a `SWITCH_MESSAGE_INDICATE_BROADCAST` message:
+/// the app (`string_array_arg[0]`) and its arg (`[1]`) are queued on the target session's state
+/// machine, which runs them on the session's **own thread**. This is thread-safe from any caller
+/// — unlike [`Session::execute_application`], which runs the app inline on the calling thread and
+/// is therefore only correct from the session's execution context.
+///
+/// Use this when triggering playback/TTS (`"playback"` / `"speak"`) on a call from an external
+/// thread (event handlers, worker threads). `uuid` need not be located first — FreeSWITCH
+/// resolves it. Interior NUL in any string is rejected.
+pub fn execute_application_async(
+    uuid: impl AsRef<str>,
+    app: impl AsRef<str>,
+    arg: &str,
+) -> Result<()> {
+    let uuid = cstring(uuid)?;
+    let app = cstring(app)?;
+    let arg = cstring(arg)?;
+    let mut msg = sys::switch_core_session_message::default();
+    msg.message_id = sys::switch_core_session_message_types_t_SWITCH_MESSAGE_INDICATE_BROADCAST;
+    msg.from = b"fswtch-rs\0".as_ptr() as *mut _;
+    msg.string_array_arg[0] = app.as_ptr();
+    msg.string_array_arg[1] = arg.as_ptr();
+    // SAFETY: `uuid` is a valid C string; `msg` is a fully zero-initialized message struct with
+    // a valid message id and two valid C-string args. `switch_core_session_message_send` queues
+    // the message on the target session's state machine (NULL uuid → SWITCH_STATUS_FALSE).
+    let status = unsafe { sys::switch_core_session_message_send(uuid.as_ptr(), &mut msg) };
+    status_to_result(status)
+}

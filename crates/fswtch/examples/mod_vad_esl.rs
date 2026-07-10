@@ -15,15 +15,9 @@
 //! At load the module also subscribes to custom `fswtch::speak` events (any ESL socket sends
 //! them via `sendevent CUSTOM` with `Event-Subclass: fswtch::speak`). The event carries
 //! `Target-UUID` + `Speak-Args` (the full `speak` app arg, e.g. `engine|voice|text`). A worker
-//! locates the target session and runs `execute_application("speak", speak_args)`.
-//!
-//! # Thread caveat (inbound)
-//! `switch_core_session_execute_application_get_flags` runs the app **inline** on the calling
-//! thread, but the `speak` app reads/writes session media on the session's own thread. So calling
-//! it from the event-worker thread is only reliable when the session is in an executable state
-//! (answered/parked). The robust, thread-safe way to run an app on a session by UUID from an
-//! external trigger is FS `sendmsg` (queues on the session's state machine) — fswtch does not
-//! wrap `switch_core_session_message_send` yet; add it if this path misbehaves.
+//! queues the `speak` app on the target session via [`fswtch::execute_application_async`] (FS
+//! `sendmsg` `call-command: execute`), so it runs on the session's own thread — thread-safe from
+//! the event worker (no need to locate the session first).
 //!
 //! # Use
 //! ```text
@@ -40,7 +34,7 @@
 
 use std::thread;
 
-use fswtch::{EventType, SessionGuard};
+use fswtch::EventType;
 
 const ASR_SUBCLASS: &str = "fswtch::asr_result";
 const SPEAK_SUBCLASS: &str = "fswtch::speak";
@@ -98,19 +92,10 @@ fswtch::event_callback! {
 }
 
 fn run_speak(uuid: &str, speak_args: &str) {
-    let Ok(Some(guard)) = SessionGuard::locate(uuid) else {
-        fswtch::log_error(
-            "mod_vad_esl",
-            format!("speak target session {uuid} not found"),
-        );
-        return;
-    };
-    let Some(session) = guard.session() else {
-        return;
-    };
     fswtch::log_info("mod_vad_esl", format!("speaking on {uuid}: {speak_args}"));
-    if let Err(error) = session.execute_application("speak", speak_args) {
-        fswtch::log_error("mod_vad_esl", format!("speak app failed: {error}"));
+    // sendmsg-queue the speak app on the session's own thread (thread-safe from this worker).
+    if let Err(error) = fswtch::execute_application_async(uuid, "speak", speak_args) {
+        fswtch::log_error("mod_vad_esl", format!("speak sendmsg failed: {error}"));
     }
 }
 
@@ -141,14 +126,8 @@ fswtch::api_callback! {
         if uuid.is_empty() {
             return stream.write("usage: rust_vad_esl_start <uuid> <detect_speech args>\n");
         }
-        let Ok(Some(guard)) = SessionGuard::locate(uuid) else {
-            return stream.write(&format!("session {uuid} not found\n"));
-        };
-        let Some(session) = guard.session().copied() else {
-            return stream.write(&format!("session {uuid} not readable\n"));
-        };
-        let uuid = session.uuid().unwrap_or_else(|| uuid.to_owned());
-        match session.execute_application("detect_speech", args) {
+        // sendmsg-queue detect_speech on the session's own thread (thread-safe from the API thread).
+        match fswtch::execute_application_async(uuid, "detect_speech", args) {
             Ok(()) => stream.write(&format!("asr started on {uuid}\n")),
             Err(error) => stream.write(&format!("detect_speech failed: {error}\n")),
         }
