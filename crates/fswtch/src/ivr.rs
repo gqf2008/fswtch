@@ -1980,3 +1980,140 @@ pub fn detect_silence(
         )
     })
 }
+
+// ── AEC / 降噪 / AGC (switch_ivr_preprocess_session) ──────────────────────
+
+/// AEC / noise suppression / AGC via `switch_ivr_preprocess_session` (libspeexdsp).
+///
+/// `cmds` is a FreeSWITCH preprocessor DSL with `r.` (read-leg) / `w.` (write-leg) prefix:
+/// - `echo_cancel=<tail>` — enable echo cancellation (tail in samples, default 1024);
+///   `echo_cancel=false` disables.
+/// - `noise_suppress=<-db>` — noise suppression level (negative dB).
+/// - `echo_suppress=<-db>` — residual echo suppression.
+/// - `agc=<true|level>` — automatic gain control.
+///
+/// Example: `"r.echo_cancel=1024 r.noise_suppress=-30 r.agc=true"`.
+pub fn preprocess_session(session: Session, cmds: impl AsRef<str>) -> Result<()> {
+    let cmds = cstring(cmds)?;
+    // SAFETY: live session; valid C string. Returns switch_status_t.
+    status_to_result(unsafe { sys::switch_ivr_preprocess_session(session.as_ptr(), cmds.as_ptr()) })
+}
+
+// ── TTS speech interface (switch_core_speech_*) ────────────────────────────
+// These wrap the low-level TTS engine interface (`switch_speech_handle_t`). The handle is an
+// opaque struct the caller allocates (e.g. on a pool). All `unsafe` stays inside.
+
+/// Opens a TTS speech handle: `module_name` is the TTS engine (e.g. `"flite"`, `"cepstral"`),
+/// `voice_name` the voice, `rate`/`interval`/`channels` the audio format, `flags` an in/out
+/// `switch_speech_flag_t`, `pool` the APR pool for the handle's allocations.
+pub fn speech_open(
+    sh: *mut sys::switch_speech_handle_t,
+    module_name: impl AsRef<str>,
+    voice_name: impl AsRef<str>,
+    rate: u32,
+    interval: u32,
+    channels: u32,
+    flags: *mut sys::switch_speech_flag_t,
+    pool: &Pool,
+) -> Result<()> {
+    let module = cstring(module_name)?;
+    let voice = cstring(voice_name)?;
+    // SAFETY: `sh` valid per caller; two valid C strings; plain ints; `flags` in/out; live pool.
+    status_to_result(unsafe {
+        sys::switch_core_speech_open(
+            sh,
+            module.as_ptr(),
+            voice.as_ptr(),
+            rate as _,
+            interval as _,
+            channels as _,
+            flags,
+            pool.as_ptr(),
+        )
+    })
+}
+
+/// Feeds `text` to the TTS engine for synthesis. `flags` is an in/out `switch_speech_flag_t`.
+pub fn speech_feed_tts(
+    sh: *mut sys::switch_speech_handle_t,
+    text: impl AsRef<str>,
+    flags: *mut sys::switch_speech_flag_t,
+) -> Result<()> {
+    let text = cstring(text)?;
+    // SAFETY: `sh` live; valid C string; `flags` in/out.
+    status_to_result(unsafe { sys::switch_core_speech_feed_tts(sh, text.as_ptr(), flags) })
+}
+
+/// Reads synthesized audio from the TTS engine into `data`. `datalen` is in/out (max on input,
+/// actual on output). `flags` in/out.
+pub fn speech_read_tts(
+    sh: *mut sys::switch_speech_handle_t,
+    data: *mut std::ffi::c_void,
+    datalen: &mut u64,
+    flags: *mut sys::switch_speech_flag_t,
+) -> Result<()> {
+    let mut n: sys::switch_size_t = *datalen as _;
+    // SAFETY: `sh` live; `data` valid buffer for `*datalen`; `&mut n` valid in/out; `flags` in/out.
+    let s = unsafe { sys::switch_core_speech_read_tts(sh, data, &mut n, flags) };
+    *datalen = n as u64;
+    status_to_result(s)
+}
+
+/// Flushes the TTS engine's buffer (discards pending synthesis).
+pub fn speech_flush_tts(sh: *mut sys::switch_speech_handle_t) {
+    // SAFETY: `sh` live.
+    unsafe { sys::switch_core_speech_flush_tts(sh) };
+}
+
+/// Sets a text parameter on the TTS engine (e.g. `"voice"` → `"alice"`).
+pub fn speech_text_param_tts(
+    sh: *mut sys::switch_speech_handle_t,
+    param: impl AsRef<str>,
+    val: impl AsRef<str>,
+) -> Result<()> {
+    let param = cstring(param)?;
+    let val = cstring(val)?;
+    // SAFETY: `sh` live; two valid C strings (FS copies into pool; the *mut on `param` is a
+    // non-const convention, not a mutation of our CString).
+    unsafe {
+        sys::switch_core_speech_text_param_tts(sh, param.as_ptr() as *mut _, val.as_ptr());
+    }
+    Ok(())
+}
+
+/// Sets a numeric parameter on the TTS engine.
+pub fn speech_numeric_param_tts(
+    sh: *mut sys::switch_speech_handle_t,
+    param: impl AsRef<str>,
+    val: i32,
+) -> Result<()> {
+    let param = cstring(param)?;
+    // SAFETY: `sh` live; valid C string; plain int.
+    unsafe {
+        sys::switch_core_speech_numeric_param_tts(sh, param.as_ptr() as *mut _, val);
+    }
+    Ok(())
+}
+
+/// Sets a float parameter on the TTS engine.
+pub fn speech_float_param_tts(
+    sh: *mut sys::switch_speech_handle_t,
+    param: impl AsRef<str>,
+    val: f64,
+) -> Result<()> {
+    let param = cstring(param)?;
+    // SAFETY: `sh` live; valid C string; plain f64.
+    unsafe {
+        sys::switch_core_speech_float_param_tts(sh, param.as_ptr() as *mut _, val);
+    }
+    Ok(())
+}
+
+/// Closes the TTS speech handle (releases engine resources). `flags` in/out.
+pub fn speech_close(
+    sh: *mut sys::switch_speech_handle_t,
+    flags: *mut sys::switch_speech_flag_t,
+) -> Result<()> {
+    // SAFETY: `sh` live; `flags` in/out.
+    status_to_result(unsafe { sys::switch_core_speech_close(sh, flags) })
+}
