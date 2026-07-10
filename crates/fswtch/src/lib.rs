@@ -72,20 +72,7 @@ pub use event::{
     event_running, name_event, unbind_callback,
 };
 pub use file::*;
-pub use ivr::{
-    DigitActionTarget, DigitMachine, DmachineMatch, IvrMenu, IvrMenuConfig, MediaFlag,
-    OriginateOutcome, block_dtmf_session, broadcast, broadcast_in_thread, capture_text, check_hold,
-    check_presence_mapping, collect_digits_callback, collect_digits_count, delay_echo,
-    detect_speech, detect_speech_disable_all_grammars, detect_speech_disable_grammar,
-    detect_speech_enable_grammar, detect_speech_init, detect_speech_load_grammar,
-    detect_speech_start_input_timers, detect_speech_unload_grammar, displace_session,
-    eavesdrop_exec_all, eavesdrop_pop_eavesdropper, generate_json_cdr, generate_xml_cdr, media,
-    multi_threaded_bridge, multi_threaded_bridge_raw, nomedia, originate, originate_raw, park,
-    parse_all_events, parse_event, parse_next_event, pause_detect_speech, play_file, read,
-    record_file, record_session, record_session_event, record_session_mask, record_session_pause,
-    resume_detect_speech, say, say_ip, say_spell, say_string, stop_detect_speech,
-    unblock_dtmf_session, uuid_exists, uuid_force_exists,
-};
+pub use ivr::*;
 pub use jitterbuffer::{JbFlag, JbFrames, JbKind, JitterBuffer, JitterBufferConfig};
 pub use limit::{
     Usage, backend, fire_event, incr, init, interval_reset, release, reset, status, usage,
