@@ -40,9 +40,9 @@ mod xml;
 pub use fswtch_sys as sys;
 
 pub use buffer::Buffer;
-pub use caller::{CallerExtension, CallerProfile};
+pub use caller::*;
 pub use channel::*;
-pub use codec::Codec;
+pub use codec::*;
 pub use command::{
     StaticCStr, borrowed_cstr_to_str, borrowed_cstr_to_string, command_text, cstring, free_cstr,
     strdup_to_string,
@@ -108,7 +108,7 @@ pub use nat::{
 pub use network_list::{AclVerdict, NetworkList};
 pub use packetizer::{BitstreamType, Packetizer};
 pub use plc::Plc;
-pub use pool::Pool;
+pub use pool::*;
 pub use regex::{CaptureCallback, Regex, RegexMatch, is_match, is_match_partial};
 pub use resample::{
     Agc, AgcConfig, DEFAULT_QUALITY, Resample, calc_buffer_size, change_sln_volume,

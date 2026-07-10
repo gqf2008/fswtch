@@ -173,3 +173,57 @@ mod caller_extension_tests {
         assert_eq!(wrapped.current_application_data(), None);
     }
 }
+
+// ── caller extension/profile helpers ──────────────────────────────────────
+
+pub fn caller_extension_clone(
+    new_ext: &mut *mut crate::sys::switch_caller_extension_t,
+    orig: *mut crate::sys::switch_caller_extension_t,
+    pool: &crate::pool::Pool,
+) -> crate::Result<()> {
+    // SAFETY: valid out-param; `orig` live; `pool.as_ptr()` live.
+    crate::status_to_result(unsafe { crate::sys::switch_caller_extension_clone(new_ext, orig, pool.as_ptr()) })
+}
+
+pub fn caller_extension_add_application(
+    session: crate::Session,
+    ext: *mut crate::sys::switch_caller_extension_t,
+    application_name: impl AsRef<str>,
+    extra_data: impl AsRef<str>,
+) -> crate::Result<()> {
+    let name = crate::cstring(application_name)?;
+    let extra = crate::cstring(extra_data)?;
+    // SAFETY: live session; valid ext; two valid C strings.
+    crate::status_to_result(unsafe {
+        crate::sys::switch_caller_extension_add_application(session.as_ptr(), ext, name.as_ptr(), extra.as_ptr())
+    })
+}
+
+pub fn caller_profile_dup(
+    pool: &crate::pool::Pool,
+    tocopy: *mut crate::sys::switch_caller_profile_t,
+) -> *mut crate::sys::switch_caller_profile_t {
+    // SAFETY: live pool; `tocopy` live per caller.
+    unsafe { crate::sys::switch_caller_profile_dup(pool.as_ptr(), tocopy) }
+}
+
+pub fn caller_profile_clone(
+    session: crate::Session,
+    tocopy: *mut crate::sys::switch_caller_profile_t,
+) -> *mut crate::sys::switch_caller_profile_t {
+    // SAFETY: live session; `tocopy` live.
+    unsafe { crate::sys::switch_caller_profile_clone(session.as_ptr(), tocopy) }
+}
+
+pub fn caller_profile_event_set_data(
+    profile: *mut crate::sys::switch_caller_profile_t,
+    prefix: impl AsRef<str>,
+    event: *mut crate::sys::switch_event_t,
+) {
+    let prefix = match crate::cstring(prefix) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    // SAFETY: valid profile; valid C string; `event` per caller.
+    unsafe { crate::sys::switch_caller_profile_event_set_data(profile, prefix.as_ptr(), event) };
+}

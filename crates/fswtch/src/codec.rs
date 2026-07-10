@@ -175,3 +175,41 @@ mod tests {
         assert_eq!(bytes as usize, 160);
     }
 }
+
+// ── codec helpers ──────────────────────────────────────────────────────────
+
+pub fn codec_reset(codec: *mut crate::sys::switch_codec_t) -> crate::Result<()> {
+    // SAFETY: `codec` is a live codec struct per caller.
+    crate::status_to_result(unsafe { crate::sys::switch_core_codec_reset(codec) })
+}
+
+pub fn codec_lock_full(session: crate::Session) {
+    // SAFETY: live session.
+    unsafe { crate::sys::switch_core_codec_lock_full(session.as_ptr()) };
+}
+
+pub fn codec_unlock_full(session: crate::Session) {
+    // SAFETY: live session.
+    unsafe { crate::sys::switch_core_codec_unlock_full(session.as_ptr()) };
+}
+
+pub fn codec_decode_video(
+    codec: *mut crate::sys::switch_codec_t,
+    frame: *mut crate::sys::switch_frame_t,
+) -> crate::Result<()> {
+    // SAFETY: live codec; valid frame ptr per caller.
+    crate::status_to_result(unsafe { crate::sys::switch_core_codec_decode_video(codec, frame) })
+}
+
+pub fn codec_encode_video(
+    codec: *mut crate::sys::switch_codec_t,
+    frame: *mut crate::sys::switch_frame_t,
+) -> crate::Result<()> {
+    // SAFETY: live codec; valid frame ptr per caller.
+    crate::status_to_result(unsafe { crate::sys::switch_core_codec_encode_video(codec, frame) })
+}
+
+pub fn codec_next_id() -> u32 {
+    // SAFETY: no args.
+    unsafe { crate::sys::switch_core_codec_next_id() }
+}
