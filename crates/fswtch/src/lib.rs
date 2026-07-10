@@ -138,7 +138,7 @@ pub use status::{
 pub use stream::{ApiStream, Stream, write_stream_response};
 pub use timer::Timer;
 pub use utils::{escape_string, find_end_paren, format_number, url_encode};
-pub use vad::{Vad, VadState};
+pub use vad::{SpeechSegment, Vad, VadState, snap_segments};
 pub use video::{
     CachedImage, Chromakey, Color, Image, ImageFit, ImageFormat, ImagePosition, Shade,
 };
