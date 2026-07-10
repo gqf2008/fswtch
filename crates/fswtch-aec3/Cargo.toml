@@ -11,5 +11,16 @@ repository.workspace = true
 [dependencies]
 fswtch-aec3-sys = { version = "0.1.8", path = "../fswtch-aec3-sys" }
 
+[dev-dependencies]
+# `mod_aec3` example is a FreeSWITCH cdylib module: it links fswtch (the FreeSWITCH bindings) plus
+# the vendored AEC3 C++ via fswtch-aec3-sys. Build/run it where a FreeSWITCH lib is available
+# (FREESWITCH_LIB_DIR / pkg-config) — the Docker smoke image, or `cargo check --example mod_aec3`
+# for a headers-only type-check.
+fswtch = { version = "0.1.8", path = "../fswtch" }
+
+[[example]]
+name = "mod_aec3"
+crate-type = ["cdylib"]
+
 [lints]
 workspace = true

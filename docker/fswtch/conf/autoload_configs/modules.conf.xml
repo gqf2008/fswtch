@@ -24,5 +24,6 @@
     <load module="mod_remote_vad"/>
     <load module="mod_stream_tools"/>
     <load module="mod_vad_esl"/>
+    <load module="mod_aec3"/>
   </modules>
 </configuration>
