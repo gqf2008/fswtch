@@ -26,6 +26,9 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets
 ```
 
+After bulk edits (many files at once), run `cargo clean -p fswtch && cargo check -p fswtch` —
+incremental compilation can produce false-clean results by reusing stale object caches.
+
 For bindings against a local configured FreeSWITCH install:
 
 ```sh

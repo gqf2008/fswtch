@@ -345,18 +345,19 @@ impl Drop for SessionGuard {
     }
 }
 
-/// Queues a dialplan application to run on a session by UUID — the Rust face of FreeSWITCH's
-/// `sendmsg` `call-command: execute`.
+/// Sends a dialplan application to a session by UUID via FreeSWITCH's `sendmsg`
+/// (`switch_core_session_message_send` + `SWITCH_MESSAGE_INDICATE_BROADCAST`).
 ///
-/// Wraps `switch_core_session_message_send` with a `SWITCH_MESSAGE_INDICATE_BROADCAST` message:
-/// the app (`string_array_arg[0]`) and its arg (`[1]`) are queued on the target session's state
-/// machine, which runs them on the session's **own thread**. This is thread-safe from any caller
-/// — unlike [`Session::execute_application`], which runs the app inline on the calling thread and
-/// is therefore only correct from the session's execution context.
+/// **Despite the name, this call is synchronous** — `switch_core_session_message_send` delivers
+/// the message inline via `switch_core_session_receive_message`, which runs the app on the
+/// session's thread **and blocks the caller until it finishes**. For long-running apps like
+/// `"speak"` (TTS) or `"playback"`, call this from a worker thread, not a hot path.
 ///
-/// Use this when triggering playback/TTS (`"playback"` / `"speak"`) on a call from an external
-/// thread (event handlers, worker threads). `uuid` need not be located first — FreeSWITCH
-/// resolves it. Interior NUL in any string is rejected.
+/// The "async" in the name means "runs on the session's thread" (thread-safe from any caller),
+/// not "non-blocking". Unlike [`Session::execute_application`] (which runs inline on the caller's
+/// thread and is only correct from the session's execution context), this is safe from any
+/// thread (event handlers, API callbacks, workers). `uuid` need not be located first —
+/// FreeSWITCH resolves it. Interior NUL in any string is rejected.
 pub fn execute_application_async(
     uuid: impl AsRef<str>,
     app: impl AsRef<str>,

@@ -85,9 +85,15 @@ fswtch::event_callback! {
                 return;
             }
         };
-        let _ = thread::Builder::new()
+        if let Err(error) = thread::Builder::new()
             .name("fswtch-vad-esl-speak".to_owned())
-            .spawn(move || run_speak(&target, &args));
+            .spawn(move || run_speak(&target, &args))
+        {
+            fswtch::log_error(
+                "mod_vad_esl",
+                format!("failed to spawn speak worker: {error}"),
+            );
+        }
     }
 }
 
