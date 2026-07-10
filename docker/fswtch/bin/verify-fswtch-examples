@@ -94,5 +94,6 @@ assert_api "rust_metrics_show" 'fswtch_example_events_total{name="smoke"} 1'
 assert_api "rust_rate_limit smoke-key 2 60" "allowed=true remaining=1"
 assert_api "rust_check_registration alice@example.com https://server/check" "registration check queued"
 assert_api "rust_vad_start call-123 ws://127.0.0.1:9" "remote VAD worker started"
+assert_api "rust_vad_esl_start" "usage: rust_vad_esl_start <uuid>"
 
 printf 'all fswtch example module checks passed\n'

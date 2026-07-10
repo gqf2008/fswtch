@@ -119,6 +119,10 @@ name = "mod_vad_detect"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "mod_vad_esl"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "mod_buffer_demo"
 crate-type = ["cdylib"]
 

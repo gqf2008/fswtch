@@ -89,7 +89,8 @@ RUN set -eux; \
       mod_rate_limiter \
       mod_registration_check \
       mod_remote_vad \
-      mod_stream_tools; \
+      mod_stream_tools \
+      mod_vad_esl; \
     do \
       install -m 0755 "target/release/examples/lib${module}.so" "${FS_PREFIX}/mod/${module}.so"; \
     done
