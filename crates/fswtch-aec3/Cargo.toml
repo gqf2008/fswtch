@@ -1,0 +1,15 @@
+[package]
+name = "fswtch-aec3"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description.workspace = true
+readme.workspace = true
+repository.workspace = true
+
+[dependencies]
+fswtch-aec3-sys = { version = "0.1.8", path = "../fswtch-aec3-sys" }
+
+[lints]
+workspace = true

@@ -507,6 +507,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fswtch-aec3"
+version = "0.1.8"
+dependencies = [
+ "fswtch-aec3-sys",
+]
+
+[[package]]
+name = "fswtch-aec3-sys"
+version = "0.1.8"
+dependencies = [
+ "bindgen",
+ "cmake",
+]
+
+[[package]]
 name = "fswtch-src"
 version = "0.1.8"
 

@@ -3,6 +3,8 @@ members = [
     "crates/fswtch",
     "crates/fswtch-src",
     "crates/fswtch-sys",
+    "crates/fswtch-aec3",
+    "crates/fswtch-aec3-sys",
     "ai-agent-seat",
 ]
 resolver = "3"
