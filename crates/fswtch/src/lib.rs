@@ -132,7 +132,7 @@ pub use vad::{SpeechSegment, Vad, VadState, snap_segments};
 pub use video::{
     CachedImage, Chromakey, Color, Image, ImageFit, ImageFormat, ImagePosition, Shade,
 };
-pub use xml::{XmlConfig, XmlNode};
+pub use xml::*;
 
 #[macro_export]
 macro_rules! api_callback {
