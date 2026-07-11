@@ -1,4 +1,4 @@
-//! Safe Rust bindings over WebRTC audio processing (AEC3 + HF + NS; AGC2 pending).
+//! Safe Rust bindings over WebRTC audio processing (AEC3 + HF + NS + AGC2).
 //!
 //! Each module is built from the vendored C++ tree via the FFI bridge in `fswtch-aec3-sys`; this
 //! crate wraps the raw `extern "C"` ABI in owned, RAII handles that follow the `fswtch` conventions
@@ -17,6 +17,9 @@ pub use hpf::*;
 
 mod ns;
 pub use ns::*;
+
+mod agc2;
+pub use agc2::*;
 
 /// Returns the version of the AEC3 C ABI exposed by the bundled C++.
 ///
