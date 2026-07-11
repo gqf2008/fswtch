@@ -49,4 +49,14 @@ class StringBuilder {
 
 }  // namespace rtc
 
+// fswtch-aec3 shim addition for AGC2: the vendored agc2/interpolated_gain_curve
+// translation unit uses `StringBuilder` unqualified from within `namespace
+// webrtc` (the upstream rtc_base/strings/string_builder.h declares the class in
+// `namespace webrtc`). Expose it there as an alias so both `rtc::StringBuilder`
+// and `webrtc::StringBuilder` (and the unqualified form inside namespace webrtc)
+// resolve to the same type.
+namespace webrtc {
+using ::rtc::StringBuilder;
+}  // namespace webrtc
+
 #endif  // RTC_BASE_STRINGS_STRING_BUILDER_H_

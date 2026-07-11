@@ -38,8 +38,13 @@ list(FILTER NS_SRCS EXCLUDE REGEX "_unittest\\.cc$")
 
 # Real APM helper translation units (kept verbatim) + the Ooura 128-FFT and the
 # newly-vendored ChannelBuffer container, plus the C wrapper.
+# AGC2 (scalar: fixed digital gain + limiter, adaptive/RNN disabled) — the four
+# leaf translation units of GainController2's scalar path. gain_controller2.cc
+# itself is intentionally NOT compiled (see wrapper/agc2_c_api.cc): its ctor and
+# Process() contain runtime if-blocks referencing the adaptive/RNN classes.
 set(AEC3_HELPER_SRCS
     wrapper/aec3_c_api.cc
+    wrapper/agc2_c_api.cc
     wrapper/hpf_c_api.cc
     wrapper/ns_c_api.cc
     common_audio/third_party/ooura/fft_size_128/ooura_fft.cc
@@ -53,6 +58,10 @@ set(AEC3_HELPER_SRCS
     modules/audio_processing/logging/apm_data_dumper.cc
     modules/audio_processing/utility/cascaded_biquad_filter.cc
     api/audio/echo_canceller3_config.cc
+    modules/audio_processing/agc2/gain_applier.cc
+    modules/audio_processing/agc2/limiter.cc
+    modules/audio_processing/agc2/fixed_digital_level_estimator.cc
+    modules/audio_processing/agc2/interpolated_gain_curve.cc
 )
 
 add_library(fswtch_aec3 STATIC ${AEC3_SRCS} ${NS_SRCS} ${AEC3_HELPER_SRCS})

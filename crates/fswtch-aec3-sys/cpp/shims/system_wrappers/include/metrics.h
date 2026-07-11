@@ -11,6 +11,29 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "absl/strings/string_view.h"
+
+// fswtch-aec3 shim addition for AGC2: the vendored agc2/interpolated_gain_curve
+// translation unit references the metrics API directly (not only via the
+// RTC_HISTOGRAM_* macros below) — `metrics::Histogram*` members and the
+// `HistogramFactoryGetCounts` / `HistogramAdd` calls. In the full build these
+// feed UMA-style telemetry; for this embedded scalar build they are no-ops
+// (the factory returns nullptr, Add is empty). The Histogram type is opaque —
+// only pointer members hold it.
+namespace webrtc {
+namespace metrics {
+class Histogram;
+inline Histogram* HistogramFactoryGetCounts(absl::string_view /*name*/,
+                                             int /*min*/,
+                                             int /*max*/,
+                                             int /*bucket_count*/) {
+  return nullptr;
+}
+inline void HistogramAdd(Histogram* /*histogram_pointer*/, int /*sample*/) {}
+}  // namespace metrics
+}  // namespace webrtc
+
+
 #define RTC_HISTOGRAM_COUNTS_LINEAR(name, sample, min, max, bucket_count) \
   do {                                                                      \
     (void)(name);                                                           \
