@@ -30,12 +30,20 @@ list(FILTER AEC3_SRCS EXCLUDE REGEX "_unittest\\.cc$")
 list(FILTER AEC3_SRCS EXCLUDE REGEX "_avx2\\.cc$")
 list(FILTER AEC3_SRCS EXCLUDE REGEX "_neon\\.cc$")
 
+# Vendored noise-suppressor translation units (spectral NS, no neural).
+file(GLOB NS_SRCS CONFIGURE_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/audio_processing/ns/*.cc
+)
+list(FILTER NS_SRCS EXCLUDE REGEX "_unittest\\.cc$")
+
 # Real APM helper translation units (kept verbatim) + the Ooura 128-FFT and the
 # newly-vendored ChannelBuffer container, plus the C wrapper.
 set(AEC3_HELPER_SRCS
     wrapper/aec3_c_api.cc
     wrapper/hpf_c_api.cc
+    wrapper/ns_c_api.cc
     common_audio/third_party/ooura/fft_size_128/ooura_fft.cc
+    common_audio/third_party/ooura/fft_size_256/fft4g.cc
     common_audio/channel_buffer.cc
     common_audio/audio_util.cc
     modules/audio_processing/audio_buffer.cc
@@ -47,7 +55,7 @@ set(AEC3_HELPER_SRCS
     api/audio/echo_canceller3_config.cc
 )
 
-add_library(fswtch_aec3 STATIC ${AEC3_SRCS} ${AEC3_HELPER_SRCS})
+add_library(fswtch_aec3 STATIC ${AEC3_SRCS} ${NS_SRCS} ${AEC3_HELPER_SRCS})
 
 # Include search order: real vendored tree first, shim tree as fallback. Real
 # AEC3/ooura/helper headers win; the shim tree provides the utility layer
