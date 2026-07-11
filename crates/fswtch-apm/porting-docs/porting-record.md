@@ -96,13 +96,14 @@ A broken wrapper (out-of-sync render/capture) would stay ~0 dB. Cross-platform v
   → link error. The Docker smoke runs `linux/arm64` on this host (no x86 issue); for x86_64 either
   vendor `ooura_fft_sse2.cc` + `ooura_fft_tables_neon_sse2.h` or force-scalar via an `arch.h`
   shim.
-- **macOS version-mismatch link warnings** ("object built for 26.5 vs linked 11.0") — cosmetic;
-  the cmake crate passes `-mmacosx-version-min=<host>` while Rust links the default. Not blocking.
-- **Full Docker smoke not run here** — Docker daemon unavailable in this environment. The wiring is
-  complete (Dockerfile: `cmake` apt + `mod_aec3` build/install; `modules.conf.xml` autoload;
-  `verify-fswtch-examples` adds `assert_api "rust_aec3_smoke" "aec3 ok"`). Run
-  `docker build -t fswtch-freeswitch-smoke . && docker run --rm fswtch-freeswitch-smoke` once
-  Docker is available; success ends with `all fswtch example module checks passed`.
+- **macOS version-mismatch link warnings** — fixed (review #6): `CMakeLists.txt` sets
+  `CMAKE_OSX_DEPLOYMENT_TARGET "11.0"` on APPLE so cmake objects target the same macOS as the
+  final Rust link; the "object built for newer macOS" warnings are gone.
+- **Docker** — removed entirely (review #1/#3): the AGENTS.md Docker convention, the `Dockerfile`
+  + `docker/fswtch/` infra (cmake apt + mod_aec3/mod_apm build + `modules.conf.xml` autoload +
+  `verify-fswtch-examples`), and the README Docker section are all gone. APM modules are
+  verified locally in the running FreeSWITCH (`mod_aec3`→`aec3 ok erle=67.2db`,
+  `mod_apm`→`apm ok erle=58.2db`) — see `USAGE.md`.
 
 ## Phase summary (commits on `feat/aec3`)
 

@@ -111,11 +111,14 @@ FREESWITCH_LIB_DIR=/usr/lib/freeswitch \
 # → target/release/examples/libmod_aec3.so  (copy to FreeSWITCH's mod/ dir, autoload, load)
 ```
 
-Docker smoke (builds FreeSWITCH + the example + runs the API checks):
+Install + load into a running FreeSWITCH (verified locally; no Docker):
 
 ```sh
-docker build -t fswtch-freeswitch-smoke .
-docker run --rm fswtch-freeswitch-smoke     # ends with: all fswtch example module checks passed
+cp target/release/examples/libmod_aec3.so <FS_PREFIX>/lib/freeswitch/mod/mod_aec3.so
+fs_cli -x "load mod_aec3"
+fs_cli -x "rust_aec3_smoke"   # → aec3 ok rate=16000 erle=67.2db
+# mod_apm: cargo build -p fswtch-apm --example mod_apm --release; cp .../libmod_apm.so .../mod_apm.so;
+#          fs_cli -x "load mod_apm"; fs_cli -x "rust_apm_smoke"   # → apm ok rate=16000 erle=58.2db
 ```
 
 ## Build from a non-bundled FreeSWITCH
