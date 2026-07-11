@@ -10,10 +10,10 @@ fswtch::module_exports! {
 }
 
 const CHATBOT_APP: fswtch::ApplicationInfo = fswtch::ApplicationInfo::new(
-    "rust_chatbot_bridge",
+    "fswtch_chatbot_bridge",
     "Transforms inbound chat messages into custom chatbot events",
     "Rust chatbot bridge example",
-    "rust_chatbot_bridge <message>",
+    "fswtch_chatbot_bridge <message>",
 );
 
 fswtch::chat_callback! {
@@ -54,7 +54,7 @@ fswtch::chat_callback! {
 
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_chatbot_bridge", "rust_chatbot_bridge_stats invoked");
+        fswtch::log_info("mod_chatbot_bridge", "fswtch_chatbot_bridge_stats invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -74,9 +74,9 @@ fswtch::module_load! {
             .chat_application(CHATBOT_APP, chatbot_app)
             .and_then(|module| {
                 module.api(
-                    "rust_chatbot_bridge_stats",
+                    "fswtch_chatbot_bridge_stats",
                     "prints chatbot bridge counters",
-                    "rust_chatbot_bridge_stats",
+                    "fswtch_chatbot_bridge_stats",
                     stats_api,
                 )
             })

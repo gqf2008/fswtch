@@ -11,13 +11,13 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn emit_api(cmd, _session, stream) {
-        fswtch::log_info("mod_event_sink", "rust_event_sink_emit invoked");
+        fswtch::log_info("mod_event_sink", "fswtch_event_sink_emit invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(request) = cmd.as_deref().and_then(EventRequest::parse) else {
             fswtch::log_info("mod_event_sink", "invalid event sink command");
-            let status = stream.write("usage: rust_event_sink_emit <subclass> <json-object>\n");
+            let status = stream.write("usage: fswtch_event_sink_emit <subclass> <json-object>\n");
             return fswtch::false_on_success(status);
         };
 
@@ -37,7 +37,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_event_sink", "rust_event_sink_stats invoked");
+        fswtch::log_info("mod_event_sink", "fswtch_event_sink_stats invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -52,16 +52,16 @@ fswtch::module_load! {
         fswtch::log_info("mod_event_sink", "loading module");
         module
             .api(
-                "rust_event_sink_emit",
+                "fswtch_event_sink_emit",
                 "fires a custom event from a JSON object",
-                "rust_event_sink_emit <subclass> <json-object>",
+                "fswtch_event_sink_emit <subclass> <json-object>",
                 emit_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_event_sink_stats",
+                    "fswtch_event_sink_stats",
                     "prints event sink counters",
-                    "rust_event_sink_stats",
+                    "fswtch_event_sink_stats",
                     stats_api,
                 )
             })

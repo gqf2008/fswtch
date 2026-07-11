@@ -26,13 +26,13 @@ fswtch::api_callback! {
     fn info_api(_cmd, _session, stream) {
         fswtch::log_info(
             "mod_endpoint_skeleton",
-            "rust_endpoint_skeleton_info invoked",
+            "fswtch_endpoint_skeleton_info invoked",
         );
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         stream.write(
-            "endpoint rust_endpoint_skeleton registered with kill_channel + state_change routines\n",
+            "endpoint fswtch_endpoint_skeleton registered with kill_channel + state_change routines\n",
         )
     }
 }
@@ -51,7 +51,7 @@ fswtch::module_load! {
             .and_then(|io| {
                 module
                     .endpoint(
-                        "rust_endpoint_skeleton",
+                        "fswtch_endpoint_skeleton",
                         io,
                         fswtch::StateHandlerTable::new_null(),
                     )
@@ -63,9 +63,9 @@ fswtch::module_load! {
                     })
                     .and_then(|module| {
                         module.api(
-                            "rust_endpoint_skeleton_info",
+                            "fswtch_endpoint_skeleton_info",
                             "describes the Rust endpoint skeleton",
-                            "rust_endpoint_skeleton_info",
+                            "fswtch_endpoint_skeleton_info",
                             info_api,
                         )
                     })

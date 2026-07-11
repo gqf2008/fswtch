@@ -9,10 +9,10 @@
 //!
 //! ```text
 //! load mod_event_listener
-//! fs_cli -x 'rust_event_status'
+//! fs_cli -x 'fswtch_event_status'
 //! ```
 //!
-//! then originate a call (e.g. `originate user/1000 &echo`) and re-run `rust_event_status` to see
+//! then originate a call (e.g. `originate user/1000 &echo`) and re-run `fswtch_event_status` to see
 //! the counter climb as `CHANNEL_CREATE` events arrive.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -49,7 +49,7 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn status_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_event_listener", "rust_event_status invoked");
+        fswtch::log_info("mod_event_listener", "fswtch_event_status invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -85,9 +85,9 @@ fswtch::module_load! {
         })
         .and_then(|()| {
             module.api(
-                "rust_event_status",
+                "fswtch_event_status",
                 "reports how many CHANNEL_CREATE events the Rust listener has seen",
-                "rust_event_status",
+                "fswtch_event_status",
                 status_api,
             )
         })

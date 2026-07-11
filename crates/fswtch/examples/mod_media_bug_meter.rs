@@ -12,10 +12,10 @@ fswtch::module_exports! {
 }
 
 const METER_APP: fswtch::ApplicationInfo = fswtch::ApplicationInfo::new(
-    "rust_media_bug_meter",
+    "fswtch_media_bug_meter",
     "Attaches a read/write-stream media bug and counts observed audio frames",
     "Rust media bug meter example",
-    "rust_media_bug_meter",
+    "fswtch_media_bug_meter",
 );
 
 struct Counters {
@@ -90,7 +90,7 @@ fswtch::app_callback! {
         };
 
         let config = match MediaBugConfig::new(
-            "rust_media_bug_meter",
+            "fswtch_media_bug_meter",
             "read-write-stream",
             MediaBugFlags::READ_STREAM | MediaBugFlags::WRITE_STREAM | MediaBugFlags::NO_PAUSE,
         ) {
@@ -125,7 +125,7 @@ fswtch::app_callback! {
 
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_media_bug_meter", "rust_media_bug_meter_stats invoked");
+        fswtch::log_info("mod_media_bug_meter", "fswtch_media_bug_meter_stats invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -150,9 +150,9 @@ fswtch::module_load! {
             .application(METER_APP, meter_app)
             .and_then(|module| {
                 module.api(
-                    "rust_media_bug_meter_stats",
+                    "fswtch_media_bug_meter_stats",
                     "prints media bug meter counters",
-                    "rust_media_bug_meter_stats",
+                    "fswtch_media_bug_meter_stats",
                     stats_api,
                 )
             })

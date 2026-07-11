@@ -2,10 +2,10 @@
 //! loadable module.
 //!
 //! Two surfaces:
-//! - `rust_apm_smoke` API: runs the whole chain (HPF → AEC3 → NS → AGC2) on a synthetic echo
+//! - `fswtch_apm_smoke` API: runs the whole chain (HPF → AEC3 → NS → AGC2) on a synthetic echo
 //!   inside the FreeSWITCH process and reports the achieved ERLE. Proves all four modules load +
 //!   link + run in-process (the Docker/local smoke checks `"apm ok"`).
-//! - `rust_apm` dialplan application: attaches a media bug (`WRITE_STREAM` = far-end render,
+//! - `fswtch_apm` dialplan application: attaches a media bug (`WRITE_STREAM` = far-end render,
 //!   `READ_REPLACE` = near-end capture). Per 10 ms tick: render → AEC3.analyze_render; capture →
 //!   HPF → AEC3.process_capture → NS → AGC2. 20 ms SLIN frames are split into two 10 ms ticks;
 //!   any error / unsupported rate falls through to passthrough so a call is never crashed.
@@ -24,10 +24,10 @@ fswtch::module_exports! {
 }
 
 const APM_APP: fswtch::ApplicationInfo = fswtch::ApplicationInfo::new(
-    "rust_apm",
+    "fswtch_apm",
     "Attaches the WebRTC APM chain: HPF -> AEC3 -> NS -> AGC2 (far-end render + near-end capture)",
     "Rust WebRTC audio processing chain",
-    "rust_apm",
+    "fswtch_apm",
 );
 
 /// Per-session APM state held inside the media bug.
@@ -182,13 +182,13 @@ impl MediaBugHandler for ApmState {
 
 fswtch::app_callback! {
     fn apm_app(session, _data) {
-        fswtch::log_info("mod_apm", "rust_apm application invoked");
+        fswtch::log_info("mod_apm", "fswtch_apm application invoked");
         let Some(session) = session else {
             fswtch::log_error("mod_apm", "missing session");
             return;
         };
         let config = match MediaBugConfig::new(
-            "rust_apm",
+            "fswtch_apm",
             "read-write",
             MediaBugFlags::WRITE_STREAM | MediaBugFlags::READ_REPLACE | MediaBugFlags::NO_PAUSE,
         ) {
@@ -209,7 +209,7 @@ fswtch::app_callback! {
 // process and reports the AEC3 ERLE. The smoke asserts the response contains `"apm ok"`.
 fswtch::api_callback! {
     fn apm_smoke_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_apm", "rust_apm_smoke invoked");
+        fswtch::log_info("mod_apm", "fswtch_apm_smoke invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -302,9 +302,9 @@ fswtch::module_load! {
             .application(APM_APP, apm_app)
             .and_then(|module| {
                 module.api(
-                    "rust_apm_smoke",
+                    "fswtch_apm_smoke",
                     "runs the WebRTC APM chain (HPF->AEC3->NS->AGC2) on a synthetic echo",
-                    "rust_apm_smoke",
+                    "fswtch_apm_smoke",
                     apm_smoke_api,
                 )
             })

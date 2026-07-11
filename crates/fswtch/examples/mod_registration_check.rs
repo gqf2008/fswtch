@@ -12,14 +12,14 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn check_registration_api(cmd, _session, stream) {
-        fswtch::log_info("mod_registration_check", "rust_check_registration invoked");
+        fswtch::log_info("mod_registration_check", "fswtch_check_registration invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(request) = cmd.as_deref().and_then(RegistrationRequest::parse) else {
             fswtch::log_info("mod_registration_check", "invalid command syntax");
             let status =
-                stream.write("usage: rust_check_registration <user@domain> <https://server/check>\n");
+                stream.write("usage: fswtch_check_registration <user@domain> <https://server/check>\n");
             return fswtch::false_on_success(status);
         };
 
@@ -61,9 +61,9 @@ fswtch::module_load! {
     fn switch_module_load(module) for "mod_registration_check" {
         fswtch::log_info("mod_registration_check", "loading module");
         module.api(
-            "rust_check_registration",
+            "fswtch_check_registration",
             "asynchronously validates a registration and fires a custom event",
-            "rust_check_registration <user@domain> <https://server/check>",
+            "fswtch_check_registration <user@domain> <https://server/check>",
             check_registration_api,
         )
     }

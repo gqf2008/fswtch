@@ -5,7 +5,7 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn ping_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_api_suite", "rust_ping invoked");
+        fswtch::log_info("mod_api_suite", "fswtch_ping invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -15,7 +15,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn echo_api(cmd, _session, stream) {
-        fswtch::log_info("mod_api_suite", "rust_echo invoked");
+        fswtch::log_info("mod_api_suite", "fswtch_echo invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -26,7 +26,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn upper_api(cmd, _session, stream) {
-        fswtch::log_info("mod_api_suite", "rust_upper invoked");
+        fswtch::log_info("mod_api_suite", "fswtch_upper invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -39,20 +39,20 @@ fswtch::module_load! {
     fn switch_module_load(module) for "mod_api_suite" {
         fswtch::log_info("mod_api_suite", "loading module");
         module
-            .api("rust_ping", "returns pong", "rust_ping", ping_api)
+            .api("fswtch_ping", "returns pong", "fswtch_ping", ping_api)
             .and_then(|module| {
                 module.api(
-                    "rust_echo",
+                    "fswtch_echo",
                     "echoes the command argument",
-                    "rust_echo <text>",
+                    "fswtch_echo <text>",
                     echo_api,
                 )
             })
             .and_then(|module| {
                 module.api(
-                    "rust_upper",
+                    "fswtch_upper",
                     "uppercases the command argument",
-                    "rust_upper <text>",
+                    "fswtch_upper <text>",
                     upper_api,
                 )
             })

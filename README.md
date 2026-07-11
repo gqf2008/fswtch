@@ -200,9 +200,9 @@ fswtch::module_load! {
     fn switch_module_load(module) for "mod_hello" {
         fswtch::log_info("mod_hello", "loading module");
         module.api(
-            "rust_hello",
+            "fswtch_hello",
             "prints a Rust greeting",
-            "rust_hello",
+            "fswtch_hello",
             hello_api,
         )
     }
@@ -249,11 +249,11 @@ AI and media integration:
 
 `mod_local_ai_bridge` exposes:
 
-- `rust_local_ai_status`
-- `rust_local_asr <pcm16le-file>`
-- `rust_local_tts <text>`
-- `rust_local_nlp <prompt>`
-- `rust_local_nlp_sync <prompt>`
+- `fswtch_local_ai_status`
+- `fswtch_local_asr <pcm16le-file>`
+- `fswtch_local_tts <text>`
+- `fswtch_local_nlp <prompt>`
+- `fswtch_local_nlp_sync <prompt>`
 
 Environment variables:
 

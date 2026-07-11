@@ -17,14 +17,14 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn start_vad_api(cmd, _session, stream) {
-        fswtch::log_info("mod_remote_vad", "rust_vad_start invoked");
+        fswtch::log_info("mod_remote_vad", "fswtch_vad_start invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(config) = cmd.as_deref().and_then(VadConfig::parse) else {
             fswtch::log_info("mod_remote_vad", "invalid command syntax");
             let status =
-                stream.write("usage: rust_vad_start <call-uuid> <wss://vad.example/session>\n");
+                stream.write("usage: fswtch_vad_start <call-uuid> <wss://vad.example/session>\n");
             return fswtch::false_on_success(status);
         };
 
@@ -93,9 +93,9 @@ fswtch::module_load! {
     fn switch_module_load(module) for "mod_remote_vad" {
         fswtch::log_info("mod_remote_vad", "loading module");
         module.api(
-            "rust_vad_start",
+            "fswtch_vad_start",
             "starts an async remote websocket VAD worker",
-            "rust_vad_start <call-uuid> <wss://vad.example/session>",
+            "fswtch_vad_start <call-uuid> <wss://vad.example/session>",
             start_vad_api,
         )
     }

@@ -1,8 +1,8 @@
 //! Showcase: PCRE2 regex matching via `fswtch::Regex` and `fswtch::RegexMatch`.
 //!
-//! Registers the `rust_regex_match` API command. From `fs_cli` run:
-//!   `rust_regex_match <pattern> <subject>`
-//! e.g. `rust_regex_match ^(\w+)-(\w+)$ foo-bar` compiles the pattern with
+//! Registers the `fswtch_regex_match` API command. From `fs_cli` run:
+//!   `fswtch_regex_match <pattern> <subject>`
+//! e.g. `fswtch_regex_match ^(\w+)-(\w+)$ foo-bar` compiles the pattern with
 //! `Regex::compile`, matches the subject with `Regex::matches`, and writes the
 //! whole match (capture group 0) plus any named groups to the stream.
 
@@ -13,7 +13,7 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn regex_match_api(cmd, _session, stream) {
-        fswtch::log_info("mod_regex_match", "rust_regex_match invoked");
+        fswtch::log_info("mod_regex_match", "fswtch_regex_match invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -23,7 +23,7 @@ fswtch::api_callback! {
         let cmd = match cmd {
             Some(cmd) => cmd,
             None => {
-                return stream.write("usage: rust_regex_match <pattern> <subject>\n");
+                return stream.write("usage: fswtch_regex_match <pattern> <subject>\n");
             }
         };
 
@@ -31,14 +31,14 @@ fswtch::api_callback! {
             Some((p, s)) => (p.trim(), s.trim_start_matches(' ')),
             None => {
                 return stream.write(
-                    "usage: rust_regex_match <pattern> <subject>\n",
+                    "usage: fswtch_regex_match <pattern> <subject>\n",
                 );
             }
         };
 
         if pattern.is_empty() || subject.is_empty() {
             return stream.write(
-                "usage: rust_regex_match <pattern> <subject>\n",
+                "usage: fswtch_regex_match <pattern> <subject>\n",
             );
         }
 
@@ -80,17 +80,17 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn regex_test_api(cmd, _session, stream) {
-        fswtch::log_info("mod_regex_match", "rust_regex_test invoked");
+        fswtch::log_info("mod_regex_match", "fswtch_regex_test invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
 
-        // A boolean-only convenience: `rust_regex_test <pattern> <subject>`
+        // A boolean-only convenience: `fswtch_regex_test <pattern> <subject>`
         // reports match / no-match via `Regex::is_match`.
         let cmd = match cmd {
             Some(cmd) => cmd,
             None => {
-                return stream.write("usage: rust_regex_test <pattern> <subject>\n");
+                return stream.write("usage: fswtch_regex_test <pattern> <subject>\n");
             }
         };
 
@@ -98,14 +98,14 @@ fswtch::api_callback! {
             Some((p, s)) => (p.trim(), s.trim_start_matches(' ')),
             None => {
                 return stream.write(
-                    "usage: rust_regex_test <pattern> <subject>\n",
+                    "usage: fswtch_regex_test <pattern> <subject>\n",
                 );
             }
         };
 
         if pattern.is_empty() || subject.is_empty() {
             return stream.write(
-                "usage: rust_regex_test <pattern> <subject>\n",
+                "usage: fswtch_regex_test <pattern> <subject>\n",
             );
         }
 
@@ -127,16 +127,16 @@ fswtch::module_load! {
         fswtch::log_info("mod_regex_match", "loading module");
         module
             .api(
-                "rust_regex_match",
+                "fswtch_regex_match",
                 "compiles a PCRE2 pattern and writes the whole match + capture groups",
-                "rust_regex_match <pattern> <subject>",
+                "fswtch_regex_match <pattern> <subject>",
                 regex_match_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_regex_test",
+                    "fswtch_regex_test",
                     "compiles a PCRE2 pattern and reports a boolean match result",
-                    "rust_regex_test <pattern> <subject>",
+                    "fswtch_regex_test <pattern> <subject>",
                     regex_test_api,
                 )
             })

@@ -15,7 +15,7 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_lifecycle", "rust_lifecycle_stats invoked");
+        fswtch::log_info("mod_lifecycle", "fswtch_lifecycle_stats invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -35,9 +35,9 @@ fswtch::module_load! {
         fswtch::log_info("mod_lifecycle", "loading module");
         LOADS.fetch_add(1, Ordering::Relaxed);
         module.api(
-            "rust_lifecycle_stats",
+            "fswtch_lifecycle_stats",
             "prints module lifecycle counters",
-            "rust_lifecycle_stats",
+            "fswtch_lifecycle_stats",
             stats_api,
         )
     }

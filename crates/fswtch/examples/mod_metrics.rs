@@ -14,12 +14,12 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn hit_api(cmd, _session, stream) {
-        fswtch::log_info("mod_metrics", "rust_metrics_hit invoked");
+        fswtch::log_info("mod_metrics", "fswtch_metrics_hit invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(name) = cmd else {
-            let status = stream.write("usage: rust_metrics_hit <name>\n");
+            let status = stream.write("usage: fswtch_metrics_hit <name>\n");
             return fswtch::false_on_success(status);
         };
 
@@ -43,7 +43,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn show_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_metrics", "rust_metrics_show invoked");
+        fswtch::log_info("mod_metrics", "fswtch_metrics_show invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -67,16 +67,16 @@ fswtch::module_load! {
         fswtch::log_info("mod_metrics", "loading module");
         module
             .api(
-                "rust_metrics_hit",
+                "fswtch_metrics_hit",
                 "increments a named example counter",
-                "rust_metrics_hit <name>",
+                "fswtch_metrics_hit <name>",
                 hit_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_metrics_show",
+                    "fswtch_metrics_show",
                     "prints example counters in Prometheus text format",
-                    "rust_metrics_show",
+                    "fswtch_metrics_show",
                     show_api,
                 )
             })

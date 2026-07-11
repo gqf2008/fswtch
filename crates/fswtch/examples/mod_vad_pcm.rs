@@ -32,14 +32,14 @@
 //! ```text
 //! load mod_vad_pcm
 //! # dialplan: attach the bridge on an answered call
-//! <action application="rust_vad_pcm"/>
+//! <action application="fswtch_vad_pcm"/>
 //! # or fs_cli against an existing call:
-//! fs_cli -x 'rust_vad_pcm_start <uuid>'
+//! fs_cli -x 'fswtch_vad_pcm_start <uuid>'
 //! # downstream brain: subscribe `event custom fswtch::asr_result`, base64-decode each body to
 //! # S16LE PCM at the advertised Sample-Rate/Channels, run ASR, then TTS and send each chunk
 //! # back as a fswtch::play_pcm event (same headers + Target-UUID + base64 PCM body).
 //! # on barge-in (caller interrupts the bot): flush the play buffer to stop TTS at once:
-//! fs_cli -x 'rust_vad_pcm_stop_playback <uuid>'
+//! fs_cli -x 'fswtch_vad_pcm_stop_playback <uuid>'
 //! ```
 
 use std::collections::{HashMap, VecDeque};
@@ -290,7 +290,7 @@ fn attach_bridge(session: Session) -> fswtch::Result<()> {
         channels: 1,
     });
     let config = MediaBugConfig::new(
-        "rust_vad_pcm",
+        "fswtch_vad_pcm",
         "read-write-stream",
         MediaBugFlags::READ_STREAM | MediaBugFlags::WRITE_REPLACE | MediaBugFlags::NO_PAUSE,
     )?;
@@ -321,13 +321,13 @@ fswtch::app_callback! {
 
 fswtch::api_callback! {
     fn vad_pcm_start_api(cmd, _session, stream) {
-        fswtch::log_info("mod_vad_pcm", "rust_vad_pcm_start invoked");
+        fswtch::log_info("mod_vad_pcm", "fswtch_vad_pcm_start invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let uuid = cmd.unwrap_or_default().trim().to_owned();
         if uuid.is_empty() {
-            return stream.write("usage: rust_vad_pcm_start <uuid>\n");
+            return stream.write("usage: fswtch_vad_pcm_start <uuid>\n");
         }
         let guard = match SessionGuard::locate(&uuid) {
             Ok(Some(g)) => g,
@@ -346,13 +346,13 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn vad_pcm_stop_playback_api(cmd, _session, stream) {
-        fswtch::log_info("mod_vad_pcm", "rust_vad_pcm_stop_playback invoked");
+        fswtch::log_info("mod_vad_pcm", "fswtch_vad_pcm_stop_playback invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let uuid = cmd.unwrap_or_default().trim().to_owned();
         if uuid.is_empty() {
-            return stream.write("usage: rust_vad_pcm_stop_playback <uuid>\n");
+            return stream.write("usage: fswtch_vad_pcm_stop_playback <uuid>\n");
         }
         // Look up the per-session state, then drop the registry lock before touching the queue.
         let state = match REGISTRY.lock() {
@@ -383,27 +383,27 @@ fswtch::module_load! {
         module
             .application(
                 fswtch::ApplicationInfo::new(
-                    "rust_vad_pcm",
+                    "fswtch_vad_pcm",
                     "VAD-gated bidirectional raw-PCM ESL bridge: fires fswtch::asr_result (base64 \
                      PCM) per talking frame; plays fswtch::play_pcm back into the call",
                     "Rust VAD PCM bridge",
-                    "rust_vad_pcm",
+                    "fswtch_vad_pcm",
                 ),
                 vad_pcm_app,
             )
             .and_then(|m| {
                 m.api(
-                    "rust_vad_pcm_start",
+                    "fswtch_vad_pcm_start",
                     "attaches the VAD PCM bridge to an existing call by uuid",
-                    "rust_vad_pcm_start <uuid>",
+                    "fswtch_vad_pcm_start <uuid>",
                     vad_pcm_start_api,
                 )
             })
             .and_then(|m| {
                 m.api(
-                    "rust_vad_pcm_stop_playback",
+                    "fswtch_vad_pcm_stop_playback",
                     "stops TTS playback and flushes the play buffer on a bridged call (barge-in)",
-                    "rust_vad_pcm_stop_playback <uuid>",
+                    "fswtch_vad_pcm_stop_playback <uuid>",
                     vad_pcm_stop_playback_api,
                 )
             })

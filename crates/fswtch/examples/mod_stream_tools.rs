@@ -5,7 +5,7 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn table_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_stream_tools", "rust_table invoked");
+        fswtch::log_info("mod_stream_tools", "fswtch_table invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -23,7 +23,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn words_api(cmd, _session, stream) {
-        fswtch::log_info("mod_stream_tools", "rust_words invoked");
+        fswtch::log_info("mod_stream_tools", "fswtch_words invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -42,16 +42,16 @@ fswtch::module_load! {
         fswtch::log_info("mod_stream_tools", "loading module");
         module
             .api(
-            "rust_table",
+            "fswtch_table",
             "prints a small CSV response",
-            "rust_table",
+            "fswtch_table",
             table_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_words",
+                    "fswtch_words",
                     "counts words in the command argument",
-                    "rust_words <text>",
+                    "fswtch_words <text>",
                     words_api,
                 )
             })

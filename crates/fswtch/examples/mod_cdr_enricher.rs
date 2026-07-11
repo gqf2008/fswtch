@@ -20,13 +20,13 @@ struct EnrichedCdr {
 
 fswtch::api_callback! {
     fn enrich_api(cmd, _session, stream) {
-        fswtch::log_info("mod_cdr_enricher", "rust_cdr_enrich invoked");
+        fswtch::log_info("mod_cdr_enricher", "fswtch_cdr_enrich invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(text) = cmd else {
             fswtch::log_info("mod_cdr_enricher", "missing CDR JSON");
-            let status = stream.write("usage: rust_cdr_enrich <json-cdr>\n");
+            let status = stream.write("usage: fswtch_cdr_enrich <json-cdr>\n");
             return fswtch::false_on_success(status);
         };
 
@@ -59,7 +59,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn stats_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_cdr_enricher", "rust_cdr_enricher_stats invoked");
+        fswtch::log_info("mod_cdr_enricher", "fswtch_cdr_enricher_stats invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -74,16 +74,16 @@ fswtch::module_load! {
         fswtch::log_info("mod_cdr_enricher", "loading module");
         module
             .api(
-                "rust_cdr_enrich",
+                "fswtch_cdr_enrich",
                 "enriches a CDR JSON document and emits a custom event",
-                "rust_cdr_enrich <json-cdr>",
+                "fswtch_cdr_enrich <json-cdr>",
                 enrich_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_cdr_enricher_stats",
+                    "fswtch_cdr_enricher_stats",
                     "prints CDR enrichment counters",
-                    "rust_cdr_enricher_stats",
+                    "fswtch_cdr_enricher_stats",
                     stats_api,
                 )
             })

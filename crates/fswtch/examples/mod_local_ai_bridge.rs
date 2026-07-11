@@ -234,7 +234,7 @@ struct TtsResult {
 
 fswtch::api_callback! {
     fn status_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_local_ai_bridge", "rust_local_ai_status invoked");
+        fswtch::log_info("mod_local_ai_bridge", "fswtch_local_ai_status invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -269,12 +269,12 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn asr_api(cmd, _session, stream) {
-        fswtch::log_info("mod_local_ai_bridge", "rust_local_asr invoked");
+        fswtch::log_info("mod_local_ai_bridge", "fswtch_local_asr invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(path) = cmd else {
-            let status = stream.write("usage: rust_local_asr <pcm16le-file>\n");
+            let status = stream.write("usage: fswtch_local_asr <pcm16le-file>\n");
             return fswtch::false_on_success(status);
         };
         let audio = fs::read(&path).unwrap_or_else(|error| {
@@ -310,12 +310,12 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn tts_api(cmd, _session, stream) {
-        fswtch::log_info("mod_local_ai_bridge", "rust_local_tts invoked");
+        fswtch::log_info("mod_local_ai_bridge", "fswtch_local_tts invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(text) = cmd else {
-            let status = stream.write("usage: rust_local_tts <text>\n");
+            let status = stream.write("usage: fswtch_local_tts <text>\n");
             return fswtch::false_on_success(status);
         };
 
@@ -359,12 +359,12 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn nlp_api(cmd, _session, stream) {
-        fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp invoked");
+        fswtch::log_info("mod_local_ai_bridge", "fswtch_local_nlp invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(prompt) = cmd else {
-            let status = stream.write("usage: rust_local_nlp <prompt>\n");
+            let status = stream.write("usage: fswtch_local_nlp <prompt>\n");
             return fswtch::false_on_success(status);
         };
 
@@ -391,12 +391,12 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn nlp_sync_api(cmd, _session, stream) {
-        fswtch::log_info("mod_local_ai_bridge", "rust_local_nlp_sync invoked");
+        fswtch::log_info("mod_local_ai_bridge", "fswtch_local_nlp_sync invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(prompt) = cmd else {
-            let status = stream.write("usage: rust_local_nlp_sync <prompt>\n");
+            let status = stream.write("usage: fswtch_local_nlp_sync <prompt>\n");
             return fswtch::false_on_success(status);
         };
 
@@ -413,40 +413,40 @@ fswtch::module_load! {
         LazyLock::force(&STATE);
         module
             .api(
-                "rust_local_ai_status",
+                "fswtch_local_ai_status",
                 "prints local ASR/TTS and OpenAI NLP integration status",
-                "rust_local_ai_status",
+                "fswtch_local_ai_status",
                 status_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_local_asr",
+                    "fswtch_local_asr",
                     "runs local ORT speech recognition for a PCM file",
-                    "rust_local_asr <pcm16le-file>",
+                    "fswtch_local_asr <pcm16le-file>",
                     asr_api,
                 )
             })
             .and_then(|module| {
                 module.api(
-                    "rust_local_tts",
+                    "fswtch_local_tts",
                     "runs local ORT speech synthesis for text",
-                    "rust_local_tts <text>",
+                    "fswtch_local_tts <text>",
                     tts_api,
                 )
             })
             .and_then(|module| {
                 module.api(
-                    "rust_local_nlp",
+                    "fswtch_local_nlp",
                     "queues an OpenAI Responses API NLP request",
-                    "rust_local_nlp <prompt>",
+                    "fswtch_local_nlp <prompt>",
                     nlp_api,
                 )
             })
             .and_then(|module| {
                 module.api(
-                    "rust_local_nlp_sync",
+                    "fswtch_local_nlp_sync",
                     "runs an OpenAI Responses API NLP request synchronously",
-                    "rust_local_nlp_sync <prompt>",
+                    "fswtch_local_nlp_sync <prompt>",
                     nlp_sync_api,
                 )
             })

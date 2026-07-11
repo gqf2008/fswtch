@@ -5,8 +5,8 @@
 //! `inuse` / `len` / `freespace` accounting to the stream.
 //!
 //! Load the module (`mod_buffer_demo`) and from `fs_cli` run:
-//!   - `rust_buffer_demo`        — full peek + read round-trip with accounting
-//!   - `rust_buffer_toss`        — writes data, tosses the head, reads the remainder
+//!   - `fswtch_buffer_demo`        — full peek + read round-trip with accounting
+//!   - `fswtch_buffer_toss`        — writes data, tosses the head, reads the remainder
 
 fswtch::module_exports! {
     module = mod_buffer_demo,
@@ -15,7 +15,7 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn buffer_demo_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_buffer_demo", "rust_buffer_demo invoked");
+        fswtch::log_info("mod_buffer_demo", "fswtch_buffer_demo invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -58,7 +58,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn buffer_toss_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_buffer_demo", "rust_buffer_toss invoked");
+        fswtch::log_info("mod_buffer_demo", "fswtch_buffer_toss invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -95,16 +95,16 @@ fswtch::module_load! {
         fswtch::log_info("mod_buffer_demo", "loading module");
         module
             .api(
-                "rust_buffer_demo",
+                "fswtch_buffer_demo",
                 "writes a FIFO buffer, peeks, and reads it back with accounting",
-                "rust_buffer_demo",
+                "fswtch_buffer_demo",
                 buffer_demo_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_buffer_toss",
+                    "fswtch_buffer_toss",
                     "writes a buffer, tosses the head, and reads the remainder",
-                    "rust_buffer_toss",
+                    "fswtch_buffer_toss",
                     buffer_toss_api,
                 )
             })

@@ -1,10 +1,10 @@
 //! FreeSWITCH `mod_aec3` — WebRTC AEC3 echo cancellation as a loadable module.
 //!
 //! Two surfaces:
-//! - `rust_aec3_smoke` API: runs the vendored `EchoCanceller3` on a synthetic echo inside the
+//! - `fswtch_aec3_smoke` API: runs the vendored `EchoCanceller3` on a synthetic echo inside the
 //!   FreeSWITCH process and reports the achieved ERLE. Proves the module loads and the AEC3 C++
 //!   links + runs in-process (the Docker smoke checks `"aec3 ok"`).
-//! - `rust_aec3` dialplan application: attaches a media bug (`WRITE_STREAM` = far-end render,
+//! - `fswtch_aec3` dialplan application: attaches a media bug (`WRITE_STREAM` = far-end render,
 //!   `READ_REPLACE` = near-end mic capture) that feeds 10 ms frames to `EchoCanceller3` and
 //!   writes the de-echoed capture back. 20 ms SLIN frames are split into two 10 ms AEC3 calls;
 //!   any error or unsupported rate falls through to passthrough so a call is never crashed.
@@ -21,10 +21,10 @@ fswtch::module_exports! {
 }
 
 const AEC3_APP: fswtch::ApplicationInfo = fswtch::ApplicationInfo::new(
-    "rust_aec3",
+    "fswtch_aec3",
     "Attaches a WebRTC AEC3 echo canceller (far-end render + near-end capture media bug)",
     "Rust WebRTC AEC3 echo cancellation",
-    "rust_aec3",
+    "fswtch_aec3",
 );
 
 /// Per-session AEC3 state held inside the media bug.
@@ -159,13 +159,13 @@ impl MediaBugHandler for Aec3BugState {
 
 fswtch::app_callback! {
     fn aec3_app(session, _data) {
-        fswtch::log_info("mod_aec3", "rust_aec3 application invoked");
+        fswtch::log_info("mod_aec3", "fswtch_aec3 application invoked");
         let Some(session) = session else {
             fswtch::log_error("mod_aec3", "missing session");
             return;
         };
         let config = match MediaBugConfig::new(
-            "rust_aec3",
+            "fswtch_aec3",
             "read-write",
             MediaBugFlags::WRITE_STREAM | MediaBugFlags::READ_REPLACE | MediaBugFlags::NO_PAUSE,
         ) {
@@ -187,7 +187,7 @@ fswtch::app_callback! {
 // the response contains `"aec3 ok"`.
 fswtch::api_callback! {
     fn aec3_smoke_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_aec3", "rust_aec3_smoke invoked");
+        fswtch::log_info("mod_aec3", "fswtch_aec3_smoke invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -253,9 +253,9 @@ fswtch::module_load! {
             .application(AEC3_APP, aec3_app)
             .and_then(|module| {
                 module.api(
-                    "rust_aec3_smoke",
+                    "fswtch_aec3_smoke",
                     "runs the vendored WebRTC AEC3 on a synthetic echo and reports ERLE",
-                    "rust_aec3_smoke",
+                    "fswtch_aec3_smoke",
                     aec3_smoke_api,
                 )
             })

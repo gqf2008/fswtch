@@ -4,10 +4,10 @@ fswtch::module_exports! {
 }
 
 const PLAYBACK_APP: fswtch::ApplicationInfo = fswtch::ApplicationInfo::new(
-    "rust_playback_control",
+    "fswtch_playback_control",
     "Answers a channel and plays the supplied file path",
     "Rust playback control example",
-    "rust_playback_control <path-or-tone-stream>",
+    "fswtch_playback_control <path-or-tone-stream>",
 );
 
 fswtch::app_callback! {
@@ -37,12 +37,12 @@ fswtch::api_callback! {
     fn info_api(_cmd, _session, stream) {
         fswtch::log_info(
             "mod_app_playback_control",
-            "rust_playback_control_info invoked",
+            "fswtch_playback_control_info invoked",
         );
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
-        stream.write("application rust_playback_control registered; use from dialplan with a file path\n")
+        stream.write("application fswtch_playback_control registered; use from dialplan with a file path\n")
     }
 }
 
@@ -53,9 +53,9 @@ fswtch::module_load! {
             .application(PLAYBACK_APP, playback_control_app)
             .and_then(|module| {
                 module.api(
-                    "rust_playback_control_info",
+                    "fswtch_playback_control_info",
                     "describes the Rust playback control application",
-                    "rust_playback_control_info",
+                    "fswtch_playback_control_info",
                     info_api,
                 )
             })

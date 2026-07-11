@@ -4,7 +4,7 @@
 //! Subsystem: utils + core.
 //!
 //! Load the module (`load mod_utils_demo`) and from fs_cli run:
-//!   `rust_utils_demo`
+//!   `fswtch_utils_demo`
 //!
 //! The command exercises `fswtch::escape_string`, `fswtch::url_encode`,
 //! `fswtch::format_number`, `fswtch::find_end_paren`, and the core helpers
@@ -18,7 +18,7 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn utils_demo_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_utils_demo", "rust_utils_demo invoked");
+        fswtch::log_info("mod_utils_demo", "fswtch_utils_demo invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -62,9 +62,9 @@ fswtch::module_load! {
     fn switch_module_load(module) for "mod_utils_demo" {
         fswtch::log_info("mod_utils_demo", "loading module");
         module.api(
-            "rust_utils_demo",
+            "fswtch_utils_demo",
             "exercises the fswtch string-utility and core helper functions",
-            "rust_utils_demo",
+            "fswtch_utils_demo",
             utils_demo_api,
         )
     }

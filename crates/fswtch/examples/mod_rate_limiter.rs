@@ -48,12 +48,12 @@ impl LimitRequest {
 
 fswtch::api_callback! {
     fn allow_api(cmd, _session, stream) {
-        fswtch::log_info("mod_rate_limiter", "rust_rate_limit invoked");
+        fswtch::log_info("mod_rate_limiter", "fswtch_rate_limit invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
         let Some(request) = cmd.as_deref().and_then(LimitRequest::parse) else {
-            let status = stream.write("usage: rust_rate_limit <key> [limit] [window-secs]\n");
+            let status = stream.write("usage: fswtch_rate_limit <key> [limit] [window-secs]\n");
             return fswtch::false_on_success(status);
         };
 
@@ -100,7 +100,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn reset_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_rate_limiter", "rust_rate_limit_reset invoked");
+        fswtch::log_info("mod_rate_limiter", "fswtch_rate_limit_reset invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -117,16 +117,16 @@ fswtch::module_load! {
         fswtch::log_info("mod_rate_limiter", "loading module");
         module
             .api(
-                "rust_rate_limit",
+                "fswtch_rate_limit",
                 "checks a token-bucket rate limit",
-                "rust_rate_limit <key> [limit] [window-secs]",
+                "fswtch_rate_limit <key> [limit] [window-secs]",
                 allow_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_rate_limit_reset",
+                    "fswtch_rate_limit_reset",
                     "clears all rate limiter buckets",
-                    "rust_rate_limit_reset",
+                    "fswtch_rate_limit_reset",
                     reset_api,
                 )
             })

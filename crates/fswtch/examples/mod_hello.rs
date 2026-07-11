@@ -5,7 +5,7 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn hello_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_hello", "rust_hello invoked");
+        fswtch::log_info("mod_hello", "fswtch_hello invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -17,9 +17,9 @@ fswtch::module_load! {
     fn switch_module_load(module) for "mod_hello" {
         fswtch::log_info("mod_hello", "loading module");
         module.api(
-            "rust_hello",
+            "fswtch_hello",
             "prints a Rust greeting",
-            "rust_hello",
+            "fswtch_hello",
             hello_api,
         )
     }

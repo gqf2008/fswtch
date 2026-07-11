@@ -8,8 +8,8 @@
 //! recurring one via [`fswtch::Task::set_repeat`] so the counter climbs on each tick.
 //!
 //! Load with `load mod_scheduler_task;` then, from `fs_cli`:
-//! - `rust_scheduler_spawn`  — schedules a recurring counter task and writes its task id;
-//! - `rust_scheduler_count`  — writes the current counter value.
+//! - `fswtch_scheduler_spawn`  — schedules a recurring counter task and writes its task id;
+//! - `fswtch_scheduler_count`  — writes the current counter value.
 
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -42,14 +42,14 @@ fswtch::module_exports! {
 
 fswtch::api_callback! {
     fn spawn_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_scheduler_task", "rust_scheduler_spawn invoked");
+        fswtch::log_info("mod_scheduler_task", "fswtch_scheduler_spawn invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
 
         let outcome: Result<String, String> = (|| {
             // `runtime == 0` fires immediately; `TaskConfig::new` leaks the static C strings once.
-            let config = fswtch::TaskConfig::new(0, "rust counter", "rust_scheduler")
+            let config = fswtch::TaskConfig::new(0, "rust counter", "fswtch_scheduler")
                 .map_err(|e| format!("TaskConfig build failed: {e}"))?;
             let handle = fswtch::spawn(CounterHandler, config)
                 .map_err(|e| format!("scheduler spawn failed: {e}"))?;
@@ -69,7 +69,7 @@ fswtch::api_callback! {
 
 fswtch::api_callback! {
     fn count_api(_cmd, _session, stream) {
-        fswtch::log_info("mod_scheduler_task", "rust_scheduler_count invoked");
+        fswtch::log_info("mod_scheduler_task", "fswtch_scheduler_count invoked");
         let Some(stream) = stream else {
             return fswtch::FALSE;
         };
@@ -86,16 +86,16 @@ fswtch::module_load! {
         fswtch::start();
         module
             .api(
-                "rust_scheduler_spawn",
+                "fswtch_scheduler_spawn",
                 "schedules a recurring counter task on the FreeSWITCH scheduler",
-                "rust_scheduler_spawn",
+                "fswtch_scheduler_spawn",
                 spawn_api,
             )
             .and_then(|module| {
                 module.api(
-                    "rust_scheduler_count",
+                    "fswtch_scheduler_count",
                     "prints the scheduler counter task firing count",
-                    "rust_scheduler_count",
+                    "fswtch_scheduler_count",
                     count_api,
                 )
             })

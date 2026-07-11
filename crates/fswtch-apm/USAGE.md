@@ -93,10 +93,10 @@ let aec = EchoCanceller3::with_config(&cfg, 16_000, 1, 1)?;
 The `mod_aec3` example (`crates/fswtch-apm/examples/mod_aec3.rs`) is a loadable FreeSWITCH
 `cdylib` module exposing:
 
-- **`rust_aec3_smoke` API** — runs the real AEC3 on a synthetic echo in-process and prints
+- **`fswtch_aec3_smoke` API** — runs the real AEC3 on a synthetic echo in-process and prints
   `aec3 ok rate=16000 erle=<dB>`. Proves the module loads + the AEC3 C++ links/runs inside the
   FreeSWITCH process. (Asserted by the Docker smoke.)
-- **`rust_aec3` dialplan application** — attaches a media bug (`WRITE_STREAM` = render,
+- **`fswtch_aec3` dialplan application** — attaches a media bug (`WRITE_STREAM` = render,
   `READ_REPLACE` = capture), splits 20 ms SLIN into 10 ms AEC3 ticks, and writes the de-echoed
   capture back. Lazily creates the canceller at the first frame's rate; any error or unsupported
   rate falls through to passthrough so a call is never crashed.
@@ -116,9 +116,9 @@ Install + load into a running FreeSWITCH (verified locally; no Docker):
 ```sh
 cp target/release/examples/libmod_aec3.so <FS_PREFIX>/lib/freeswitch/mod/mod_aec3.so
 fs_cli -x "load mod_aec3"
-fs_cli -x "rust_aec3_smoke"   # → aec3 ok rate=16000 erle=67.2db
+fs_cli -x "fswtch_aec3_smoke"   # → aec3 ok rate=16000 erle=67.2db
 # mod_apm: cargo build -p fswtch-apm --example mod_apm --release; cp .../libmod_apm.so .../mod_apm.so;
-#          fs_cli -x "load mod_apm"; fs_cli -x "rust_apm_smoke"   # → apm ok rate=16000 erle=58.2db
+#          fs_cli -x "load mod_apm"; fs_cli -x "fswtch_apm_smoke"   # → apm ok rate=16000 erle=58.2db
 ```
 
 ## Build from a non-bundled FreeSWITCH
