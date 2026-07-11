@@ -173,6 +173,10 @@ impl SpeexPreprocess {
 
     /// Couples residual echo suppression with an echo canceller — the preprocessor uses the
     /// echo state to suppress residual echo that the AEC didn't fully remove.
+    ///
+    /// **The `SpeexEcho` must outlive this `SpeexPreprocess`.** The preprocessor stores a raw
+    /// pointer to the echo state; if the echo is dropped first, subsequent `run()` calls read a
+    /// dangling pointer (use-after-free).
     pub fn set_echo_state(&self, echo: &SpeexEcho) {
         // SAFETY: both states live; the echo state pointer is borrowed for the coupling.
         self.ctl(
@@ -210,7 +214,7 @@ pub struct SpeexResampler {
 
 impl SpeexResampler {
     /// Creates a resampler for `channels` channels, `in_rate` → `out_rate` (Hz), at `quality`
-    /// (0-10). Returns `Err` with the speexdsp error code on failure.
+    /// (0-10). Returns `Err` on failure (invalid channels/rate/quality).
     pub fn new(channels: u32, in_rate: u32, out_rate: u32, quality: i32) -> Result<Self> {
         let mut err: i32 = 0;
         // SAFETY: plain uints + int; `&mut err` valid out-param; returns null on error.
@@ -227,14 +231,15 @@ impl SpeexResampler {
             .ok_or(SwitchError(GENERR))
     }
 
-    /// Resamples interleaved i16 audio: `input` → `output`. Returns `(in_used, out_generated)`
-    /// — the number of input samples consumed and output samples produced.
-    pub fn process_int(&self, channel: u32, input: &[i16], output: &mut [i16]) -> (u32, u32) {
+    /// Resamples interleaved i16 audio: `input` → `output`. Returns `(status, in_used,
+    /// out_generated)` — the speexdsp status code (0 = success, negative = error), the number of
+    /// input samples consumed, and output samples produced.
+    pub fn process_int(&self, channel: u32, input: &[i16], output: &mut [i16]) -> (i32, u32, u32) {
         let mut in_len = input.len() as u32;
         let mut out_len = output.len() as u32;
         // SAFETY: `self.raw` live; `input`/`output` valid i16 slices; `&mut in_len`/`&mut out_len`
         // are valid in/out params.
-        unsafe {
+        let status = unsafe {
             sys::speex_resampler_process_int(
                 self.raw.as_ptr(),
                 channel,
@@ -242,9 +247,9 @@ impl SpeexResampler {
                 &mut in_len,
                 output.as_mut_ptr(),
                 &mut out_len,
-            );
-        }
-        (in_len, out_len)
+            )
+        };
+        (status, in_len, out_len)
     }
 
     /// Changes the in/out sample rates (Hz).
