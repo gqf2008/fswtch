@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Match the final Rust link's macOS deployment target so cmake objects don't target a newer
+# macOS than the Rust binary (silences "object built for newer macOS" link warnings).
+if(APPLE)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0")
+endif()
+
 # ---------------------------------------------------------------------------
 # Scalar build policy:
 #  * Do NOT define WEBRTC_ENABLE_AVX2, WEBRTC_HAS_NEON, or MIPS_FPU_LE.

@@ -10,8 +10,8 @@
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use crate::aec3::{Aec3Error as Error, Result, check};
 use crate::sys;
+use crate::{Error, Result, check};
 
 /// An owned WebRTC AGC2 handle (fixed digital gain + optional limiter).
 pub struct GainController2 {

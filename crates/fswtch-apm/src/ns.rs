@@ -7,8 +7,8 @@
 use std::marker::PhantomData;
 use std::ptr::NonNull;
 
-use crate::aec3::{Aec3Error as Error, Result, check};
 use crate::sys;
+use crate::{Error, Result, check};
 
 /// Noise suppression level (dB of attenuation).
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

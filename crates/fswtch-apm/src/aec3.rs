@@ -147,15 +147,6 @@ impl Config {
     }
 }
 
-impl Default for EchoCanceller3 {
-    fn default() -> Self {
-        // `new` only fails on invalid args (which `Default` won't pass); propagate as a
-        // panic so misuse surfaces immediately rather than as a silently broken handle.
-        Self::with_config(&Config::default(), 16_000, 1, 1)
-            .expect("EchoCanceller3::default 16 kHz mono")
-    }
-}
-
 /// An owned WebRTC `EchoCanceller3` handle.
 ///
 /// Constructed with [`EchoCanceller3::new`]; destroyed on [`Drop`] via the C ABI. Feed the

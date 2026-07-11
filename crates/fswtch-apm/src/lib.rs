@@ -4,12 +4,15 @@
 //! crate wraps the raw `extern "C"` ABI in owned, RAII handles that follow the `fswtch` conventions
 //! ([`std::ptr::NonNull`] handles, [`Drop`] frees the C object, `# Safety` contracts on public `unsafe fn`).
 //!
-//! Status: AEC3 (Phases 0–5) + HF are exposed; NS + AGC2 + a chained `mod_apm` are in progress.
+//! Status: AEC3 + HF + NS + AGC2 are all exposed, plus the chained `mod_apm` FreeSWITCH module.
 //! The lower-level `api_version`/`ooura_smoke` entrypoints remain as pipeline smoke checks.
 
 pub use fswtch_apm_sys as sys;
 
 mod aec3;
+/// Shared error type (alias of [`Aec3Error`](crate::aec3::Aec3Error)) used by every module.
+pub use aec3::Aec3Error as Error;
+pub(crate) use aec3::check;
 pub use aec3::*;
 
 mod hpf;

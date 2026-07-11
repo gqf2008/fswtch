@@ -10,8 +10,8 @@ use std::ptr::NonNull;
 
 // The error/result/check helpers are shared with the AEC3 wrapper (the C ABI uses one status
 // convention across every module); reuse them under the generic name `Error`.
-use crate::aec3::{Aec3Error as Error, Result, check};
 use crate::sys;
+use crate::{Error, Result, check};
 
 /// An owned WebRTC `HighPassFilter` handle.
 pub struct HighPassFilter {
