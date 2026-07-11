@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     clang \
-    cmake \
     git \
     libcurl4-openssl-dev \
     libedit-dev \
@@ -94,11 +93,7 @@ RUN set -eux; \
       mod_vad_esl; \
     do \
       install -m 0755 "target/release/examples/lib${module}.so" "${FS_PREFIX}/mod/${module}.so"; \
-    done; \
-    FREESWITCH_INCLUDE_DIR="${FS_PREFIX}/include/freeswitch" \
-    FREESWITCH_LIB_DIR="${FS_PREFIX}/lib" \
-    cargo build -p fswtch-aec3 --example mod_aec3 --release; \
-    install -m 0755 "target/release/examples/libmod_aec3.so" "${FS_PREFIX}/mod/mod_aec3.so"
+    done
 
 COPY docker/fswtch/conf/ ${FS_PREFIX}/conf/
 COPY docker/fswtch/bin/verify-fswtch-examples /usr/local/bin/verify-fswtch-examples

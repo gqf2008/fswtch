@@ -89,7 +89,6 @@ assert_api "rust_local_ai_status" "asr_backend=mock tts_backend=mock nlp_backend
 assert_api "rust_local_tts hello" "backend=mock sample_rate=16000"
 assert_api "rust_local_nlp_sync hello" "mock nlp response: hello"
 assert_api "rust_media_bug_meter_stats" "attached=0"
-assert_api "rust_aec3_smoke" "aec3 ok"
 assert_api "rust_metrics_hit smoke" "metric=smoke count=1"
 assert_api "rust_metrics_show" 'fswtch_example_events_total{name="smoke"} 1'
 assert_api "rust_rate_limit smoke-key 2 60" "allowed=true remaining=1"
