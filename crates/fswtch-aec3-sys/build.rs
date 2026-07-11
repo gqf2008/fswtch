@@ -6,7 +6,7 @@ use std::{
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let cpp_dir = manifest_dir.join("cpp");
-    let wrapper_header = cpp_dir.join("wrapper").join("aec3_c_api.h");
+    let wrapper_header = cpp_dir.join("wrapper").join("fswtch_apm.h");
 
     println!("cargo:rerun-if-changed=build.rs");
     // Watch the whole vendored C++ tree so any source/header added during closure convergence
@@ -52,8 +52,8 @@ fn generate_bindings(wrapper_header: &Path) {
     let bindings = bindgen::Builder::default()
         .header(wrapper_header.display().to_string())
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        .allowlist_function("fswtch_aec3_.*")
-        .allowlist_type("fswtch_aec3_.*")
+        .allowlist_function("fswtch_.*")
+        .allowlist_type("fswtch_.*")
         .layout_tests(false)
         .generate_comments(false)
         .derive_default(true)

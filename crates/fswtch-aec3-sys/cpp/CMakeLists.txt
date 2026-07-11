@@ -34,6 +34,7 @@ list(FILTER AEC3_SRCS EXCLUDE REGEX "_neon\\.cc$")
 # newly-vendored ChannelBuffer container, plus the C wrapper.
 set(AEC3_HELPER_SRCS
     wrapper/aec3_c_api.cc
+    wrapper/hpf_c_api.cc
     common_audio/third_party/ooura/fft_size_128/ooura_fft.cc
     common_audio/channel_buffer.cc
     common_audio/audio_util.cc

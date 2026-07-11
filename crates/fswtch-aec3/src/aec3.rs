@@ -51,7 +51,7 @@ impl std::error::Error for Aec3Error {}
 pub type Result<T> = std::result::Result<T, Aec3Error>;
 
 /// Maps a non-zero C ABI status to an [`Aec3Error`]; `0` -> `Ok`.
-fn check(status: i32) -> Result<()> {
+pub(crate) fn check(status: i32) -> Result<()> {
     match status {
         0 => Ok(()),
         1 => Err(Aec3Error::InvalidArg),
