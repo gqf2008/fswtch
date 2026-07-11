@@ -182,23 +182,6 @@ FREESWITCH_LIB_DIR=/usr/lib/freeswitch cargo build
 
 Set `FREESWITCH_NO_PKG_CONFIG=1` to disable `pkg-config` probing.
 
-## Docker Smoke Test
-
-The repository includes a full smoke image that builds FreeSWITCH, builds every Rust example as a `cdylib`, installs the modules, starts FreeSWITCH, and verifies APIs through `fs_cli`.
-
-```sh
-docker build -t fswtch-freeswitch-smoke .
-docker run --rm fswtch-freeswitch-smoke
-```
-
-Successful output ends with:
-
-```text
-all fswtch example module checks passed
-```
-
-The smoke script enables `FSWTCH_AI_ALLOW_MOCK=1` so the local AI example can run without model files or OpenAI credentials.
-
 ## Module Shape
 
 A minimal module exports a FreeSWITCH load callback:
@@ -302,7 +285,5 @@ Unsafe blocks are kept small and local to FFI operations. Public unsafe APIs in 
 - `crates/fswtch`: wrapper API and compile-checked Rust module examples.
 - `crates/fswtch-sys`: raw generated FreeSWITCH bindings and bindgen build script.
 - `crates/fswtch-src`: packaged FreeSWITCH headers.
-- `docker/fswtch`: smoke-test FreeSWITCH config and verification script.
-- `Dockerfile`: full FreeSWITCH smoke-test image.
 
 The vendored FreeSWITCH trees are third-party inputs. Avoid reformatting or refactoring them unless intentionally updating vendored FreeSWITCH content.

@@ -1,3 +1,0 @@
-<X-PRE-PROCESS cmd="set" data="local_ip_v4=127.0.0.1"/>
-<X-PRE-PROCESS cmd="set" data="domain=localhost"/>
-<X-PRE-PROCESS cmd="set" data="sound_prefix=$${base_dir}/sounds"/>
