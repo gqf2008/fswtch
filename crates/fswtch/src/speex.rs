@@ -21,6 +21,7 @@ use crate::{GENERR, Result, SwitchError, sys};
 /// Couple with [`SpeexPreprocess::set_echo_state`] for residual echo suppression.
 pub struct SpeexEcho {
     raw: NonNull<sys::SpeexEchoState>,
+    frame_size: usize,
     _marker: PhantomData<*const ()>,
 }
 
@@ -32,14 +33,24 @@ impl SpeexEcho {
         let raw = unsafe { sys::speex_echo_state_init(frame_size, filter_length) };
         NonNull::new(raw).map(|raw| Self {
             raw,
+            frame_size: frame_size.max(0) as usize,
             _marker: PhantomData,
         })
     }
 
     /// Runs echo cancellation: `rec` is the near-end (mic), `play` the far-end (reference/playout),
     /// `out` receives the cleaned signal. All three slices must be at least `frame_size` long.
+    /// Panics in debug builds if any slice is shorter.
     pub fn cancellation(&self, rec: &[i16], play: &[i16], out: &mut [i16]) {
-        // SAFETY: `self.raw` live; `rec`/`play`/`out` are valid i16 slices for the call.
+        let fs = self.frame_size;
+        debug_assert!(rec.len() >= fs, "rec has {} samples, need {fs}", rec.len());
+        debug_assert!(
+            play.len() >= fs,
+            "play has {} samples, need {fs}",
+            play.len()
+        );
+        debug_assert!(out.len() >= fs, "out has {} samples, need {fs}", out.len());
+        // SAFETY: `self.raw` live; `rec`/`play`/`out` are valid i16 slices, each ≥ frame_size.
         unsafe {
             sys::speex_echo_cancellation(
                 self.raw.as_ptr(),
@@ -101,6 +112,7 @@ impl Drop for SpeexEcho {
 /// [`run`](Self::run) on each frame.
 pub struct SpeexPreprocess {
     raw: NonNull<sys::SpeexPreprocessState>,
+    frame_size: usize,
     _marker: PhantomData<*const ()>,
 }
 
@@ -111,14 +123,22 @@ impl SpeexPreprocess {
         let raw = unsafe { sys::speex_preprocess_state_init(frame_size, sample_rate) };
         NonNull::new(raw).map(|raw| Self {
             raw,
+            frame_size: frame_size.max(0) as usize,
             _marker: PhantomData,
         })
     }
 
     /// Runs the preprocessor on `frame` (in-place). Returns `true` if voice was detected (VAD),
-    /// `false` for silence.
+    /// `false` for silence. `frame` must be at least `frame_size` long (panics in debug builds
+    /// if shorter).
     pub fn run(&self, frame: &mut [i16]) -> bool {
-        // SAFETY: `self.raw` live; `frame` is a valid mutable i16 slice for the call.
+        let fs = self.frame_size;
+        debug_assert!(
+            frame.len() >= fs,
+            "frame has {} samples, need {fs}",
+            frame.len()
+        );
+        // SAFETY: `self.raw` live; `frame` is a valid mutable i16 slice, ≥ frame_size.
         unsafe { sys::speex_preprocess_run(self.raw.as_ptr(), frame.as_mut_ptr()) != 0 }
     }
 
