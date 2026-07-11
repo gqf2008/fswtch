@@ -195,4 +195,41 @@ mod tests {
             Error::InvalidFrameLength
         );
     }
+
+    /// Exercises the 48 kHz / 3-band path: the `num_bands() > 1` split/merge guard in
+    /// `ns_c_api.cc` must engage without crashing, and NS must still suppress. (The 16 kHz /
+    /// 1-band path is covered by `suppresses_broadband_noise`.) Guards against regression of the
+    /// 48 kHz split fix (review #4b).
+    #[test]
+    fn suppresses_at_48khz_split_path() {
+        const RATE48: i32 = 48_000;
+        const FRAME48: usize = (RATE48 as usize) / 100 * CH; // 480 samples / 10 ms
+        let mut ns = NoiseSuppressor::new(NsLevel::Db12, RATE48, CH).expect("create");
+        let mut lcg = 1u32;
+        let mut frame = vec![0i16; FRAME48];
+        let mut in_energy = 0.0_f64;
+        let mut out_energy = 0.0_f64;
+        for f in 0..100 {
+            for s in frame.iter_mut() {
+                lcg = lcg.wrapping_mul(1664525).wrapping_add(1013904223);
+                *s = (((lcg >> 16) as i32 % 8000) - 4000) as i16;
+            }
+            if f >= 50 {
+                for &s in frame.iter() {
+                    in_energy += (s as f64) * (s as f64);
+                }
+            }
+            ns.process(&mut frame, CH).expect("process");
+            if f >= 50 {
+                for &s in frame.iter() {
+                    out_energy += (s as f64) * (s as f64);
+                }
+            }
+        }
+        assert!(
+            out_energy < in_energy,
+            "48 kHz NS did not suppress: out/in = {:.3}",
+            out_energy / in_energy
+        );
+    }
 }
