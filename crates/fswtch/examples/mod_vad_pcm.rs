@@ -38,6 +38,8 @@
 //! # downstream brain: subscribe `event custom fswtch::asr_result`, base64-decode each body to
 //! # S16LE PCM at the advertised Sample-Rate/Channels, run ASR, then TTS and send each chunk
 //! # back as a fswtch::play_pcm event (same headers + Target-UUID + base64 PCM body).
+//! # on barge-in (caller interrupts the bot): flush the play buffer to stop TTS at once:
+//! fs_cli -x 'rust_vad_pcm_stop_playback <uuid>'
 //! ```
 
 use std::collections::{HashMap, VecDeque};
@@ -342,6 +344,39 @@ fswtch::api_callback! {
     }
 }
 
+fswtch::api_callback! {
+    fn vad_pcm_stop_playback_api(cmd, _session, stream) {
+        fswtch::log_info("mod_vad_pcm", "rust_vad_pcm_stop_playback invoked");
+        let Some(stream) = stream else {
+            return fswtch::FALSE;
+        };
+        let uuid = cmd.unwrap_or_default().trim().to_owned();
+        if uuid.is_empty() {
+            return stream.write("usage: rust_vad_pcm_stop_playback <uuid>\n");
+        }
+        // Look up the per-session state, then drop the registry lock before touching the queue.
+        let state = match REGISTRY.lock() {
+            Ok(reg) => match reg.get(&uuid).cloned() {
+                Some(s) => s,
+                None => return stream.write(&format!("no active bridge on {uuid}\n")),
+            },
+            Err(_) => return stream.write("registry lock poisoned\n"),
+        };
+        // Flushing the queue stops playback within one write-replace frame: the next
+        // `on_write_replace` sees an empty queue and passes the session's own audio through, while
+        // the VAD keeps listening for the caller's barge-in speech.
+        let cleared = match state.queue.lock() {
+            Ok(mut q) => {
+                let n = q.len();
+                q.clear();
+                n
+            }
+            Err(_) => return stream.write("play queue lock poisoned\n"),
+        };
+        stream.write(&format!("cleared {cleared} queued samples on {uuid}\n"))
+    }
+}
+
 fswtch::module_load! {
     fn switch_module_load(module) for "mod_vad_pcm" {
         fswtch::log_info("mod_vad_pcm", "loading module");
@@ -362,6 +397,14 @@ fswtch::module_load! {
                     "attaches the VAD PCM bridge to an existing call by uuid",
                     "rust_vad_pcm_start <uuid>",
                     vad_pcm_start_api,
+                )
+            })
+            .and_then(|m| {
+                m.api(
+                    "rust_vad_pcm_stop_playback",
+                    "stops TTS playback and flushes the play buffer on a bridged call (barge-in)",
+                    "rust_vad_pcm_stop_playback <uuid>",
+                    vad_pcm_stop_playback_api,
                 )
             })
             .inspect(|_m| {
