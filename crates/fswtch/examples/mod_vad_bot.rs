@@ -146,6 +146,7 @@ impl EndpointIoRoutines for VadBot {
         };
         let Some(channel) = new_session.channel() else {
             fswtch::log_error("mod_vad_bot", "outgoing_channel: no channel");
+            new_session.hangup(fswtch::Cause::DESTINATION_OUT_OF_ORDER);
             return OutgoingResult::refused();
         };
 
@@ -170,12 +171,14 @@ impl EndpointIoRoutines for VadBot {
         let uuid = channel.uuid().unwrap_or_default();
         if uuid.is_empty() {
             fswtch::log_error("mod_vad_bot", "outgoing_channel: channel has no uuid");
+            new_session.hangup(fswtch::Cause::DESTINATION_OUT_OF_ORDER);
             return OutgoingResult::refused();
         }
         let vad = match Vad::new(PIPELINE_RATE as i32, CHANNELS as i32) {
             Ok(vad) => vad,
             Err(error) => {
                 fswtch::log_error("mod_vad_bot", format!("vad init failed: {error}"));
+                new_session.hangup(fswtch::Cause::DESTINATION_OUT_OF_ORDER);
                 return OutgoingResult::refused();
             }
         };
@@ -198,8 +201,10 @@ impl EndpointIoRoutines for VadBot {
         OutgoingResult::success(new_session)
     }
 
-    /// FreeSWITCH writes the CALLER'S audio TO this endpoint. VAD runs here; on a talking-active
-    /// frame we fire `fswtch::asr_result` with the frame's base64 PCM. The frame is read-only.
+    /// FreeSWITCH writes the CALLER'S audio TO this endpoint. VAD runs here on a mono downmix of
+    /// the frame; on a talking-active frame we fire `fswtch::asr_result` whose body is the frame's
+    /// ORIGINAL interleaved PCM (base64) — not the downmix — with the real `Channels` header. The
+    /// frame is read-only.
     fn write_frame(session: &Session, frame: &Frame) -> Status {
         let Some(uuid) = session.channel().and_then(|c| c.uuid()) else {
             return SUCCESS;
@@ -366,11 +371,19 @@ fswtch::event_callback! {
                     return;
                 }
                 let max_samples = s.sample_rate.saturating_mul(PLAY_QUEUE_MAX_SECS) as usize;
-                if s.tts_queue.len() >= max_samples {
-                    fswtch::log_error("mod_vad_bot", format!("play queue full on {target}"));
-                    return;
+                // Drop oldest so the fresh chunk fits within cap — bounds playback latency while
+                // always admitting the latest TTS (rather than discarding the new event). If a
+                // single chunk alone exceeds cap, keep only its cap-sized tail.
+                if samples.len() >= max_samples {
+                    s.tts_queue.clear();
+                    s.tts_queue
+                        .extend(samples[samples.len() - max_samples..].iter().copied());
+                } else {
+                    while s.tts_queue.len() + samples.len() > max_samples {
+                        s.tts_queue.pop_front();
+                    }
+                    s.tts_queue.extend(samples.iter().copied());
                 }
-                s.tts_queue.extend(samples);
             }
             Err(_) => fswtch::log_error("mod_vad_bot", "call lock poisoned"),
         }
