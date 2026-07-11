@@ -22,7 +22,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn generate_bindings() -> Result<(), Box<dyn Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let wrapper = out_dir.join("wrapper.h");
-    fs::write(&wrapper, "#include <switch.h>\n")?;
+    fs::write(
+        &wrapper,
+        r#"#include <switch.h>
+#if __has_include(<speex/speex_echo.h>)
+#include <speex/speex_echo.h>
+#include <speex/speex_preprocess.h>
+#include <speex/speex_resampler.h>
+#endif
+"#,
+    )?;
     let bundled_config_dir = out_dir.join("bundled-include");
 
     let mut builder = bindgen::Builder::default()
@@ -31,6 +40,10 @@ fn generate_bindings() -> Result<(), Box<dyn Error>> {
         .allowlist_type("switch_.*")
         .allowlist_function("switch_.*")
         .allowlist_var("SWITCH_.*")
+        .allowlist_function("speex_.*")
+        .allowlist_type("Speex.*")
+        .allowlist_type("spx_.*")
+        .allowlist_var("SPEEX_.*")
         .rustified_enum("switch_status_t")
         .rustified_enum("switch_module_interface_name_t")
         .rustified_enum("switch_event_types_t")
@@ -59,6 +72,15 @@ fn generate_bindings() -> Result<(), Box<dyn Error>> {
         builder = builder.clang_arg(format!("-I{}", include_dir.display()));
     } else {
         builder = add_include_dirs(builder, local_workspace_include_dirs()?);
+    }
+
+    // Add common system include paths so bindgen can find optional headers like speexdsp
+    // (macOS homebrew: /opt/homebrew/include; Linux: /usr/include; older macOS: /usr/local/include).
+    for system_inc in ["/opt/homebrew/include", "/usr/local/include", "/usr/include"] {
+        let path = PathBuf::from(system_inc);
+        if path.exists() {
+            builder = builder.clang_arg(format!("-I{system_inc}"));
+        }
     }
 
     let bindings = builder.generate()?;
