@@ -22,5 +22,9 @@ fswtch = { version = "0.1.8", path = "../fswtch" }
 name = "mod_aec3"
 crate-type = ["cdylib"]
 
+[[example]]
+name = "mod_apm"
+crate-type = ["cdylib"]
+
 [lints]
 workspace = true
