@@ -72,6 +72,90 @@ pub struct Metrics {
     pub delay_ms: i32,
 }
 
+/// AEC3 tuning config — a safe mirror of the key fields of WebRTC's
+/// `EchoCanceller3Config`. [`Config::default`] / [`Config::new`] return the WebRTC
+/// defaults; override fields with the builder methods and pass to
+/// [`EchoCanceller3::with_config`].
+///
+/// Filter length is in 64-sample blocks (~4 ms at 16 kHz); it must cover the echo
+/// tail. The WebRTC default is 13 blocks (~52 ms); increase for large rooms / long
+/// acoustic paths. ERLE values are **linear** (not dB).
+#[derive(Debug, Clone, Copy)]
+pub struct Config {
+    raw: sys::fswtch_aec3_config_t,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        // SAFETY: `fswtch_aec3_default_config` returns a pointer to a static const struct
+        // holding the WebRTC defaults; reading through it is safe.
+        Self {
+            raw: unsafe { *sys::fswtch_aec3_default_config() },
+        }
+    }
+}
+
+impl Config {
+    /// AEC3 defaults (WebRTC `EchoCanceller3Config`).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adaptive filter (refined) length in 64-sample blocks; default 13 (~52 ms at 16 kHz).
+    /// Must cover the echo tail; increase for long echo paths.
+    pub fn filter_refined_length_blocks(mut self, blocks: usize) -> Self {
+        self.raw.filter_refined_length_blocks = blocks;
+        self
+    }
+
+    /// Coarse filter length in 64-sample blocks; default 13. AEC3 clamps the initial
+    /// refined/coarse lengths to be <= these.
+    pub fn filter_coarse_length_blocks(mut self, blocks: usize) -> Self {
+        self.raw.filter_coarse_length_blocks = blocks;
+        self
+    }
+
+    /// Delay-estimator headroom in samples; default 32. Increase for large/variable
+    /// render-to-capture delay.
+    pub fn delay_headroom_samples(mut self, samples: usize) -> Self {
+        self.raw.delay_headroom_samples = samples;
+        self
+    }
+
+    /// Echo-path length prior (0..1); default 0.83. A known prior speeds convergence.
+    pub fn ep_strength_default_len(mut self, len: f32) -> Self {
+        self.raw.ep_strength_default_len = len;
+        self
+    }
+
+    /// ERLE estimate floor (linear); default 1.0.
+    pub fn erle_min(mut self, min: f32) -> Self {
+        self.raw.erle_min = min;
+        self
+    }
+
+    /// ERLE cap, low bands (linear); default 4.0 (~12 dB).
+    pub fn erle_max_l(mut self, max: f32) -> Self {
+        self.raw.erle_max_l = max;
+        self
+    }
+
+    /// ERLE cap, high bands (linear); default 1.5 (~3.5 dB).
+    pub fn erle_max_h(mut self, max: f32) -> Self {
+        self.raw.erle_max_h = max;
+        self
+    }
+}
+
+impl Default for EchoCanceller3 {
+    fn default() -> Self {
+        // `new` only fails on invalid args (which `Default` won't pass); propagate as a
+        // panic so misuse surfaces immediately rather than as a silently broken handle.
+        Self::with_config(&Config::default(), 16_000, 1, 1)
+            .expect("EchoCanceller3::default 16 kHz mono")
+    }
+}
+
 /// An owned WebRTC `EchoCanceller3` handle.
 ///
 /// Constructed with [`EchoCanceller3::new`]; destroyed on [`Drop`] via the C ABI. Feed the
@@ -91,13 +175,29 @@ pub struct EchoCanceller3 {
 }
 
 impl EchoCanceller3 {
-    /// Creates a canceller with the default AEC3 config (neural estimator disabled).
+    /// Creates a canceller with the default AEC3 config (neural estimator disabled) —
+    /// equivalent to [`EchoCanceller3::with_config`]`(&Config::default(), …)`.
     ///
-    /// `sample_rate_hz` must be an AEC3-supported rate (8000/16000/32000/48000). The 16 kHz /
-    /// 1-band path is the recommended default (no band splitting, so the QMF/resampler stubs are
-    /// never exercised); 48 kHz uses the real `three_band_filter_bank`. 32 kHz (2-band QMF) is
-    /// not recommended until the QMF shim is replaced.
+    /// `sample_rate_hz` must be 8000/16000/48000 (16 kHz recommended; 32 kHz needs the QMF shim,
+    /// not yet wired). Returns [`Aec3Error::InvalidArg`] on bad args, [`Aec3Error::CreateFailed`]
+    /// if the C++ allocation/construction fails.
     pub fn new(
+        sample_rate_hz: i32,
+        num_render_channels: usize,
+        num_capture_channels: usize,
+    ) -> Result<Self> {
+        Self::with_config(
+            &Config::default(),
+            sample_rate_hz,
+            num_render_channels,
+            num_capture_channels,
+        )
+    }
+
+    /// Creates a canceller with a custom [`Config`] (the neural residual echo estimator is
+    /// always disabled). See [`Config`] for the tunable fields and their WebRTC defaults.
+    pub fn with_config(
+        config: &Config,
         sample_rate_hz: i32,
         num_render_channels: usize,
         num_capture_channels: usize,
@@ -105,10 +205,16 @@ impl EchoCanceller3 {
         if sample_rate_hz <= 0 || num_render_channels == 0 || num_capture_channels == 0 {
             return Err(Aec3Error::InvalidArg);
         }
-        // SAFETY: `fswtch_aec3_create` performs no I/O and takes only by-value primitives; a null
-        // return signals allocation/construction failure (mapped to CreateFailed).
+        // SAFETY: `fswtch_aec3_create` performs no I/O; `&config.raw` is a valid pointer to a
+        // stack struct for the duration of the call; a null return signals allocation/
+        // construction failure (mapped to CreateFailed).
         let raw = unsafe {
-            sys::fswtch_aec3_create(sample_rate_hz, num_render_channels, num_capture_channels)
+            sys::fswtch_aec3_create(
+                &config.raw,
+                sample_rate_hz,
+                num_render_channels,
+                num_capture_channels,
+            )
         };
         let raw = NonNull::new(raw).ok_or(Aec3Error::CreateFailed)?;
         Ok(Self {
@@ -386,5 +492,49 @@ mod tests {
             "AEC3 did not suppress the echo: ERLE = {erle_db:.1} dB \
              (in_energy={in_energy:.0}, out_energy={out_energy:.0})"
         );
+    }
+
+    #[test]
+    fn config_defaults_match_webrtc() {
+        // Mirrors the WebRTC EchoCanceller3Config defaults (see echo_canceller3_config.h).
+        let c = Config::default();
+        assert_eq!(c.raw.filter_refined_length_blocks, 13);
+        assert_eq!(c.raw.filter_coarse_length_blocks, 13);
+        assert_eq!(c.raw.delay_headroom_samples, 32);
+        assert!((c.raw.ep_strength_default_len - 0.83).abs() < 1e-6);
+        assert!((c.raw.erle_min - 1.0).abs() < 1e-6);
+        assert!((c.raw.erle_max_l - 4.0).abs() < 1e-6);
+        assert!((c.raw.erle_max_h - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn config_builder_overrides_fields() {
+        let c = Config::default()
+            .filter_refined_length_blocks(20)
+            .delay_headroom_samples(64)
+            .erle_max_l(6.0);
+        assert_eq!(c.raw.filter_refined_length_blocks, 20);
+        assert_eq!(c.raw.filter_coarse_length_blocks, 13); // untouched
+        assert_eq!(c.raw.delay_headroom_samples, 64);
+        assert!((c.raw.erle_max_l - 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn with_config_runs_pipeline() {
+        // A tuned config (longer filter, larger delay headroom) must flow Rust -> C ABI ->
+        // EchoCanceller3 ctor and still process without error.
+        let cfg = Config::default()
+            .filter_refined_length_blocks(20)
+            .filter_coarse_length_blocks(20)
+            .delay_headroom_samples(64);
+        let mut aec = EchoCanceller3::with_config(&cfg, RATE, CH, CH).expect("create");
+        let render = vec![0i16; FRAME];
+        let mut capture = vec![0i16; FRAME];
+        for _ in 0..20 {
+            aec.analyze_render(&render, CH).expect("analyze_render");
+            aec.process_capture(&mut capture, CH, false)
+                .expect("process_capture");
+        }
+        let _ = aec.get_metrics();
     }
 }

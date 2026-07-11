@@ -14,6 +14,23 @@
 
 namespace {
 
+// Builds a WebRTC EchoCanceller3Config from the C config struct: start from the
+// WebRTC defaults (default-constructed EchoCanceller3Config), then override only
+// the exposed tuning fields. `cfg` may be NULL (= pure defaults).
+webrtc::EchoCanceller3Config BuildConfig(const fswtch_aec3_config_t* cfg) {
+  webrtc::EchoCanceller3Config c;  // WebRTC defaults via in-header member initializers.
+  if (cfg) {
+    c.filter.refined.length_blocks = cfg->filter_refined_length_blocks;
+    c.filter.coarse.length_blocks = cfg->filter_coarse_length_blocks;
+    c.delay.delay_headroom_samples = cfg->delay_headroom_samples;
+    c.ep_strength.default_len = cfg->ep_strength_default_len;
+    c.erle.min = cfg->erle_min;
+    c.erle.max_l = cfg->erle_max_l;
+    c.erle.max_h = cfg->erle_max_h;
+  }
+  return c;
+}
+
 // One EchoCanceller3 instance plus the reusable render/capture AudioBuffers it
 // operates on. Member declaration order == construction order, which matters:
 // `field_trials_` must outlive `env_` (Environment stores a const ref to it),
@@ -32,10 +49,11 @@ struct Aec3Handle {
 
   Aec3Handle(int sample_rate_hz,
              size_t num_render_channels,
-             size_t num_capture_channels)
+             size_t num_capture_channels,
+             const fswtch_aec3_config_t* cfg)
       : field_trials_(),
         env_(field_trials_),
-        config_(),
+        config_(BuildConfig(cfg)),
         aec_(env_,
              config_,
              std::nullopt,  // no per-multichannel config
@@ -75,14 +93,30 @@ int32_t fswtch_aec3_ooura_smoke(void) {
   return 1;
 }
 
-fswtch_aec3_t* fswtch_aec3_create(int32_t sample_rate_hz,
+const fswtch_aec3_config_t* fswtch_aec3_default_config(void) {
+  static const fswtch_aec3_config_t defaults = {
+      13,     // filter_refined_length_blocks
+      13,     // filter_coarse_length_blocks
+      32,     // delay_headroom_samples
+      0.83f,  // ep_strength.default_len
+      1.0f,   // erle.min
+      4.0f,   // erle.max_l
+      1.5f,   // erle.max_h
+  };
+  return &defaults;
+}
+
+fswtch_aec3_t* fswtch_aec3_create(const fswtch_aec3_config_t* config,
+                                  int32_t sample_rate_hz,
                                   size_t num_render_channels,
                                   size_t num_capture_channels) {
   if (sample_rate_hz <= 0 || num_render_channels == 0 || num_capture_channels == 0)
     return nullptr;
+  if (config == nullptr)
+    config = fswtch_aec3_default_config();
   try {
     auto* h = new Aec3Handle(static_cast<int>(sample_rate_hz),
-                            num_render_channels, num_capture_channels);
+                            num_render_channels, num_capture_channels, config);
     return reinterpret_cast<fswtch_aec3_t*>(h);
   } catch (...) {
     return nullptr;

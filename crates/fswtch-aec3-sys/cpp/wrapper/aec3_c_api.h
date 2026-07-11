@@ -24,18 +24,38 @@ int32_t fswtch_aec3_api_version(void);
 int32_t fswtch_aec3_ooura_smoke(void);
 
 /*
- * Creates an EchoCanceller3 with the default AEC3 config. The neural residual
- * echo estimator is disabled (constructed with neural=nullptr -> traditional
+ * AEC3 tuning config — a C mirror of the key fields of WebRTC's
+ * EchoCanceller3Config. fswtch_aec3_default_config() returns the WebRTC
+ * defaults; to tune, call it, copy the result, and override fields. Pass NULL
+ * to fswtch_aec3_create to use the defaults unchanged.
+ *
+ * Filter length is in 64-sample blocks (~4 ms at 16 kHz); it must cover the echo
+ * tail. WebRTC default is 13 blocks (~52 ms). Increase for large rooms / long
+ * acoustic paths. AEC3 clamps refined_initial/coarse_initial <= refined/coarse.
+ */
+typedef struct {
+    size_t filter_refined_length_blocks;  /* default 13 */
+    size_t filter_coarse_length_blocks;   /* default 13 */
+    size_t delay_headroom_samples;         /* default 32 */
+    float  ep_strength_default_len;        /* default 0.83 — echo-path length prior */
+    float  erle_min;                       /* default 1.0  — ERLE estimate floor */
+    float  erle_max_l;                      /* default 4.0  — ERLE cap, low bands */
+    float  erle_max_h;                      /* default 1.5  — ERLE cap, high bands */
+} fswtch_aec3_config_t;
+
+/* Returns a pointer to a static config initialized with the WebRTC AEC3 defaults. */
+const fswtch_aec3_config_t* fswtch_aec3_default_config(void);
+
+/*
+ * Creates an EchoCanceller3. `config` may be NULL (= WebRTC defaults). The
+ * neural residual echo estimator is disabled (neural=nullptr -> traditional
  * residual-echo-estimator path).
  *
- * `sample_rate_hz` must be an AEC3-supported rate (8000/16000/32000/48000). The
- * 16 kHz / 1-band path is the recommended default: no band splitting, so the
- * QMF/resampler stubs are never exercised. `num_render_channels` is the far-end
- * (loudspeaker) channel count; `num_capture_channels` the near-end (mic) count.
- *
- * Returns NULL on allocation failure or unsupported configuration.
+ * `sample_rate_hz` must be 8000/16000/48000 (16 kHz recommended; 32 kHz needs
+ * the QMF shim, not yet wired). Returns NULL on allocation failure or bad args.
  */
-fswtch_aec3_t* fswtch_aec3_create(int32_t sample_rate_hz,
+fswtch_aec3_t* fswtch_aec3_create(const fswtch_aec3_config_t* config,
+                                  int32_t sample_rate_hz,
                                   size_t num_render_channels,
                                   size_t num_capture_channels);
 
