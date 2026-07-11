@@ -507,15 +507,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "fswtch-aec3"
+name = "fswtch-apm"
 version = "0.1.8"
 dependencies = [
  "fswtch",
- "fswtch-aec3-sys",
+ "fswtch-apm-sys",
 ]
 
 [[package]]
-name = "fswtch-aec3-sys"
+name = "fswtch-apm-sys"
 version = "0.1.8"
 dependencies = [
  "bindgen",
