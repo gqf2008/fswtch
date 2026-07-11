@@ -88,5 +88,5 @@ target_compile_definitions(fswtch_apm PRIVATE $<$<CONFIG:Release>:NDEBUG>)
 # The `cmake` crate runs `cmake --build . --target install` with
 # CMAKE_INSTALL_PREFIX set to a path it returns as the link-search dir. Install
 # the archive to that prefix root so the static lib lands at
-# `<dst>/libfswtch_aec3.a` and `cargo:rustc-link-search=native=<dst>` finds it.
+# `<dst>/libfswtch_apm.a` and `cargo:rustc-link-search=native=<dst>` finds it.
 install(TARGETS fswtch_apm ARCHIVE DESTINATION .)

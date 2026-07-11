@@ -62,7 +62,7 @@ fallback for the utility layer. Each shim mirrors the upstream include path so n
 - **CMake `install(TARGETS fswtch_apm ARCHIVE DESTINATION .)`.** The `cmake` crate runs
   `cmake --build . --target install` with `CMAKE_INSTALL_PREFIX` = the path it returns as the
   link-search dir; installing the archive to the prefix root makes `cargo:rustc-link-search=<dst>`
-  find `libfswtch_aec3.a`.
+  find `libfswtch_apm.a`.
 - **`SplitIntoFrequencyBands` / `MergeFrequencyBands` guarded on `num_bands() > 1`.** `AudioBuffer`
   only creates `splitting_filter_` when `num_bands > 1`, but `SplitIntoFrequencyBands()`
   unconditionally derefs it → null deref (SIGSEGV) at 16 kHz / 1 band. The real WebRTC APM never
@@ -110,7 +110,7 @@ A broken wrapper (out-of-sync render/capture) would stay ~0 dB. Cross-platform v
 |-------|--------|------|
 | 0 | `6f52ce4` | Scaffold `fswtch-apm-sys` + `fswtch-apm`; cmake→bindgen→Rust pipeline; smoke. |
 | 1 | `e6ec062` | Vendored Ooura 128-FFT (scalar); closure method proven (no abseil/logging). |
-| 2 | `d1803c9` | AEC3 closure converged (hybrid shim + real DSP); `libfswtch_aec3.a` links. |
+| 2 | `d1803c9` | AEC3 closure converged (hybrid shim + real DSP); `libfswtch_apm.a` links. |
 | 3 | `91c61c8` | Thin C ABI (`create`/`analyze_render`/`process_capture`/…/`destroy`); split/merge guard fix; real AEC3 runs. |
 | 4 | `ca75cf2` | Safe Rust wrapper (`NonNull`/`Drop`/`# Safety`) + 9 unit tests. |
 | 5 | `df4afc2` | Functional equivalence test (`cancels_a_real_echo`, ~67 dB ERLE). |

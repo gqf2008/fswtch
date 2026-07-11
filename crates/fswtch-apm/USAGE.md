@@ -11,7 +11,7 @@ the vendored WebRTC C++ and wrapped in the `fswtch` FFI style (`NonNull` + `Drop
 
 | Crate | Role |
 |-------|------|
-| `fswtch-apm-sys` | Builds the vendored AEC3 C++ (`crates/fswtch-apm-sys/cpp/`) via CMake into `libfswtch_aec3.a`, runs `bindgen` on the thin C ABI in `cpp/wrapper/aec3_c_api.h`, and links the C++ runtime. Raw `extern "C"` bindings live here. |
+| `fswtch-apm-sys` | Builds the vendored AEC3 C++ (`crates/fswtch-apm-sys/cpp/`) via CMake into `libfswtch_apm.a`, runs `bindgen` on the thin C ABI in `cpp/wrapper/aec3_c_api.h`, and links the C++ runtime. Raw `extern "C"` bindings live here. |
 | `fswtch-apm` | Safe, owned wrapper ([`EchoCanceller3`](crate::EchoCanceller3)) over the raw ABI. This is the crate to depend on. |
 
 The build is **scalar / portable** (no AVX2/NEON), **neural residual echo estimator disabled**, and

@@ -45,7 +45,7 @@ pub struct NoiseSuppressor {
 impl NoiseSuppressor {
     /// Creates a noise suppressor with `level` for `sample_rate_hz` / `num_channels`.
     pub fn new(level: NsLevel, sample_rate_hz: i32, num_channels: usize) -> Result<Self> {
-        if sample_rate_hz <= 0 || num_channels == 0 {
+        if !matches!(sample_rate_hz, 8000 | 16000 | 48000) || num_channels == 0 {
             return Err(Error::InvalidArg);
         }
         // SAFETY: `fswtch_ns_create` performs no I/O and takes only by-value primitives; a null

@@ -66,11 +66,16 @@ int32_t fswtch_ns_process(fswtch_ns_t* ns, int16_t* frame, size_t num_channels) 
     return 2;
   try {
     // Load interleaved int16 -> float. At 1 band (16 kHz) NS reads the full-band data via the
-    // AudioBuffer::split_bands_const fallback (no SplitIntoFrequencyBands needed). Analyze
-    // estimates noise; Process applies the suppression; write back.
+    // AudioBuffer::split_bands_const fallback (no SplitIntoFrequencyBands needed). At >1 band
+    // (e.g. 48 kHz / 3 bands) NS expects band-split data, so split before + merge after — mirroring
+    // the AEC3 wrapper's num_bands() guard (AudioBuffer only creates splitting_filter_ for >1 band).
     h->buf.CopyFrom(frame, h->cfg);
+    if (h->buf.num_bands() > 1)
+      h->buf.SplitIntoFrequencyBands();
     h->ns.Analyze(h->buf);
     h->ns.Process(&h->buf);
+    if (h->buf.num_bands() > 1)
+      h->buf.MergeFrequencyBands();
     h->buf.CopyTo(h->cfg, frame);
   } catch (...) {
     return -1;

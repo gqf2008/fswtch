@@ -202,7 +202,10 @@ impl EchoCanceller3 {
         num_render_channels: usize,
         num_capture_channels: usize,
     ) -> Result<Self> {
-        if sample_rate_hz <= 0 || num_render_channels == 0 || num_capture_channels == 0 {
+        if !matches!(sample_rate_hz, 8000 | 16000 | 48000)
+            || num_render_channels == 0
+            || num_capture_channels == 0
+        {
             return Err(Aec3Error::InvalidArg);
         }
         // SAFETY: `fswtch_aec3_create` performs no I/O; `&config.raw` is a valid pointer to a
@@ -396,6 +399,11 @@ mod tests {
         );
         assert_eq!(
             EchoCanceller3::new(RATE, 0, CH).unwrap_err(),
+            Aec3Error::InvalidArg
+        );
+        // 32 kHz needs the QMF shim (not wired) — must be rejected, not silently misbehave.
+        assert_eq!(
+            EchoCanceller3::new(32_000, CH, CH).unwrap_err(),
             Aec3Error::InvalidArg
         );
     }
