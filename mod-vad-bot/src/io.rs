@@ -1,8 +1,8 @@
-//! Endpoint I/O callbacks + per-call state for ai_agent_seat.
+//! Endpoint I/O callbacks + per-call state for mod_vad_bot.
 //!
 //! FreeSWITCH drives this module as an **endpoint interface** (not an
 //! application): the [`fswtch::EndpointIoRoutines`] trait implementation
-//! [`AiAgent`] supplies `read_frame`, `write_frame`, `kill_channel`, and
+//! [`VadBot`] supplies `read_frame`, `write_frame`, `kill_channel`, and
 //! `outgoing_channel` safe methods. fswtch's generic trampolines adapt these
 //! to the `switch_io_routines` C function-pointer table that FreeSWITCH
 //! invokes on its media thread at 50 Hz (20 ms frames).
@@ -22,7 +22,7 @@
 //!   when empty.
 //! - `kill_channel(session, sig)`: call ended — drop the [`CallState`].
 //! - `outgoing_channel(...)`: create the B leg when the dialplan bridges to
-//!   `ai_agent/<num>`.
+//!   `fswtch_vad_bot/<num>`.
 //!
 //! Every trampoline is wrapped in `catch_unwind` by fswtch so a Rust panic
 //! degrades to a logged error + `SWITCH_STATUS_FALSE` instead of unwinding
@@ -275,16 +275,16 @@ static WF_FRAME_COUNT: AtomicU64 = AtomicU64::new(0);
 // `tts.rs`). The VAD bypass resampler (8 kHz → 16 kHz) is held here.
 use crate::audio_dsp::SendResample;
 
-/// The `ai_agent` endpoint: a unit-struct implementing
+/// The `fswtch_vad_bot` endpoint: a unit-struct implementing
 /// [`fswtch::EndpointIoRoutines`]. Behavior is fixed per-type; per-call state
 /// lives in the global [`CALLS`] map keyed by session UUID (endpoints receive
 /// no `user_data`).
-pub struct AiAgent;
+pub struct VadBot;
 
-impl EndpointIoRoutines for AiAgent {
-    const NAME: &'static str = "ai_agent";
+impl EndpointIoRoutines for VadBot {
+    const NAME: &'static str = "fswtch_vad_bot";
 
-    /// Create the B leg when FreeSWITCH bridges to `ai_agent/<num>`.
+    /// Create the B leg when FreeSWITCH bridges to `fswtch_vad_bot/<num>`.
     ///
     /// Requests a new session on our endpoint, installs the caller profile +
     /// channel name, marks the channel answered (so the originator's bridge
@@ -317,7 +317,7 @@ impl EndpointIoRoutines for AiAgent {
         if let Some(ref profile) = caller_profile {
             channel.set_caller_profile(profile);
         }
-        let _ = channel.set_name("ai_agent");
+        let _ = channel.set_name("fswtch_vad_bot");
 
         // Mark answered so the A leg's bridge completes, and flag audio media
         // so FS wires our read/write_frame callbacks into the bridge.
@@ -351,7 +351,7 @@ impl EndpointIoRoutines for AiAgent {
             }
         }
 
-        tracing::info!("outgoing_channel: created session {uuid} on endpoint ai_agent");
+        tracing::info!("outgoing_channel: created session {uuid} on endpoint fswtch_vad_bot");
         OutgoingResult::success(new_session)
     }
 
@@ -379,7 +379,7 @@ impl EndpointIoRoutines for AiAgent {
         }
         if n.is_multiple_of(50) {
             tracing::trace!(
-                target: "ai_agent_seat::io",
+                target: "mod_vad_bot::io",
                 "write_frame #{n} {uuid}: raw_len={raw_len}"
             );
         }
@@ -492,7 +492,7 @@ impl EndpointIoRoutines for AiAgent {
 
             let frame_len = frame_slice.len() as u32;
             tracing::trace!(
-                target: "ai_agent_seat::io",
+                target: "mod_vad_bot::io",
                 "VAD {uuid}: score={score:.3} rms={rms:.4} gate={rms_gate} \
                  thr={threshold:.2} onset={:.1}ms/{:.0}ms voiced={is_voiced}",
                 state_mut.onset_accum_ms, state_mut.speech_onset_ms
@@ -839,7 +839,7 @@ mod tests {
     }
 
     /// Benchmark earshot VAD predict + RMS throughput on a single core.
-    /// Run: `cargo test -p ai-agent-seat --release -- io::tests::bench_vad_throughput --nocapture --ignored`
+    /// Run: `cargo test -p mod-vad-bot --release -- io::tests::bench_vad_throughput --nocapture --ignored`
     /// Answers the capacity question: how many concurrent VAD calls can one
     /// core sustain at 50 Hz (20 ms frames)?
     #[test]

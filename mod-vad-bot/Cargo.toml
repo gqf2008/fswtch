@@ -1,13 +1,13 @@
 [package]
-name = "ai-agent-seat"
+name = "mod-vad-bot"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "FreeSWITCH in-process AI agent seat module"
+description = "FreeSWITCH in-process VAD bot module"
 
 [lib]
-name = "ai_agent_seat"
+name = "mod_vad_bot"
 crate-type = ["cdylib"]
 
 [dependencies]

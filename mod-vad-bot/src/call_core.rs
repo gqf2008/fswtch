@@ -1,4 +1,4 @@
-//! Call-control trait + FFI-backed control plane for ai_agent_seat.
+//! Call-control trait + FFI-backed control plane for mod_vad_bot.
 //!
 //! In the Endpoint-module design there are no actix actors and no message
 //! types: the I/O callbacks in [`crate::io`] own per-call state directly in a

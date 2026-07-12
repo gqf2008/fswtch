@@ -699,7 +699,7 @@ impl OutgoingResult {
 /// }
 /// ```
 pub trait EndpointIoRoutines: Send + Sync + 'static {
-    /// Endpoint interface name (e.g. `"ai_agent"`). Used by the
+    /// Endpoint interface name (e.g. `"fswtch_vad_bot"`). Used by the
     /// `outgoing_channel` trampoline to look up the
     /// `switch_endpoint_interface_t` for session creation.
     const NAME: &'static str;

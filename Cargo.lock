@@ -12,37 +12,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai-agent-seat"
-version = "0.1.8"
-dependencies = [
- "anyhow",
- "base64",
- "dashmap",
- "earshot",
- "fswtch",
- "futures",
- "futures-util",
- "kameo",
- "mimalloc",
- "parking_lot",
- "reqwest 0.12.28",
- "rig-core",
- "ringbuf",
- "rubato",
- "rustls",
- "serde",
- "serde_json",
- "serde_yaml",
- "tokio",
- "tokio-stream",
- "tokio-tungstenite 0.26.2",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1245,6 +1214,37 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mod-vad-bot"
+version = "0.1.8"
+dependencies = [
+ "anyhow",
+ "base64",
+ "dashmap",
+ "earshot",
+ "fswtch",
+ "futures",
+ "futures-util",
+ "kameo",
+ "mimalloc",
+ "parking_lot",
+ "reqwest 0.12.28",
+ "rig-core",
+ "ringbuf",
+ "rubato",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite 0.26.2",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

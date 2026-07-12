@@ -120,10 +120,6 @@ name = "mod_vad_pcm"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "mod_vad_bot"
-crate-type = ["cdylib"]
-
-[[example]]
 name = "mod_buffer_demo"
 crate-type = ["cdylib"]
 
