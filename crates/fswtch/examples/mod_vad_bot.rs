@@ -1,39 +1,37 @@
-//! mod_vad_bot — endpoint-based VAD PCM bridge (the bot IS the call terminus).
+//! mod_vad_bot — endpoint-based VAD + PCM ESL bridge (the bot IS the call terminus).
 //!
-//! Companion to mod_vad_pcm (the media-bug variant): the **event contract is identical**
-//! (outbound `fswtch::asr_result` per talking frame, body=base64 PCM + audio headers; inbound
-//! `fswtch::play_pcm` with base64 PCM + `Target-UUID`), but the **media primitive is a custom
-//! FreeSWITCH endpoint**, not a media bug. The caller bridges to `fswtch_vad_bot/<num>`;
-//! FreeSWITCH drives the call's media through this module's [`fswtch::EndpointIoRoutines`]:
+//! Reusable, brain-agnostic: VAD runs locally; caller audio + VAD state go OUT as ESL events; TTS
+//! comes back IN as an ESL event and is played. No business logic — any brain (Python/Java/…)
+//! subscribing to the events below can drive the call.
 //!
-//! - `write_frame` — FreeSWITCH writes the CALLER'S audio TO this endpoint. VAD runs here; on a
-//!   talking-active frame a `fswtch::asr_result` event fires with the frame's base64 PCM.
-//! - `read_frame` — FreeSWITCH reads audio FROM this endpoint (toward the caller). We drain the
-//!   per-call TTS queue (fed by `fswtch::play_pcm`) into the frame; silence when empty. The full
-//!   frame is ALWAYS filled — an empty frame makes FreeSWITCH treat the read as a break and tear
-//!   the bridge down.
+//! The caller bridges to `fswtch_vad_bot/<num>`; FreeSWITCH drives the call's media through this
+//! module's [`fswtch::EndpointIoRoutines`]:
+//!
+//! - `write_frame` — FreeSWITCH writes the CALLER'S audio TO this endpoint. VAD runs here on a
+//!   mono downmix. On every talking-active frame it fires `fswtch::uplink_pcm` (the frame's base64
+//!   PCM). On speech BOUNDARIES it also fires `fswtch::vad` (start-talking/stop-talking, no body).
+//!   On `start-talking` it flushes the TTS queue (barge-in: caller's speech stops any playing TTS).
+//! - `read_frame` — FreeSWITCH reads audio FROM this endpoint (toward the caller). Drains the TTS
+//!   queue (fed by `fswtch::downlink_pcm`); silence when empty. The full frame is ALWAYS filled.
 //! - `kill_channel` (`SIG_KILL` only) — drop the per-call state.
 //! - `outgoing_channel` — create the B leg when the dialplan bridges to `fswtch_vad_bot/<num>`.
 //!
-//! # Why endpoint vs media bug
-//! - mod_vad_pcm (bug) taps/overrides an **existing** call's media leg (barge-in / monitoring on
-//!   a human-human call, or a call you didn't set up). Idle audio passes through.
-//! - mod_vad_bot (endpoint) **is** the call's media terminus: the bot is the party the caller
-//!   talks to. No `WRITE_REPLACE` hack — `read_frame`/`write_frame` are the native media path.
-//!   Idle audio is silence (there is no "other party" to pass through).
+//! # Event contract
+//! - `fswtch::vad` (out, VAD→brain): `Call-UUID`/`Vad-State`(start-talking|stop-talking)/`Seq`. No body.
+//! - `fswtch::uplink_pcm` (out, VAD→brain): `Call-UUID`/`Seq`/`Sample-Rate`/`Channels`/
+//!   `Bits-Per-Sample`(16)/`Sample-Format`(S16LE)/`Samples` + base64 PCM body. Per talking-active
+//!   frame; the start/stop frame shares `Seq` with the matching `fswtch::vad` event.
+//! - `fswtch::downlink_pcm` (in, brain→VAD): `Target-UUID`/`Sample-Rate`/`Channels`/
+//!   `Bits-Per-Sample`/`Sample-Format` + base64 TTS PCM body → queued, drained by `read_frame`.
 //!
 //! # Use
 //! ```text
 //! load mod_vad_bot
-//! # dialplan: bridge the caller to the bot endpoint
 //! <action application="bridge" data="fswtch_vad_bot/1000"/>
-//! # downstream brain: subscribe `event custom fswtch::asr_result`, base64-decode each body to
-//! # S16LE PCM at the advertised Sample-Rate/Channels, run ASR, then TTS and send each chunk
-//! # back as a fswtch::play_pcm event (same headers + Target-UUID + base64 PCM body).
-//! # on barge-in (caller interrupts the bot): flush the play buffer to stop TTS at once:
-//! fs_cli -x 'fswtch_vad_bot_stop_playback <uuid>'
+//! # brain: subscribe `event custom fswtch::vad` + `fswtch::uplink_pcm`; on stop-talking, ASR/LLM/TTS
+//! # the buffered PCM; send `fswtch::downlink_pcm` chunks back (Target-UUID + base64 PCM).
 //! ```
-//! Load mod_vad_pcm OR mod_vad_bot, not both — both subscribe to `fswtch::play_pcm`.
+//! Load mod_vad_pcm OR mod_vad_bot, not both — both subscribe to `fswtch::downlink_pcm`.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -45,9 +43,10 @@ use fswtch::{
     StateHandlerTable, Status, Vad, VadState, request_session,
 };
 
-const ASR_SUBCLASS: &str = "fswtch::asr_result";
-const PLAY_SUBCLASS: &str = "fswtch::play_pcm";
-/// Play-queue high-water mark in seconds of audio — further `play_pcm` events are dropped.
+const VAD_SUBCLASS: &str = "fswtch::vad";
+const UPLINK_SUBCLASS: &str = "fswtch::uplink_pcm";
+const DOWNLINK_SUBCLASS: &str = "fswtch::downlink_pcm";
+/// Play-queue high-water mark in seconds of audio — further `downlink_pcm` events are dropped.
 const PLAY_QUEUE_MAX_SECS: u32 = 10;
 /// Pipeline sample rate / packetization this endpoint speaks (L16, 20 ms, mono).
 const PIPELINE_RATE: u32 = 8000;
@@ -70,7 +69,7 @@ fswtch::module_exports! {
 
 struct CallState {
     vad: Vad,
-    /// TTS samples (pipeline rate, mono) drained by `read_frame`; filled by `on_play_pcm`.
+    /// TTS samples (pipeline rate, mono) drained by `read_frame`; filled by `on_downlink_pcm`.
     tts_queue: VecDeque<i16>,
     sample_rate: u32,
     channels: u32,
@@ -95,21 +94,32 @@ fn lookup(uuid: &str) -> Option<Arc<Mutex<CallState>>> {
     REGISTRY.lock().ok()?.get(uuid).cloned()
 }
 
-// ── outbound: fire one fswtch::asr_result per talking-active frame ───────────
+// ── outbound: VAD state transitions (no PCM) + per-frame uplink PCM ──────────
+//
+// `fswtch::vad` fires only on speech boundaries (start-talking/stop-talking) — lightweight
+// signaling so the brain can frame utterances. `fswtch::uplink_pcm` fires on every talking-active
+// frame (start/talking/stop) with that frame's base64 PCM — the media. Both carry the same `Seq`
+// for a given frame so the brain can correlate the boundary with its PCM.
 
-#[allow(clippy::too_many_arguments)] // eight header fields map 1:1 onto add_header calls
-fn fire_asr(
+fn fire_vad(uuid: &str, vad_state: &str, seq: u64) -> fswtch::Result<()> {
+    let mut ev = fswtch::Event::custom(VAD_SUBCLASS)?;
+    ev.add_header("Call-UUID", uuid)?;
+    ev.add_header("Vad-State", vad_state)?;
+    ev.add_header("Seq", &seq.to_string())?;
+    ev.fire()
+}
+
+#[allow(clippy::too_many_arguments)] // six header fields map 1:1 onto add_header calls
+fn fire_uplink_pcm(
     uuid: &str,
-    vad_state: &str,
     seq: u64,
     sample_rate: u32,
     channels: u32,
     samples: u32,
     body: &str,
 ) -> fswtch::Result<()> {
-    let mut ev = fswtch::Event::custom(ASR_SUBCLASS)?;
+    let mut ev = fswtch::Event::custom(UPLINK_SUBCLASS)?;
     ev.add_header("Call-UUID", uuid)?;
-    ev.add_header("Vad-State", vad_state)?;
     ev.add_header("Seq", &seq.to_string())?;
     ev.add_header("Sample-Rate", &sample_rate.to_string())?;
     ev.add_header("Channels", &channels.to_string())?;
@@ -201,10 +211,11 @@ impl EndpointIoRoutines for VadBot {
         OutgoingResult::success(new_session)
     }
 
-    /// FreeSWITCH writes the CALLER'S audio TO this endpoint. VAD runs here on a mono downmix of
-    /// the frame; on a talking-active frame we fire `fswtch::asr_result` whose body is the frame's
-    /// ORIGINAL interleaved PCM (base64) — not the downmix — with the real `Channels` header. The
-    /// frame is read-only.
+    /// FreeSWITCH writes the CALLER'S audio TO this endpoint. VAD runs here on a mono downmix.
+    /// On every talking-active frame we fire `fswtch::uplink_pcm` (the frame's ORIGINAL interleaved
+    /// PCM, base64 — not the downmix — with the real `Channels` header). On speech BOUNDARIES we
+    /// also fire `fswtch::vad` (start-talking/stop-talking, no body). On `start-talking` we flush
+    /// the TTS queue (barge-in: the caller's speech stops any playing TTS). The frame is read-only.
     fn write_frame(session: &Session, frame: &Frame) -> Status {
         let Some(uuid) = session.channel().and_then(|c| c.uuid()) else {
             return SUCCESS;
@@ -217,8 +228,8 @@ impl EndpointIoRoutines for VadBot {
             return SUCCESS; // no state (outgoing_channel didn't register) — nothing to VAD
         };
 
-        // Per-call lock: mono downmix + VAD + snapshot the event fields, then drop the lock.
-        let (label, seq) = {
+        // Per-call lock: mono downmix + VAD + seq; on start-talking, clear TTS (barge-in).
+        let (vad_label, seq, cleared_tts) = {
             let mut guard = match state.lock() {
                 Ok(g) => g,
                 Err(_) => return SUCCESS, // poisoned: skip this frame
@@ -237,28 +248,49 @@ impl EndpointIoRoutines for VadBot {
                     s.mono_scratch.push((sum / channels as i64) as i16);
                 }
             }
-            let state_label = match s.vad.process(&mut s.mono_scratch) {
-                VadState::START_TALKING => "start-talking",
-                VadState::TALKING => "talking",
-                VadState::STOP_TALKING => "stop-talking",
-                _ => return SUCCESS, // NONE / ERROR: silence is not forwarded
+            // `vad` fires only on boundaries; `talking` is implicit between start and stop.
+            let label = match s.vad.process(&mut s.mono_scratch) {
+                VadState::START_TALKING => Some("start-talking"),
+                VadState::STOP_TALKING => Some("stop-talking"),
+                VadState::TALKING => None,
+                _ => return SUCCESS, // NONE / ERROR: nothing forwarded
             };
             s.seq = s.seq.wrapping_add(1);
-            (state_label, s.seq)
+            // Barge-in: caller started talking → flush queued TTS so the speech isn't drowned.
+            let cleared = if let Some("start-talking") = label {
+                let n = s.tts_queue.len();
+                s.tts_queue.clear();
+                n
+            } else {
+                0
+            };
+            (label, s.seq, cleared)
         };
 
         // Lock released: base64-encode + fire outside the per-call lock.
+        if cleared_tts > 0 {
+            fswtch::log_info(
+                "mod_vad_bot",
+                format!("barge-in on {uuid}: cleared {cleared_tts} TTS samples"),
+            );
+        }
         let body = STANDARD.encode(frame.bytes());
-        if let Err(error) = fire_asr(
+        // uplink_pcm: every talking-active frame (start/talking/stop) carries the PCM.
+        if let Err(error) = fire_uplink_pcm(
             &uuid,
-            label,
             seq,
             frame.rate(),
             frame.channels(),
             frame.samples(),
             &body,
         ) {
-            fswtch::log_error("mod_vad_bot", format!("fire asr_result failed: {error}"));
+            fswtch::log_error("mod_vad_bot", format!("fire uplink_pcm failed: {error}"));
+        }
+        // vad: only on transitions (start/stop) — lightweight signaling, no PCM.
+        if let Some(label) = vad_label
+            && let Err(error) = fire_vad(&uuid, label, seq)
+        {
+            fswtch::log_error("mod_vad_bot", format!("fire vad failed: {error}"));
         }
         SUCCESS
     }
@@ -311,14 +343,14 @@ impl EndpointIoRoutines for VadBot {
     }
 }
 
-// ── inbound: fswtch::play_pcm (base64 PCM) → TTS queue ──────────────────────
+// ── inbound: fswtch::downlink_pcm (base64 TTS PCM) → TTS queue ──────────────
 
 fswtch::event_callback! {
-    fn on_play_pcm(event) {
+    fn on_downlink_pcm(event) {
         let target = match event.header("Target-UUID") {
             Some(t) if !t.is_empty() => t,
             _ => {
-                fswtch::log_error("mod_vad_bot", "play_pcm event missing Target-UUID");
+                fswtch::log_error("mod_vad_bot", "downlink_pcm event missing Target-UUID");
                 return;
             }
         };
@@ -330,7 +362,7 @@ fswtch::event_callback! {
             Err(error) => {
                 fswtch::log_error(
                     "mod_vad_bot",
-                    format!("play_pcm base64 decode failed: {error}"),
+                    format!("downlink_pcm base64 decode failed: {error}"),
                 );
                 return;
             }
@@ -354,7 +386,7 @@ fswtch::event_callback! {
                     fswtch::log_error(
                         "mod_vad_bot",
                         format!(
-                            "play_pcm rate mismatch on {target}: got {rate}, want {}",
+                            "downlink_pcm rate mismatch on {target}: got {rate}, want {}",
                             s.sample_rate
                         ),
                     );
@@ -364,7 +396,7 @@ fswtch::event_callback! {
                     fswtch::log_error(
                         "mod_vad_bot",
                         format!(
-                            "play_pcm channels mismatch on {target}: got {ch}, want {}",
+                            "downlink_pcm channels mismatch on {target}: got {ch}, want {}",
                             s.channels
                         ),
                     );
@@ -440,7 +472,7 @@ fswtch::api_callback! {
     }
 }
 
-// ── module load: register the endpoint + APIs + the play_pcm subscription ───
+// ── module load: register the endpoint + APIs + the downlink_pcm subscription ───
 
 fswtch::module_load! {
     fn switch_module_load(module) for "mod_vad_bot" {
@@ -467,16 +499,16 @@ fswtch::module_load! {
                 })
                 .inspect(|_m| {
                     match fswtch::EventBinder::bind(
-                        "mod_vad_bot.play",
+                        "mod_vad_bot.downlink",
                         fswtch::EventType::CUSTOM,
-                        Some(PLAY_SUBCLASS),
-                        Some(on_play_pcm),
+                        Some(DOWNLINK_SUBCLASS),
+                        Some(on_downlink_pcm),
                         std::ptr::null_mut(),
                     ) {
                         Ok(b) => std::mem::forget(b),
                         Err(e) => fswtch::log_error(
                             "mod_vad_bot",
-                            format!("play_pcm bind failed: {e}"),
+                            format!("downlink_pcm bind failed: {e}"),
                         ),
                     }
                 })
