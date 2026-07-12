@@ -5,7 +5,7 @@ members = [
     "crates/fswtch-sys",
     "crates/fswtch-apm",
     "crates/fswtch-apm-sys",
-    "mod-vad-bot",
+    "ai-agent-seat",
 ]
 resolver = "3"
 

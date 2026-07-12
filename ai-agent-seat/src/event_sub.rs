@@ -44,7 +44,7 @@ use crate::call_core::{control, is_live_call};
 const SUBCLASS: &str = "voice_seat::command";
 
 /// The bind id (FreeSWITCH event node tag).
-const BIND_ID: &str = "mod_vad_bot";
+const BIND_ID: &str = "ai_agent_seat";
 
 /// Slot holding the bound [`EventBinder`] guard.
 ///

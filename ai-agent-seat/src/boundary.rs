@@ -30,7 +30,7 @@ where
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "<non-string panic>".to_string());
             fswtch::log_error(
-                "mod_vad_bot",
+                "ai_agent_seat",
                 format!("panic caught at FS boundary (downgrading): {msg}"),
             );
             R::default()
@@ -58,7 +58,7 @@ where
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "<non-string panic>".to_string());
             fswtch::log_error(
-                "mod_vad_bot",
+                "ai_agent_seat",
                 format!("panic caught at FS boundary (downgrading to FALSE): {msg}"),
             );
             fswtch::FALSE

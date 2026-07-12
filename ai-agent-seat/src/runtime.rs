@@ -1,4 +1,4 @@
-//! Tokio runtime lifecycle for mod_vad_bot.
+//! Tokio runtime lifecycle for ai_agent_seat.
 //!
 //! The Endpoint-module design has no actix actors: per-call state lives in a
 //! global [`dashmap::DashMap`] (see [`crate::io`]) and the I/O callbacks run
@@ -25,7 +25,7 @@ use tokio::runtime::Runtime;
 
 use fswtch::{GENERR, SwitchError, log_error, log_info, log_warning};
 
-const MODULE: &str = "mod_vad_bot";
+const MODULE: &str = "ai_agent_seat";
 
 /// Global runtime slot. `OnceLock` gives a `&'static` reference lazily
 /// initialized on first access (module load); the `Mutex<Option<_>>` allows

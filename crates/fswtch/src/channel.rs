@@ -566,7 +566,7 @@ impl Channel {
         unsafe { sys::switch_channel_set_caller_profile(self.raw.as_ptr(), profile.as_ptr()) };
     }
 
-    /// Sets the channel's display name (e.g. `"fswtch_vad_bot"`). FreeSWITCH logs and CDRs use this.
+    /// Sets the channel's display name (e.g. `"ai_agent"`). FreeSWITCH logs and CDRs use this.
     pub fn set_name(self, name: &str) -> Result<()> {
         let name = cstring(name)?;
         // SAFETY: `self.raw` is a live channel; `name` is a valid C string for the call.

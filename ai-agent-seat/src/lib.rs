@@ -1,8 +1,8 @@
 //! AI Agent Seat module for FreeSWITCH.
 //!
 //! This module registers as a FreeSWITCH **endpoint interface** named
-//! `fswtch_vad_bot`. Inbound calls bridge to `fswtch_vad_bot/<number>` (e.g.
-//! `fswtch_vad_bot/1000`); FreeSWITCH then drives the call's media through this
+//! `ai_agent`. Inbound calls bridge to `ai_agent/<number>` (e.g.
+//! `ai_agent/1000`); FreeSWITCH then drives the call's media through this
 //! module's [`IoRoutines`](fswtch::IoRoutinesBuilder) table: the
 //! `write_frame` / `read_frame` / `kill_channel` callbacks in [`io`] run on
 //! the media thread at 50 Hz (20 ms frames).
@@ -57,7 +57,7 @@ pub mod voice_core;
 use call_core::clear_calls;
 
 fswtch::module_exports! {
-    module = mod_vad_bot,
+    module = ai_agent_seat,
     load = switch_module_load,
     shutdown = Some(switch_module_shutdown),
     runtime = None,
@@ -65,15 +65,15 @@ fswtch::module_exports! {
 
 fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::ModuleBuilder> {
     // Bridge tracing → FreeSWITCH's `switch_log_printf` (via `fswtch::log`). This makes
-    // mod-vad-bot logs appear in `freeswitch.log` / `fs_cli` like a native module's,
-    // with correct levels (ERROR/WARN/INFO/DEBUG). Set `RUST_LOG=mod_vad_bot=debug`
+    // ai-agent-seat logs appear in `freeswitch.log` / `fs_cli` like a native module's,
+    // with correct levels (ERROR/WARN/INFO/DEBUG). Set `RUST_LOG=ai_agent_seat=debug`
     // to see per-frame VAD logs.
     init_tracing();
 
-    tracing::info!("Loading mod_vad_bot module");
+    tracing::info!("Loading ai_agent_seat module");
 
     // Load configuration from FreeSWITCH native XML config
-    // (autoload_configs/mod-vad-bot.conf.xml → <settings><param .../></settings>).
+    // (autoload_configs/ai-agent-seat.conf.xml → <settings><param .../></settings>).
     // Each <param name="..."> maps to a Config field. Channel variables
     // (VOICE_SEAT_*) set in the dialplan override these per-call at
     // outgoing_channel time.
@@ -107,8 +107,8 @@ fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::Modul
     // Build the I/O routines table: read_frame (drain TTS), write_frame
     // (VAD + spawn orchestrator), kill_channel (teardown), outgoing_channel
     // (create the B leg). fswtch's generic trampolines dispatch to
-    // `io::VadBot` (the `EndpointIoRoutines` impl).
-    let io = fswtch::EndpointIoBuilder::build::<io::VadBot>()?;
+    // `io::AiAgent` (the `EndpointIoRoutines` impl).
+    let io = fswtch::EndpointIoBuilder::build::<io::AiAgent>()?;
 
     // All-NULL state-handler table: satisfies FreeSWITCH's
     // `state_handler != NULL` assert in `switch_core_session_run` without
@@ -116,23 +116,23 @@ fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::Modul
     let state_handler = fswtch::StateHandlerTable::new_null();
 
     // Register the endpoint interface. Inbound calls bridge to
-    // `fswtch_vad_bot/<number>`; FreeSWITCH routes the call's media through the
+    // `ai_agent/<number>`; FreeSWITCH routes the call's media through the
     // I/O callbacks above.
-    let module = module.endpoint("fswtch_vad_bot", io, state_handler)?;
+    let module = module.endpoint("ai_agent", io, state_handler)?;
 
-    tracing::info!("mod_vad_bot module loaded successfully (endpoint: fswtch_vad_bot)");
+    tracing::info!("ai_agent_seat module loaded successfully (endpoint: ai_agent)");
     Ok(module)
 }
 
 fswtch::module_load! {
-    fn switch_module_load(module) for "mod_vad_bot" {
+    fn switch_module_load(module) for "ai_agent_seat" {
         do_module_load(module)
     }
 }
 
 /// Module shutdown function.
 pub extern "C" fn switch_module_shutdown() -> fswtch::Status {
-    tracing::info!("Shutting down mod_vad_bot module");
+    tracing::info!("Shutting down ai_agent_seat module");
 
     // Unbind events first so an in-flight callback can't enter unloaded code.
     event_sub::unbind();
@@ -152,14 +152,14 @@ pub extern "C" fn switch_module_shutdown() -> fswtch::Status {
     // Stop tokio runtime last — drains the Drop tasks spawned above.
     actor::stop_runtime();
 
-    tracing::info!("mod_vad_bot module shutdown complete");
+    tracing::info!("ai_agent_seat module shutdown complete");
     fswtch::SUCCESS
 }
 
 // ── tracing → FreeSWITCH switch_log_printf bridge ────────────────────────
 //
 // A `tracing_subscriber::Layer` that forwards each event to `fswtch::log`
-// (`switch_log_printf`), so mod-vad-bot logs flow into the normal FreeSWITCH
+// (`switch_log_printf`), so ai-agent-seat logs flow into the normal FreeSWITCH
 // log system (visible via `fs_cli` / `freeswitch.log`) instead of stderr.
 
 use std::fmt::Write as _;
@@ -182,7 +182,7 @@ impl<S: tracing::Subscriber> Layer<S> for FsLogLayer {
             tracing::Level::DEBUG => fswtch::LogLevel::Debug,
             tracing::Level::TRACE => fswtch::LogLevel::Debug2,
         };
-        // `target` is the module path (e.g. `mod_vad_bot::io`); switch_log_printf
+        // `target` is the module path (e.g. `ai_agent_seat::io`); switch_log_printf
         // surfaces it as the log line's tag.
         fswtch::log(meta.target(), level, visitor.0);
     }
@@ -207,7 +207,7 @@ impl Visit for FieldCollector {
 }
 
 /// Load the AI [`Config`] from the module's FreeSWITCH XML config
-/// (`autoload_configs/mod-vad-bot.conf.xml`).
+/// (`autoload_configs/ai-agent-seat.conf.xml`).
 ///
 /// Iterates all `<param name="..." value="..."/>` children of `<settings>`
 /// and maps each `name` to a `Config` field. Uses FreeSWITCH's
@@ -225,8 +225,8 @@ fn load_config_from_xml() -> anyhow::Result<crate::voice_core::Config> {
     // binding name is misleading — FreeSWITCH's `switch_xml_open_cfg` writes
     // the root node, not a <settings> child). So we navigate:
     //   <configuration> → child <settings> → children <param>.
-    let xml = XmlConfig::open("mod-vad-bot.conf")
-        .ok_or_else(|| anyhow::anyhow!("mod-vad-bot.conf not bound or missing"))?;
+    let xml = XmlConfig::open("ai-agent-seat.conf")
+        .ok_or_else(|| anyhow::anyhow!("ai-agent-seat.conf not bound or missing"))?;
     let root = xml
         .settings()
         .ok_or_else(|| anyhow::anyhow!("XmlConfig returned no root node"))?;
@@ -305,9 +305,9 @@ fn apply_param(cfg: &mut crate::voice_core::Config, name: &str, value: &str) {
 
 fn init_tracing() {
     // Default to `info` for this crate when RUST_LOG is unset; RUST_LOG overrides
-    // (e.g. `RUST_LOG=mod_vad_bot=debug` to see 50 Hz VAD decisions).
+    // (e.g. `RUST_LOG=ai_agent_seat=debug` to see 50 Hz VAD decisions).
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("mod_vad_bot=info"));
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("ai_agent_seat=info"));
     let _ = tracing_subscriber::registry()
         .with(filter)
         .with(FsLogLayer)
