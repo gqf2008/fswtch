@@ -3,3 +3,7 @@
 ._*
 .claude/
 /.zcode
+
+# Python
+__pycache__/
+*.py[cod]
