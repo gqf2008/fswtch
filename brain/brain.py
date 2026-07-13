@@ -82,9 +82,9 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
         a_uuid = ch.get("Unique-ID", "")
         log.info("call connected: A-leg %s", a_uuid or "?")
 
-        # 2. Answer the call (brain controls when to answer), subscribe to events,
-        #    and bridge to the VAD endpoint (creates B-leg, drives media).
-        session.send_app("answer")
+        # 2. Answer (fire-and-forget: sendmsg answer's command/reply blocks on this
+        #    FS build, same as park), subscribe to events, bridge to the VAD endpoint.
+        session._send(b"sendmsg\ncall-command: execute\nexecute-app-name: answer\n\n")
         session.send_cmd("event plain ALL")
         reply = session.send_app("bridge", "fswtch_vad_detect/1000")
         if not reply.get("Reply-Text", "").startswith("+OK"):
