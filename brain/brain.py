@@ -46,14 +46,10 @@ DOWNLINK = "fswtch::downlink_pcm"
 
 
 class _Call:
-    __slots__ = ("start_seq", "chunks", "cancel", "rate", "channels")
+    __slots__ = ("cancel",)
 
     def __init__(self) -> None:
-        self.start_seq: int | None = None
-        self.chunks: list[tuple[int, bytes]] = []
         self.cancel = threading.Event()
-        self.rate = 8000
-        self.channels = 1
 
 
 class Brain:
@@ -78,8 +74,7 @@ class Brain:
     def _on_vad(self, headers: dict[str, str]) -> None:
         uuid = headers.get("Call-UUID", "")
         state = headers.get("Vad-State", "")
-        seq = _int(headers.get("Seq"))
-        if not uuid or seq is None or not state:
+        if not uuid or not state:
             return
         with self._lock:
             call = self.calls.get(uuid)
@@ -87,36 +82,14 @@ class Brain:
                 # barge-in: cancel any in-flight TTS pipeline for this call.
                 if call is not None:
                     call.cancel.set()
-                call = _Call()
-                call.start_seq = seq
-                self.calls[uuid] = call
-                log.info("start-talking  %s  seq=%d", uuid, seq)
+                self.calls[uuid] = _Call()
+                log.info("start-talking  %s", uuid)
             elif state == "stop-talking":
-                if call is None or call.start_seq is None:
-                    return
-                # The VAD module fires uplink_pcm before vad on each frame, so the
-                # stop frame's PCM (Seq==seq) is already buffered.
-                chunks = [c for c in call.chunks if call.start_seq <= c[0] <= seq]
-                chunks.sort(key=lambda c: c[0])
-                pcm = b"".join(c[1] for c in chunks)
-                rate, channels, cancel = call.rate, call.channels, call.cancel
-                call.chunks = []  # reset for the next utterance on this call
-                call.start_seq = None
-                log.info(
-                    "stop-talking   %s  seq=%d  → %d bytes PCM (%d Hz) → pipeline",
-                    uuid, seq, len(pcm), rate,
-                )
-                threading.Thread(
-                    target=self._run_pipeline,
-                    args=(uuid, pcm, rate, channels, cancel),
-                    name=f"brain-{uuid[:8]}",
-                    daemon=True,
-                ).start()
+                log.info("stop-talking   %s  (segment follows)", uuid)
 
     def _on_uplink(self, headers: dict[str, str], body: bytes) -> None:
         uuid = headers.get("Call-UUID", "")
-        seq = _int(headers.get("Seq"))
-        if not uuid or seq is None:
+        if not uuid:
             return
         rate = _int(headers.get("Sample-Rate")) or 8000
         channels = _int(headers.get("Channels")) or 1
@@ -130,9 +103,17 @@ class Brain:
             if call is None:
                 call = _Call()
                 self.calls[uuid] = call
-            call.rate = rate
-            call.channels = channels
-            call.chunks.append((seq, pcm))
+            cancel = call.cancel
+        log.info(
+            "uplink_pcm segment  %s  → %d bytes PCM (%d Hz) → pipeline",
+            uuid, len(pcm), rate,
+        )
+        threading.Thread(
+            target=self._run_pipeline,
+            args=(uuid, pcm, rate, channels, cancel),
+            name=f"brain-{uuid[:8]}",
+            daemon=True,
+        ).start()
 
     def _run_pipeline(
         self,

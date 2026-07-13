@@ -25,12 +25,13 @@ over ESL — fully decoupled from the voice media path.
 | event (ESL CUSTOM subclass) | dir | headers | body |
 |---|---|---|---|
 | `fswtch::vad` | VAD→brain | `Call-UUID` `Vad-State`(start-talking\|stop-talking) `Seq` | — |
-| `fswtch::uplink_pcm` | VAD→brain | `Call-UUID` `Seq` `Sample-Rate` `Channels` `Bits-Per-Sample`(16) `Sample-Format`(S16LE) `Samples` | base64 S16LE PCM |
+| `fswtch::uplink_pcm` | VAD→brain | `Call-UUID` `Seq` `Sample-Rate` `Channels`(1) `Bits-Per-Sample`(16) `Sample-Format`(S16LE) `Samples` | base64 S16LE PCM (whole segment, mono) |
 | `fswtch::downlink_pcm` | brain→VAD | `Target-UUID` `Sample-Rate` `Channels` `Bits-Per-Sample` `Sample-Format` | base64 S16LE TTS PCM |
 
-`vad` fires only on speech boundaries; `uplink_pcm` fires on every talking-active frame.
-On a start/stop frame both fire with the **same `Seq`**. The VAD module also flushes its
-play queue on `start-talking` (barge-in: caller's speech stops any playing TTS).
+`vad` fires only on speech boundaries. `uplink_pcm` fires **once per utterance** (on
+`stop-talking`) — the whole snapped segment (pre-roll onset recovery + trailing-silence
+trim via `snap_segments`), mono. The VAD module also flushes its play queue on
+`start-talking` (barge-in: caller's speech stops any playing TTS).
 
 ## Run
 

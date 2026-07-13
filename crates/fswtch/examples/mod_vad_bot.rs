@@ -40,7 +40,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use fswtch::{
     CallDirection, CallerProfile, ChannelState, EndpointInterfaceRef, EndpointIoBuilder,
     EndpointIoRoutines, Frame, FrameMut, OriginateFlag, OutgoingResult, SUCCESS, Session,
-    StateHandlerTable, Status, Vad, VadState, request_session,
+    SpeechSegment, StateHandlerTable, Status, Vad, VadState, request_session, snap_segments,
 };
 
 const VAD_SUBCLASS: &str = "fswtch::vad";
@@ -77,6 +77,12 @@ struct CallState {
     seq: u64,
     /// Scratch for the mono downmix fed to `Vad::process` (reused per frame; no per-frame alloc).
     mono_scratch: Vec<i16>,
+    /// Pre-roll buffer (silence before speech onset) — recovers what hysteresis truncates.
+    pre_roll: VecDeque<i16>,
+    /// Accumulated utterance PCM (pre_roll + talking frames) during speech.
+    speech_buffer: Vec<i16>,
+    /// Cap for `pre_roll` in samples (300 ms at the pipeline rate).
+    pre_roll_max: usize,
 }
 
 // SAFETY: `CallState`'s only `!Send` field is `vad: Vad`. `Vad` carries a `PhantomData<*const ()>`
@@ -199,6 +205,9 @@ impl EndpointIoRoutines for VadBot {
             channels: CHANNELS,
             seq: 0,
             mono_scratch: Vec::new(),
+            pre_roll: VecDeque::new(),
+            speech_buffer: Vec::new(),
+            pre_roll_max: (PIPELINE_RATE * 300 / 1000) as usize,
         }));
         if let Ok(mut reg) = REGISTRY.lock() {
             reg.insert(uuid.clone(), state);
@@ -212,10 +221,12 @@ impl EndpointIoRoutines for VadBot {
     }
 
     /// FreeSWITCH writes the CALLER'S audio TO this endpoint. VAD runs here on a mono downmix.
-    /// On every talking-active frame we fire `fswtch::uplink_pcm` (the frame's ORIGINAL interleaved
-    /// PCM, base64 — not the downmix — with the real `Channels` header). On speech BOUNDARIES we
-    /// also fire `fswtch::vad` (start-talking/stop-talking, no body). On `start-talking` we flush
-    /// the TTS queue (barge-in: the caller's speech stops any playing TTS). The frame is read-only.
+    /// During silence we keep a `pre_roll` buffer (onset recovery). On `start-talking` we drain
+    /// pre_roll into `speech_buffer` (recovering the truncated onset) + flush TTS (barge-in) +
+    /// fire `fswtch::vad`. During `talking` we accumulate. On `stop-talking` we `snap_segments`
+    /// the accumulated buffer (trim trailing silence) + fire ONE `fswtch::uplink_pcm` with the
+    /// whole snapped segment (base64). Per-utterance, not per-frame — fewer events, cleaner
+    /// boundaries for the downstream ASR. The frame is read-only.
     fn write_frame(session: &Session, frame: &Frame) -> Status {
         let Some(uuid) = session.channel().and_then(|c| c.uuid()) else {
             return SUCCESS;
@@ -228,15 +239,12 @@ impl EndpointIoRoutines for VadBot {
             return SUCCESS; // no state (outgoing_channel didn't register) — nothing to VAD
         };
 
-        // Per-call lock: mono downmix + VAD + seq; on start-talking, clear TTS (barge-in).
-        let (vad_label, seq, cleared_tts) = {
+        // Per-call lock: downmix + VAD + accumulate; on stop-talking, take the speech_buffer.
+        let (vad_label, seq, cleared_tts, speech_buffer) = {
             let mut guard = match state.lock() {
                 Ok(g) => g,
                 Err(_) => return SUCCESS, // poisoned: skip this frame
             };
-            // Deref to a direct `&mut CallState` so disjoint field borrows (`vad` shared,
-            // `mono_scratch` mut) work — through `MutexGuard`'s Deref/DerefMut the checker can't
-            // split them.
             let s = &mut *guard;
             s.mono_scratch.clear();
             if channels == 1 {
@@ -248,49 +256,91 @@ impl EndpointIoRoutines for VadBot {
                     s.mono_scratch.push((sum / channels as i64) as i16);
                 }
             }
-            // `vad` fires only on boundaries; `talking` is implicit between start and stop.
-            let label = match s.vad.process(&mut s.mono_scratch) {
+            let st = s.vad.process(&mut s.mono_scratch);
+            let label = match st {
                 VadState::START_TALKING => Some("start-talking"),
                 VadState::STOP_TALKING => Some("stop-talking"),
                 VadState::TALKING => None,
-                _ => return SUCCESS, // NONE / ERROR: nothing forwarded
+                _ => {
+                    // NONE / ERROR: push to pre_roll (onset recovery) + don't fire.
+                    s.pre_roll.extend(s.mono_scratch.iter().copied());
+                    while s.pre_roll.len() > s.pre_roll_max {
+                        s.pre_roll.pop_front();
+                    }
+                    return SUCCESS;
+                }
             };
             s.seq = s.seq.wrapping_add(1);
-            // Barge-in: caller started talking → flush queued TTS so the speech isn't drowned.
-            let cleared = if let Some("start-talking") = label {
-                let n = s.tts_queue.len();
-                s.tts_queue.clear();
-                n
-            } else {
-                0
-            };
-            (label, s.seq, cleared)
+            match label {
+                Some("start-talking") => {
+                    // Onset recovery: drain pre_roll into speech_buffer + this frame.
+                    s.speech_buffer.clear();
+                    let pre_roll: Vec<i16> = s.pre_roll.drain(..).collect();
+                    s.speech_buffer.extend(pre_roll);
+                    s.speech_buffer.extend(s.mono_scratch.iter().copied());
+                    // Barge-in: flush queued TTS so the caller's speech isn't drowned.
+                    let cleared = s.tts_queue.len();
+                    s.tts_queue.clear();
+                    (label, s.seq, cleared, Vec::new())
+                }
+                Some("stop-talking") => {
+                    s.speech_buffer.extend(s.mono_scratch.iter().copied());
+                    // Take the buffer out — snap + fire outside the lock.
+                    let buf = std::mem::take(&mut s.speech_buffer);
+                    (label, s.seq, 0, buf)
+                }
+                _ => {
+                    // TALKING: accumulate.
+                    s.speech_buffer.extend(s.mono_scratch.iter().copied());
+                    (label, s.seq, 0, Vec::new())
+                }
+            }
         };
 
-        // Lock released: base64-encode + fire outside the per-call lock.
+        // Lock released: fire vad (start/stop) + snap + fire uplink_pcm (segment) outside the lock.
         if cleared_tts > 0 {
             fswtch::log_info(
                 "mod_vad_bot",
                 format!("barge-in on {uuid}: cleared {cleared_tts} TTS samples"),
             );
         }
-        let body = STANDARD.encode(frame.bytes());
-        // uplink_pcm: every talking-active frame (start/talking/stop) carries the PCM.
-        if let Err(error) = fire_uplink_pcm(
-            &uuid,
-            seq,
-            frame.rate(),
-            frame.channels(),
-            frame.samples(),
-            &body,
-        ) {
-            fswtch::log_error("mod_vad_bot", format!("fire uplink_pcm failed: {error}"));
-        }
-        // vad: only on transitions (start/stop) — lightweight signaling, no PCM.
         if let Some(label) = vad_label
             && let Err(error) = fire_vad(&uuid, label, seq)
         {
             fswtch::log_error("mod_vad_bot", format!("fire vad failed: {error}"));
+        }
+        // On stop-talking: snap the accumulated utterance + fire ONE uplink_pcm (per-segment).
+        if !speech_buffer.is_empty() {
+            let frame_samples = (PIPELINE_RATE * FRAME_MS / 1000) as usize;
+            let mut segs = vec![SpeechSegment {
+                start_sample: 0,
+                end_sample: speech_buffer.len(),
+            }];
+            snap_segments(&speech_buffer, frame_samples, &mut segs);
+            let segment = segs
+                .first()
+                .map(|seg| seg.samples(&speech_buffer).to_vec())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| speech_buffer.clone());
+            fswtch::log_info(
+                "mod_vad_bot",
+                format!(
+                    "uplink_pcm segment on {uuid}: {} samples ({:.1}s)",
+                    segment.len(),
+                    segment.len() as f32 / PIPELINE_RATE as f32
+                ),
+            );
+            let body = STANDARD.encode(
+                segment
+                    .iter()
+                    .flat_map(|&s| s.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+            );
+            if let Err(error) =
+                fire_uplink_pcm(&uuid, seq, PIPELINE_RATE, 1, segment.len() as u32, &body)
+            {
+                fswtch::log_error("mod_vad_bot", format!("fire uplink_pcm failed: {error}"));
+            }
         }
         SUCCESS
     }
