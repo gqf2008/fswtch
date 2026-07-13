@@ -169,9 +169,12 @@ impl EchoCanceller3 {
     /// Creates a canceller with the default AEC3 config (neural estimator disabled) —
     /// equivalent to [`EchoCanceller3::with_config`]`(&Config::default(), …)`.
     ///
-    /// `sample_rate_hz` must be 8000/16000/48000 (16 kHz recommended; 32 kHz needs the QMF shim,
-    /// not yet wired). Returns [`Aec3Error::InvalidArg`] on bad args, [`Aec3Error::CreateFailed`]
-    /// if the C++ allocation/construction fails.
+    /// `sample_rate_hz` must be 16000 or 48000 (16 kHz recommended; 32 kHz needs the QMF shim,
+    /// not yet wired). **8 kHz is NOT supported** — WebRTC's `NumBandsForRate(8000) = 0` and
+    /// `ValidFullBandRate(8000) = false`, so the AEC3 would construct with zero internal bands
+    /// and crash on the first `analyze_render`/`process_capture` call (the `RTC_DCHECK`s that
+    /// would catch this are compiled out in Release). Returns [`Aec3Error::InvalidArg`] on bad
+    /// args, [`Aec3Error::CreateFailed`] if the C++ allocation/construction fails.
     pub fn new(
         sample_rate_hz: i32,
         num_render_channels: usize,
@@ -193,7 +196,7 @@ impl EchoCanceller3 {
         num_render_channels: usize,
         num_capture_channels: usize,
     ) -> Result<Self> {
-        if !matches!(sample_rate_hz, 8000 | 16000 | 48000)
+        if !matches!(sample_rate_hz, 16000 | 48000)
             || num_render_channels == 0
             || num_capture_channels == 0
         {
@@ -395,6 +398,13 @@ mod tests {
         // 32 kHz needs the QMF shim (not wired) — must be rejected, not silently misbehave.
         assert_eq!(
             EchoCanceller3::new(32_000, CH, CH).unwrap_err(),
+            Aec3Error::InvalidArg
+        );
+        // 8 kHz is rejected: WebRTC's NumBandsForRate(8000) = 0, so the AEC3 would construct
+        // with zero internal bands and crash on the first process call. The RTC_DCHECKs that
+        // guard this are compiled out in Release, so the Rust wrapper must reject 8 kHz itself.
+        assert_eq!(
+            EchoCanceller3::new(8_000, CH, CH).unwrap_err(),
             Aec3Error::InvalidArg
         );
     }

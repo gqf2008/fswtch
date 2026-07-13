@@ -51,8 +51,10 @@ const fswtch_aec3_config_t* fswtch_aec3_default_config(void);
  * neural residual echo estimator is disabled (neural=nullptr -> traditional
  * residual-echo-estimator path).
  *
- * `sample_rate_hz` must be 8000/16000/48000 (16 kHz recommended; 32 kHz needs
- * the QMF shim, not yet wired). Returns NULL on allocation failure or bad args.
+ * `sample_rate_hz` must be 16000 or 48000 (16 kHz recommended; 32 kHz needs
+ * the QMF shim, not yet wired; 8 kHz is NOT supported — NumBandsForRate(8000)=0
+ * would construct zero-band internals and crash on first process call). Returns
+ * NULL on allocation failure or bad args.
  */
 fswtch_aec3_t* fswtch_aec3_create(const fswtch_aec3_config_t* config,
                                   int32_t sample_rate_hz,
