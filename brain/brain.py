@@ -82,11 +82,16 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
         a_uuid = ch.get("Unique-ID", "")
         log.info("call connected: A-leg %s", a_uuid or "?")
 
-        # 2. Answer (fire-and-forget: sendmsg answer's command/reply blocks on this
-        #    FS build, same as park), subscribe to events, bridge to the VAD endpoint.
-        session._send(b"sendmsg\ncall-command: execute\nexecute-app-name: answer\n\n")
+        # 2. Subscribe → bridge → answer (in this order so VAD is running BEFORE
+        #    the caller hears "answered" — no early speech is lost).
+        #    `sendmsg answer` doesn't return command/reply on this FS build, so
+        #    use `api uuid_answer` instead (API commands return immediately).
         session.send_cmd("event plain ALL")
         reply = session.send_app("bridge", "fswtch_vad_detect/1000")
+        if not reply.get("Reply-Text", "").startswith("+OK"):
+            log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
+            return
+        session.send_cmd(f"api uuid_answer {a_uuid}")
         if not reply.get("Reply-Text", "").startswith("+OK"):
             log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
             return

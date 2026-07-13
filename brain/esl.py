@@ -103,12 +103,31 @@ class ESLSession:
     # ── call control ────────────────────────────────────────────────────────
 
     def send_cmd(self, cmd: str) -> dict[str, str]:
-        """Send an ESL command (e.g. ``"event plain ALL"``, ``"park"``) and read
-        the ``command/reply``. Returns the reply headers (including
-        ``Reply-Text``, which starts with ``+OK`` on success).
+        """Send an ESL command (e.g. ``"event plain ALL"``, ``"api uuid_answer <uuid>"``)
+        and read the reply. Returns the reply headers (including ``Reply-Text`` for
+        ``command/reply`` or ``_body`` for ``api/response``).
+
+        Handles both ``Content-Type: command/reply`` (no body) and
+        ``Content-Type: api/response`` (has ``Content-Length`` body) — draining
+        the body so subsequent reads aren't desynchronized.
         """
         self._send(f"{cmd}\n\n".encode())
-        return _read_headers(self.sock, self._buf)
+        headers = _read_headers(self.sock, self._buf)
+        # `api` responses carry a Content-Length body; drain it to keep the
+        # buffer aligned for the next read.
+        if (n := headers.get("Content-Length")) is not None:
+            n = int(n)
+            while len(b"".join(self._buf)) < n:
+                chunk = self.sock.recv(4096)
+                if not chunk:
+                    raise ESLError("ESL socket closed mid-body")
+                self._buf.append(chunk)
+            joined = b"".join(self._buf)
+            body = joined[:n]
+            self._buf.clear()
+            self._buf.append(joined[n:])
+            headers["_body"] = body.decode(errors="replace").strip()
+        return headers
 
     def send_app(self, app: str, arg: str = "") -> dict[str, str]:
         """Execute a dialplan application on the channel via ``sendmsg``.
