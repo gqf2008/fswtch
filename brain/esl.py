@@ -85,22 +85,43 @@ class ESLSession:
     # ── channel data (received once on connect) ─────────────────────────────
 
     def read_channel_data(self) -> dict[str, str]:
-        """Read the block of headers FreeSWITCH sends on connect.
+        """Send the ``connect`` command and read the ``CHANNEL_DATA`` event FS
+        responds with.
 
-        Contains the A-leg's ``Unique-ID``, ``Channel-Name``, and all channel
-        variables as ``Variable_<name>`` headers (e.g. ``Variable_FSWTCH_NS``).
+        FreeSWITCH's outbound socket protocol requires the brain to send
+        ``connect\\n\\n`` after the TCP connection is established; FS then sends
+        a ``CHANNEL_DATA`` event as raw ``Key: Value\\n`` lines (URL-encoded,
+        terminated by a blank line — no ``Content-Type``/``Content-Length``
+        framing). Contains the A-leg's ``Unique-ID``, ``Channel-Name``, and all
+        channel variables (``Variable_<name>`` headers).
         """
-        return _read_headers(self.sock, self._buf)
+        self._send(b"connect\n\n")
+        raw = _read_headers(self.sock, self._buf)
+        # ESL URL-encodes event header values (e.g. `::` → `%3A%3A`).
+        return {k: urllib.parse.unquote(v) for k, v in raw.items()}
 
     # ── call control ────────────────────────────────────────────────────────
 
     def send_cmd(self, cmd: str) -> dict[str, str]:
-        """Send a command (e.g. ``"park"``, ``"bridge fswtch_vad_bot/1000"``)
-        and read the ``command/reply``. Returns the reply headers (including
+        """Send an ESL command (e.g. ``"event plain ALL"``, ``"park"``) and read
+        the ``command/reply``. Returns the reply headers (including
         ``Reply-Text``, which starts with ``+OK`` on success).
         """
         self._send(f"{cmd}\n\n".encode())
         return _read_headers(self.sock, self._buf)
+
+    def send_app(self, app: str, arg: str = "") -> dict[str, str]:
+        """Execute a dialplan application on the channel via ``sendmsg``.
+
+        Use this for applications that aren't direct ESL commands (e.g.
+        ``bridge``, ``playback``). ``park`` and ``event`` work as direct
+        [`send_cmd`](#brain.esl.ESLSession.send_cmd) calls, but dialplan
+        applications need ``sendmsg`` framing in outbound socket mode.
+        """
+        lines = ["sendmsg", "call-command: execute", f"execute-app-name: {app}"]
+        if arg:
+            lines.append(f"execute-app-arg: {arg}")
+        return self.send_cmd("\n".join(lines))
 
     # ── events ──────────────────────────────────────────────────────────────
 

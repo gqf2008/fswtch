@@ -75,12 +75,14 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
         a_uuid = ch.get("Unique-ID", "")
         log.info("call connected: A-leg %s", a_uuid or "?")
 
-        # 2. Subscribe to events + park + bridge to the VAD endpoint.
+        # 2. Subscribe to events + bridge to the VAD endpoint.
         #    `event plain ALL` + client-side Event-Subclass filter (this FS build's
         #    `event plain CUSTOM` doesn't deliver CUSTOM events — only `ALL` does).
+        #    No `park` before `bridge`: park moves the channel to CS_PARK, which
+        #    blocks the subsequent bridge sendmsg. The `bridge` app itself keeps
+        #    the channel alive while originating the B-leg.
         session.send_cmd("event plain ALL")
-        session.send_cmd("park")
-        reply = session.send_cmd("bridge fswtch_vad_bot/1000")
+        reply = session.send_app("bridge", "fswtch_vad_bot/1000")
         if not reply.get("Reply-Text", "").startswith("+OK"):
             log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
             return
