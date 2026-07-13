@@ -68,25 +68,33 @@ def serve(host: str, port: int, pipeline: Pipeline) -> None:
 
 
 def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
-    """Per-call handler: subscribe, bridge to the VAD endpoint, process events.
-    The ``socket`` app blocks the dialplan (even in async mode on this FS build),
-    so the brain must send ``sendmsg bridge`` itself — the dialplan can't do it."""
+    """Per-call handler: subscribe to events, process VAD + TTS.
+
+    In **media bug mode** (``FSWTCH_MODE=bug`` in the dialplan) the
+    ``fswtch_vad_detect`` application already attached a media bug to the A-leg;
+    the brain only subscribes + exchanges events — no ``sendmsg bridge`` needed.
+
+    In **endpoint mode** (no ``FSWTCH_MODE``, or ``=endpoint``) the brain sends
+    ``sendmsg bridge fswtch_vad_detect/1000`` to create the B-leg (endpoint)."""
     try:
-        # 1. Channel data (A-leg Unique-ID, Variable_* APM switches, …).
+        # 1. Channel data (A-leg Unique-ID, variable_* APM switches, FSWTCH_MODE, …).
         ch = session.read_channel_data()
         a_uuid = ch.get("Unique-ID", "")
-        log.info("call connected: A-leg %s", a_uuid or "?")
+        # ESL `event plain` uses lowercase `variable_` prefix for channel variables.
+        mode = ch.get("variable_FSWTCH_MODE", "")
+        log.info("call connected: A-leg %s (mode=%s)", a_uuid or "?", mode or "endpoint")
 
-        # 2. Subscribe to events + bridge to the VAD endpoint.
-        #    `event plain ALL` + client-side Event-Subclass filter (this FS build's
-        #    `event plain CUSTOM` doesn't deliver CUSTOM events — only `ALL` does).
-        #    `bridge` needs sendmsg (not a direct ESL command); no `park` before it
-        #    (park moves to CS_PARK, blocking the bridge sendmsg).
+        # 2. Subscribe to events. `event plain ALL` + client-side Event-Subclass filter
+        #    (this FS build's `event plain CUSTOM` doesn't deliver CUSTOM events).
         session.send_cmd("event plain ALL")
-        reply = session.send_app("bridge", "fswtch_vad_detect/1000")
-        if not reply.get("Reply-Text", "").startswith("+OK"):
-            log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
-            return
+
+        # In endpoint mode, bridge to the VAD endpoint (creates the B-leg). In media
+        # bug mode the dialplan's `fswtch_vad_detect` app already attached the bug.
+        if mode != "bug":
+            reply = session.send_app("bridge", "fswtch_vad_detect/1000")
+            if not reply.get("Reply-Text", "").startswith("+OK"):
+                log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
+                return
 
         # 3. Event loop — per-call, no global state.
         cancel = threading.Event()
