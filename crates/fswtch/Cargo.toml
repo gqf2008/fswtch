@@ -18,6 +18,7 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "time"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 base64 = "0.22"
+fswtch-apm = { path = "../fswtch-apm" }
 
 [features]
 default = ["bundled"]

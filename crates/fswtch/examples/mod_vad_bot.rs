@@ -42,6 +42,7 @@ use fswtch::{
     EndpointIoRoutines, Frame, FrameMut, OriginateFlag, OutgoingResult, SUCCESS, Session,
     SpeechSegment, StateHandlerTable, Status, Vad, VadState, request_session, snap_segments,
 };
+use fswtch_apm::{EchoCanceller3, GainController2, HighPassFilter, NoiseSuppressor, NsLevel};
 
 const VAD_SUBCLASS: &str = "fswtch::vad";
 const UPLINK_SUBCLASS: &str = "fswtch::uplink_pcm";
@@ -52,6 +53,8 @@ const PLAY_QUEUE_MAX_SECS: u32 = 10;
 const PIPELINE_RATE: u32 = 8000;
 const FRAME_MS: u32 = 20;
 const CHANNELS: u32 = 1;
+/// APM 10 ms chunk: AEC3/NS/AGC2/HPF each process `rate/100 * channels` samples per call.
+const APM_CHUNK: usize = (PIPELINE_RATE as usize / 100) * CHANNELS as usize;
 /// FreeSWITCH `switch_signal_t` values: NONE=0, KILL=1, XFER=2, BREAK=3. Only KILL ends the call.
 const SIG_KILL: i32 = 1;
 
@@ -83,13 +86,20 @@ struct CallState {
     speech_buffer: Vec<i16>,
     /// Cap for `pre_roll` in samples (300 ms at the pipeline rate).
     pre_roll_max: usize,
+    /// APM handles — `None` = disabled (passthrough). Controlled by channel variables
+    /// `FSWTCH_AEC` / `FSWTCH_NS` / `FSWTCH_AGC2` / `FSWTCH_HPF` set in the dialplan.
+    aec: Option<EchoCanceller3>,
+    ns: Option<NoiseSuppressor>,
+    agc2: Option<GainController2>,
+    hpf: Option<HighPassFilter>,
 }
 
-// SAFETY: `CallState`'s only `!Send` field is `vad: Vad`. `Vad` carries a `PhantomData<*const ()>`
-// (its `process(&self)` mutates internal state, marking it `!Sync`) and a `NonNull` to an OWNED
-// `switch_vad_t` (allocated in `Vad::new`, freed in `Drop`). Moving it between threads is sound:
-// the `switch_vad_t` is exclusively owned and every access happens under the per-call `Mutex`.
-// All other fields (`VecDeque`, `Vec`, `u32`, `u64`, `String`) are `Send`, so `CallState: Send`.
+// SAFETY: `CallState`'s `!Send` fields are `vad: Vad` and the four APM handles
+// (`EchoCanceller3`, `NoiseSuppressor`, `GainController2`, `HighPassFilter`). Each carries a
+// `PhantomData<*const ()>` (its `process(&self)` mutates internal state, marking it `!Sync`) and a
+// `NonNull` to an OWNED C/C++ object (allocated in `new`, freed in `Drop`). Moving them between
+// threads is sound: each object is exclusively owned and every access happens under the per-call
+// `Mutex`. All other fields (`VecDeque`, `Vec`, `u32`, `u64`) are `Send`, so `CallState: Send`.
 unsafe impl Send for CallState {}
 
 static REGISTRY: LazyLock<Mutex<HashMap<String, Arc<Mutex<CallState>>>>> =
@@ -198,6 +208,61 @@ impl EndpointIoRoutines for VadBot {
                 return OutgoingResult::refused();
             }
         };
+        // APM switches from channel variables (set via dialplan `export` on the A-leg).
+        let aec_enabled = channel
+            .variable("FSWTCH_AEC")
+            .ok()
+            .flatten()
+            .is_some_and(|v| v == "true" || v == "1");
+        let ns_level =
+            channel
+                .variable("FSWTCH_NS")
+                .ok()
+                .flatten()
+                .and_then(|v| match v.as_str() {
+                    "6" => Some(NsLevel::Db6),
+                    "12" => Some(NsLevel::Db12),
+                    "18" => Some(NsLevel::Db18),
+                    "21" => Some(NsLevel::Db21),
+                    _ => None,
+                });
+        let agc2_gain = channel
+            .variable("FSWTCH_AGC2")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<f32>().ok());
+        let hpf_enabled = channel
+            .variable("FSWTCH_HPF")
+            .ok()
+            .flatten()
+            .is_some_and(|v| v == "true" || v == "1");
+        let aec = if aec_enabled {
+            EchoCanceller3::new(PIPELINE_RATE as i32, CHANNELS as usize, CHANNELS as usize).ok()
+        } else {
+            None
+        };
+        let ns = ns_level
+            .and_then(|l| NoiseSuppressor::new(l, PIPELINE_RATE as i32, CHANNELS as usize).ok());
+        let agc2 = agc2_gain.and_then(|g| {
+            GainController2::new(g, true, PIPELINE_RATE as i32, CHANNELS as usize).ok()
+        });
+        let hpf = if hpf_enabled {
+            HighPassFilter::new(PIPELINE_RATE as i32, CHANNELS as usize).ok()
+        } else {
+            None
+        };
+        if aec.is_some() || ns.is_some() || agc2.is_some() || hpf.is_some() {
+            fswtch::log_info(
+                "mod_vad_bot",
+                format!(
+                    "APM enabled on {uuid}: aec={} ns={} agc2={} hpf={}",
+                    aec.is_some(),
+                    ns.is_some(),
+                    agc2.is_some(),
+                    hpf.is_some()
+                ),
+            );
+        }
         let state = Arc::new(Mutex::new(CallState {
             vad,
             tts_queue: VecDeque::new(),
@@ -208,6 +273,10 @@ impl EndpointIoRoutines for VadBot {
             pre_roll: VecDeque::new(),
             speech_buffer: Vec::new(),
             pre_roll_max: (PIPELINE_RATE * 300 / 1000) as usize,
+            aec,
+            ns,
+            agc2,
+            hpf,
         }));
         if let Ok(mut reg) = REGISTRY.lock() {
             reg.insert(uuid.clone(), state);
@@ -254,6 +323,28 @@ impl EndpointIoRoutines for VadBot {
                 for chunk in pcm.chunks_exact(channels) {
                     let sum: i64 = chunk.iter().map(|&x| x as i64).sum();
                     s.mono_scratch.push((sum / channels as i64) as i16);
+                }
+            }
+            // APM capture chain: HPF → AEC3.process_capture → NS → AGC2.
+            // Each stage mutates `mono_scratch` in place, split into 10 ms chunks (80 samples).
+            // Only enabled stages run (None = passthrough). VAD then sees the cleaned signal.
+            for i in (0..s.mono_scratch.len()).step_by(APM_CHUNK) {
+                let end = (i + APM_CHUNK).min(s.mono_scratch.len());
+                if end - i != APM_CHUNK {
+                    break;
+                }
+                let half = &mut s.mono_scratch[i..end];
+                if let Some(h) = s.hpf.as_mut() {
+                    let _ = h.process(half, CHANNELS as usize);
+                }
+                if let Some(a) = s.aec.as_mut() {
+                    let _ = a.process_capture(half, CHANNELS as usize, false);
+                }
+                if let Some(n) = s.ns.as_mut() {
+                    let _ = n.process(half, CHANNELS as usize);
+                }
+                if let Some(g) = s.agc2.as_mut() {
+                    let _ = g.process(half, CHANNELS as usize);
                 }
             }
             let st = s.vad.process(&mut s.mono_scratch);
@@ -365,9 +456,17 @@ impl EndpointIoRoutines for VadBot {
         };
         match state.lock() {
             Ok(mut s) => {
-                let q = &mut s.tts_queue;
                 for slot in buf.iter_mut() {
-                    *slot = q.pop_front().unwrap_or(0); // underrun → silence
+                    *slot = s.tts_queue.pop_front().unwrap_or(0); // underrun → silence
+                }
+                // Feed the played TTS (far-end render) to AEC3 for echo cancellation.
+                // The same AEC3 instance is used in `write_frame`'s `process_capture`.
+                if let Some(aec) = s.aec.as_mut() {
+                    for chunk in buf.chunks(APM_CHUNK) {
+                        if chunk.len() == APM_CHUNK {
+                            let _ = aec.analyze_render(chunk, CHANNELS as usize);
+                        }
+                    }
                 }
             }
             Err(_) => buf.fill(0), // poisoned → silence
