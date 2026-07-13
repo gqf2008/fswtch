@@ -1,6 +1,6 @@
 # fswtch VAD-module Python brain
 
-External **business brain** for the `mod_vad_bot` fswtch VAD module. Re-implements
+External **business brain** for the `mod_vad_detect` fswtch VAD module. Re-implements
 ai-agent-seat's role (the brain / ASR-LLM-TTS orchestration) as a plain Python program
 over ESL — fully decoupled from the voice media path.
 
@@ -12,19 +12,19 @@ the dialplan `socket` application. Each call gets its own connection + handler t
 
 ```
 ┌──────────────────────────────────┐         ┌──────────────────────────────┐
-│ FreeSWITCH  (mod_vad_bot .so)   │  per-call│  Python brain (TCP server)    │
+│ FreeSWITCH  (mod_vad_detect .so)   │  per-call│  Python brain (TCP server)    │
 │  dialplan: socket host:port full │ ───────► │  accept() → handle_call()     │
-│  A-leg parks; brain bridges to   │  ESL     │  park + bridge fswtch_vad_bot │
-│  fswtch_vad_bot/1000 (B-leg)     │ ◄──────► │  recv fswtch::vad/uplink_pcm  │
+│  A-leg parks; brain bridges to   │  ESL     │  park + bridge fswtch_vad_detect │
+│  fswtch_vad_detect/1000 (B-leg)     │ ◄──────► │  recv fswtch::vad/uplink_pcm  │
 │  VAD local + media (read/write)  │  events  │  ASR / LLM / TTS (Pipeline)   │
 └──────────────────────────────────┘         └──────────────────────────────┘
 ```
 
-- **VAD module** (`crates/fswtch/examples/mod_vad_bot.rs`, an FS endpoint): VAD runs
+- **VAD module** (`crates/fswtch/examples/mod_vad_detect.rs`, an FS endpoint): VAD runs
   locally in `write_frame`; the bot is the call terminus. It ferries audio + VAD state
   as ESL events, and plays TTS back. Reusable, brain-agnostic.
 - **Python brain** (this package): listens for outbound ESL connections, parks the call,
-  bridges to `fswtch_vad_bot/1000`, subscribes to VAD/uplink events, buffers utterances,
+  bridges to `fswtch_vad_detect/1000`, subscribes to VAD/uplink events, buffers utterances,
   runs the business pipeline, sends TTS back. Brain-agnostic module ↔ any brain.
 
 ## Event protocol
@@ -44,10 +44,10 @@ trim via `snap_segments`), mono. The VAD module also flushes its play queue on
 
 ```sh
 # 1. load the VAD module in FreeSWITCH:
-fs_cli -x 'load mod_vad_bot'
+fs_cli -x 'load mod_vad_detect'
 
 # 2. dialplan: export APM switches, then socket to the brain.
-#    (the fswtch_vad_bot_test extension on 7782 already does this)
+#    (the fswtch_vad_detect_test extension on 7782 already does this)
 #
 #    <action application="export" data="FSWTCH_NS=12"/>
 #    <action application="export" data="FSWTCH_AGC2=6"/>
@@ -58,7 +58,7 @@ python3 -m brain.brain
 #   → listens on 127.0.0.1:8084 for outbound ESL connections.
 
 # 4. dial 7782; FS connects to the brain, which parks + bridges to
-#    fswtch_vad_bot/1000. Speak; the brain beeps back (StubPipeline).
+#    fswtch_vad_detect/1000. Speak; the brain beeps back (StubPipeline).
 #    Barge-in: speak again mid-beep → the VAD module flushes + the brain
 #    cancels the in-flight reply.
 ```

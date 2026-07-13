@@ -68,7 +68,9 @@ def serve(host: str, port: int, pipeline: Pipeline) -> None:
 
 
 def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
-    """Per-call handler: subscribe, bridge to the VAD endpoint, process events."""
+    """Per-call handler: subscribe, bridge to the VAD endpoint, process events.
+    The ``socket`` app blocks the dialplan (even in async mode on this FS build),
+    so the brain must send ``sendmsg bridge`` itself — the dialplan can't do it."""
     try:
         # 1. Channel data (A-leg Unique-ID, Variable_* APM switches, …).
         ch = session.read_channel_data()
@@ -78,11 +80,10 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
         # 2. Subscribe to events + bridge to the VAD endpoint.
         #    `event plain ALL` + client-side Event-Subclass filter (this FS build's
         #    `event plain CUSTOM` doesn't deliver CUSTOM events — only `ALL` does).
-        #    No `park` before `bridge`: park moves the channel to CS_PARK, which
-        #    blocks the subsequent bridge sendmsg. The `bridge` app itself keeps
-        #    the channel alive while originating the B-leg.
+        #    `bridge` needs sendmsg (not a direct ESL command); no `park` before it
+        #    (park moves to CS_PARK, blocking the bridge sendmsg).
         session.send_cmd("event plain ALL")
-        reply = session.send_app("bridge", "fswtch_vad_bot/1000")
+        reply = session.send_app("bridge", "fswtch_vad_detect/1000")
         if not reply.get("Reply-Text", "").startswith("+OK"):
             log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
             return
@@ -94,8 +95,8 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
         while True:
             try:
                 headers, body = session.recv_event()
-            except ESLError:
-                break  # socket closed = call ended
+            except (ESLError, OSError):
+                break  # socket closed/reset = call ended (normal hangup)
 
             sub = headers.get("Event-Subclass")
             if sub == VAD:
@@ -144,7 +145,11 @@ def _on_uplink(
     try:
         pcm = base64.b64decode(body)
     except Exception as e:
-        log.warning("uplink_pcm decode failed on %s: %s", uuid, e)
+        log.warning(
+            "uplink_pcm decode failed on %s: %s (body_len=%d head=%r tail=%r)",
+            uuid, e, len(body),
+            body[:16] if body else b"", body[-16:] if body else b"",
+        )
         return
     log.info(
         "uplink_pcm segment  %s  → %d bytes PCM (%d Hz) → pipeline",
