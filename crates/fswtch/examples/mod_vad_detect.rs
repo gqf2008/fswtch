@@ -85,6 +85,8 @@ struct CallState {
     speech_buffer: Vec<i16>,
     /// Cap for `pre_roll` in samples (300 ms at the pipeline rate).
     pre_roll_max: usize,
+    /// Frame counter for periodic debug logging (1 log per 50 frames ≈ 1/sec at 50 Hz).
+    frame_count: u64,
     /// APM handles — `None` = disabled (passthrough). Controlled by channel variables
     /// `FSWTCH_AEC` / `FSWTCH_NS` / `FSWTCH_AGC2` / `FSWTCH_HPF` set in the dialplan.
     aec: Option<EchoCanceller3>,
@@ -187,6 +189,7 @@ fn create_call_state(session: Option<&Session>) -> Option<CallState> {
         pre_roll: VecDeque::new(),
         speech_buffer: Vec::new(),
         pre_roll_max: (PIPELINE_RATE * 300 / 1000) as usize,
+        frame_count: 0,
         aec,
         ns,
         agc2,
@@ -235,6 +238,36 @@ fn process_caller_pcm(
         }
     }
     let st = s.vad.process(&mut s.mono_scratch);
+    // Periodic debug log: 1×/sec (every 50 frames at 50 Hz). Shows whether on_read is
+    // being called, VAD state, and signal energy — enough to diagnose "no VAD events".
+    s.frame_count = s.frame_count.wrapping_add(1);
+    if s.frame_count == 1 || s.frame_count.is_multiple_of(50) {
+        let vad_str = match st {
+            VadState::NONE => "NONE",
+            VadState::START_TALKING => "START",
+            VadState::TALKING => "TALKING",
+            VadState::STOP_TALKING => "STOP",
+            _ => "ERROR",
+        };
+        let energy: u64 = s
+            .mono_scratch
+            .iter()
+            .map(|&x| (x as i64 * x as i64) as u64)
+            .sum::<u64>()
+            / s.mono_scratch.len().max(1) as u64;
+        fswtch::log_info(
+            "mod_vad_detect",
+            format!(
+                "frame #{}: pcm={} vad={} energy={} pre_roll={} buf={}",
+                s.frame_count,
+                s.mono_scratch.len(),
+                vad_str,
+                energy,
+                s.pre_roll.len(),
+                s.speech_buffer.len()
+            ),
+        );
+    }
     let label = match st {
         VadState::START_TALKING => Some("start-talking"),
         VadState::STOP_TALKING => Some("stop-talking"),
@@ -281,8 +314,22 @@ fn process_caller_pcm(
 /// audio to AEC3's `analyze_render` for echo cancellation. The caller must already
 /// hold the per-call lock.
 fn produce_tts_output(s: &mut CallState, buf: &mut [i16]) {
+    let queue_before = s.tts_queue.len();
     for slot in buf.iter_mut() {
         *slot = s.tts_queue.pop_front().unwrap_or(0); // underrun → silence
+    }
+    // Periodic debug log for the TTS output path (same cadence as process_caller_pcm).
+    if s.frame_count == 1 || s.frame_count.is_multiple_of(50) {
+        fswtch::log_info(
+            "mod_vad_detect",
+            format!(
+                "tts out #{}: buf={} queue_before={} queue_after={}",
+                s.frame_count,
+                buf.len(),
+                queue_before,
+                s.tts_queue.len()
+            ),
+        );
     }
     // Feed the played TTS (far-end render) to AEC3 for echo cancellation.
     if let Some(aec) = s.aec.as_mut() {
@@ -516,6 +563,8 @@ impl EndpointIoRoutines for VadDetectEndpoint {
 struct VadDetectBug {
     uuid: String,
     state: Arc<Mutex<CallState>>,
+    /// Debug counter for on_read/on_write_replace logging (independent of CallState).
+    bug_frames: u64,
 }
 
 impl MediaBugHandler for VadDetectBug {
@@ -533,11 +582,39 @@ impl MediaBugHandler for VadDetectBug {
         MediaBugAction::Continue
     }
 
-    fn on_read(&mut self, _ctx: &mut MediaBugContext<'_>, frame: MediaFrame<'_>) -> MediaBugAction {
-        let Some(pcm) = frame.pcm_i16() else {
+    fn on_read_replace(
+        &mut self,
+        _ctx: &mut MediaBugContext<'_>,
+        mut frame: MediaFrameMut<'_>,
+    ) -> MediaBugAction {
+        self.bug_frames = self.bug_frames.wrapping_add(1);
+        // READ_REPLACE provides decoded SLIN (16-bit PCM @ codec_rate), unlike
+        // READ_STREAM which gives native PCMU (8-bit → get_native_read_frame
+        // returns NULL → on_read never fires). Use pcm_i16_mut for the mutable
+        // replace frame; we read it (VAD) without modifying (pass-through).
+        let channels = frame.as_frame().channels().max(1) as usize;
+        let rate = frame.as_frame().rate();
+        let samples = frame.as_frame().samples();
+        let data_len = frame.as_frame().data_len();
+        let pcm = frame.pcm_i16_mut();
+        if self.bug_frames == 1 || self.bug_frames.is_multiple_of(50) {
+            fswtch::log_info(
+                "mod_vad_detect",
+                format!(
+                    "on_read_replace #{} {}: data_len={} samples={} rate={} channels={} pcm_i16={}",
+                    self.bug_frames,
+                    self.uuid,
+                    data_len,
+                    samples,
+                    rate,
+                    channels,
+                    pcm.as_deref().map(|p| p.len()).unwrap_or(0)
+                ),
+            );
+        }
+        let Some(pcm) = pcm else {
             return MediaBugAction::Continue;
         };
-        let channels = frame.channels().max(1) as usize;
         let (vad_label, seq, cleared_tts, speech_buffer) = {
             let mut s = match self.state.lock() {
                 Ok(s) => s,
@@ -603,7 +680,7 @@ fswtch::app_callback! {
         let config = match MediaBugConfig::new(
             "fswtch_vad_detect",
             "read-write-stream",
-            MediaBugFlags::READ_STREAM | MediaBugFlags::WRITE_REPLACE | MediaBugFlags::NO_PAUSE,
+            MediaBugFlags::READ_REPLACE | MediaBugFlags::WRITE_REPLACE | MediaBugFlags::NO_PAUSE,
         ) {
             Ok(c) => c,
             Err(e) => {
@@ -614,6 +691,7 @@ fswtch::app_callback! {
         let handler = VadDetectBug {
             uuid: uuid.clone(),
             state,
+            bug_frames: 0,
         };
         if let Err(error) = fswtch::attach_media_bug(session, config, handler) {
             fswtch::log_error("mod_vad_detect", format!("attach media bug failed: {error}"));

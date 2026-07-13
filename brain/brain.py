@@ -88,9 +88,13 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
         #    (this FS build's `event plain CUSTOM` doesn't deliver CUSTOM events).
         session.send_cmd("event plain ALL")
 
-        # In endpoint mode, bridge to the VAD endpoint (creates the B-leg). In media
-        # bug mode the dialplan's `fswtch_vad_detect` app already attached the bug.
-        if mode != "bug":
+        # In media bug mode (FSWTCH_MODE=bug), the dialplan's fswtch_vad_detect app
+        # already attached a READ_REPLACE media bug. sendmsg park drives the read-frame
+        # loop, which triggers on_read_replace (VAD on caller audio). No sendmsg bridge
+        # needed — the bug taps the A-leg directly.
+        if mode == "bug":
+            session.send_app("park")
+        else:
             reply = session.send_app("bridge", "fswtch_vad_detect/1000")
             if not reply.get("Reply-Text", "").startswith("+OK"):
                 log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
