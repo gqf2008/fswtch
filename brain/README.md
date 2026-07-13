@@ -6,18 +6,25 @@ over ESL — fully decoupled from the voice media path.
 
 ## Architecture
 
+The brain is an **outbound ESL** TCP server: FreeSWITCH connects to it per-call via
+the dialplan `socket` application. Each call gets its own connection + handler thread
+(no global state, no auto-reconnect).
+
 ```
 ┌──────────────────────────────────┐         ┌──────────────────────────────┐
-│ FreeSWITCH  (mod_vad_bot .so)   │   ESL   │  Python brain (brain.py)     │
-│  endpoint: bot IS the call leg  │ ◄─────► │  subscribe + send events     │
-│  VAD local + media (read/write) │  events │  ASR / LLM / TTS (Pipeline)   │
+│ FreeSWITCH  (mod_vad_bot .so)   │  per-call│  Python brain (TCP server)    │
+│  dialplan: socket host:port full │ ───────► │  accept() → handle_call()     │
+│  A-leg parks; brain bridges to   │  ESL     │  park + bridge fswtch_vad_bot │
+│  fswtch_vad_bot/1000 (B-leg)     │ ◄──────► │  recv fswtch::vad/uplink_pcm  │
+│  VAD local + media (read/write)  │  events  │  ASR / LLM / TTS (Pipeline)   │
 └──────────────────────────────────┘         └──────────────────────────────┘
 ```
 
 - **VAD module** (`crates/fswtch/examples/mod_vad_bot.rs`, an FS endpoint): VAD runs
   locally in `write_frame`; the bot is the call terminus. It ferries audio + VAD state
   as ESL events, and plays TTS back. Reusable, brain-agnostic.
-- **Python brain** (this package): subscribes to VAD/uplink events, buffers utterances,
+- **Python brain** (this package): listens for outbound ESL connections, parks the call,
+  bridges to `fswtch_vad_bot/1000`, subscribes to VAD/uplink events, buffers utterances,
   runs the business pipeline, sends TTS back. Brain-agnostic module ↔ any brain.
 
 ## Event protocol
@@ -36,23 +43,27 @@ trim via `snap_segments`), mono. The VAD module also flushes its play queue on
 ## Run
 
 ```sh
-# 1. load the VAD module in FreeSWITCH (no mimalloc → runtime load is safe):
+# 1. load the VAD module in FreeSWITCH:
 fs_cli -x 'load mod_vad_bot'
 
-# 2. dialplan bridges the caller to the bot:
-#    <action application="bridge" data="fswtch_vad_bot/1000"/>
+# 2. dialplan: export APM switches, then socket to the brain.
 #    (the fswtch_vad_bot_test extension on 7782 already does this)
+#
+#    <action application="export" data="FSWTCH_NS=12"/>
+#    <action application="export" data="FSWTCH_AGC2=6"/>
+#    <action application="socket" data="127.0.0.1:8084 full"/>
 
 # 3. start the brain (from the repo root):
 python3 -m brain.brain
-#   → connects to FS ESL (127.0.0.1:8022, password ClueCon by default),
-#     subscribes to fswtch::vad + fswtch::uplink_pcm, and is ready.
+#   → listens on 127.0.0.1:8084 for outbound ESL connections.
 
-# 4. dial 7782, speak; the brain beeps back (StubPipeline). Barge-in: speak again
-#    mid-beep → the VAD module flushes + the brain cancels the in-flight reply.
+# 4. dial 7782; FS connects to the brain, which parks + bridges to
+#    fswtch_vad_bot/1000. Speak; the brain beeps back (StubPipeline).
+#    Barge-in: speak again mid-beep → the VAD module flushes + the brain
+#    cancels the in-flight reply.
 ```
 
-`--host / --port / --password` override the ESL endpoint.
+`--host / --port` override the listen address.
 
 ## Plugging a real brain (ASR/LLM/TTS)
 

@@ -1,93 +1,150 @@
-"""Minimal FreeSWITCH ESL raw-socket client (zero dependency).
+"""Minimal FreeSWITCH ESL raw-socket server for **outbound** mode (zero dependency).
 
-Speaks the ESL text protocol over a plain TCP socket — no `python-ESL` SWIG binding
-needed. Connects, authenticates, subscribes to CUSTOM events, parses inbound event
-blocks (headers + Content-Length body), and sends CUSTOM events (`sendevent`).
+FreeSWITCH's `socket` dialplan application opens a TCP connection TO us (one per
+call). Each connection is pre-trusted (no `auth`), carries the call's channel data
+on connect, and lets us drive the call (`park`, `bridge`, `hangup`, …) + exchange
+`fswtch::vad` / `fswtch::uplink_pcm` / `fswtch::downlink_pcm` events.
 
-Usage:
-    esl = ESLClient("127.0.0.1", 8022, "ClueCon")
+Usage::
+
+    server = ESLServer("127.0.0.1", 8084)
     while True:
-        headers, body = esl.recv_event()
-        if headers.get("Event-Subclass") == "fswtch::uplink_pcm":
-            ...  # body is the base64 PCM string (decode via base64.b64decode)
+        session = server.accept()           # blocks until FS dials in
+        ch = session.read_channel_data()    # Unique-ID, Variable_*, …
+        session.send_cmd("park")
+        session.send_cmd("bridge fswtch_vad_bot/1000")
+        headers, body = session.recv_event()
 """
 
 from __future__ import annotations
 
 import socket
 import base64
+import urllib.parse
 
 
 class ESLError(RuntimeError):
     pass
 
 
-class ESLClient:
-    def __init__(self, host: str = "127.0.0.1", port: int = 8022, password: str = "ClueCon"):
-        self.sock = socket.create_connection((host, port), timeout=10)
-        self.sock.settimeout(None)  # blocking reads after connect
-        self._buf = b""
-        # FS sends `Content-Type: auth/request` immediately on connect — read + discard it.
-        self._read_headers()
-        self._send(f"auth {password}\n\n".encode())
-        self._expect_ok()
-        # Subscribe to ALL CUSTOM events; filter by Event-Subclass client-side.
-        # (`event plain custom <sub>` is fs_cli sugar; the robust raw form is all-CUSTOM.)
-        self._send(b"event plain CUSTOM\n\n")
-        self._expect_ok()
+# ── low-level helpers shared by ESLSession ─────────────────────────────────
 
-    # ── low-level stream helpers ───────────────────────────────────────────
+
+def _read_line(sock: socket.socket, buf: list[bytes]) -> bytes:
+    """Read one `\\n`-terminated line from `sock`, buffering leftovers in `buf`."""
+    while b"\n" not in b"".join(buf):
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise ESLError("ESL socket closed")
+        buf.append(chunk)
+    joined = b"".join(buf)
+    line, rest = joined.split(b"\n", 1)
+    buf.clear()
+    buf.append(rest)
+    return line
+
+
+def _read_headers(sock: socket.socket, buf: list[bytes]) -> dict[str, str]:
+    """Read a `Key: Value\\n` header block terminated by a blank line."""
+    headers: dict[str, str] = {}
+    while True:
+        line = _read_line(sock, buf)
+        if line == b"":
+            break  # blank line terminates the block
+        if b": " in line:
+            k, v = line.split(b": ", 1)
+            headers[k.decode(errors="replace")] = v.decode(errors="replace")
+    return headers
+
+
+# ── per-call session ───────────────────────────────────────────────────────
+
+
+class ESLSession:
+    """One outbound ESL connection = one call.
+
+    FreeSWITCH opens this connection when the dialplan hits
+    `<action application="socket" data="host:port full"/>`. No auth is needed —
+    the connection is pre-trusted. Read the channel data with
+    [`read_channel_data`](#brain.esl.ESLSession.read_channel_data), drive the call
+    with [`send_cmd`](#brain.esl.ESLSession.send_cmd), and exchange events via
+    [`recv_event`](#brain.esl.ESLSession.recv_event) /
+    [`send_event`](#brain.esl.ESLSession.send_event).
+    """
+
+    def __init__(self, sock: socket.socket, addr: tuple[str, int]):
+        self.sock = sock
+        self.addr = addr
+        self._buf: list[bytes] = []
+
+    # ── low-level ───────────────────────────────────────────────────────────
 
     def _send(self, data: bytes) -> None:
         self.sock.sendall(data)
 
-    def _read_line(self) -> bytes:
-        while b"\n" not in self._buf:
-            chunk = self.sock.recv(4096)
-            if not chunk:
-                raise ESLError("ESL socket closed")
-            self._buf += chunk
-        line, self._buf = self._buf.split(b"\n", 1)
-        return line
+    # ── channel data (received once on connect) ─────────────────────────────
 
-    def _read_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
-        while True:
-            line = self._read_line()
-            if line == b"":
-                break  # blank line terminates the header block
-            if b": " in line:
-                k, v = line.split(b": ", 1)
-                headers[k.decode(errors="replace")] = v.decode(errors="replace")
-        return headers
+    def read_channel_data(self) -> dict[str, str]:
+        """Read the block of headers FreeSWITCH sends on connect.
 
-    def _expect_ok(self) -> None:
-        headers = self._read_headers()
-        reply = headers.get("Reply-Text", "")
-        if not reply.startswith("+OK"):
-            raise ESLError(f"ESL command failed: {reply or headers}")
+        Contains the A-leg's ``Unique-ID``, ``Channel-Name``, and all channel
+        variables as ``Variable_<name>`` headers (e.g. ``Variable_FSWTCH_NS``).
+        """
+        return _read_headers(self.sock, self._buf)
 
-    # ── public API ─────────────────────────────────────────────────────────
+    # ── call control ────────────────────────────────────────────────────────
+
+    def send_cmd(self, cmd: str) -> dict[str, str]:
+        """Send a command (e.g. ``"park"``, ``"bridge fswtch_vad_bot/1000"``)
+        and read the ``command/reply``. Returns the reply headers (including
+        ``Reply-Text``, which starts with ``+OK`` on success).
+        """
+        self._send(f"{cmd}\n\n".encode())
+        return _read_headers(self.sock, self._buf)
+
+    # ── events ──────────────────────────────────────────────────────────────
 
     def recv_event(self) -> tuple[dict[str, str], bytes]:
-        """Block until one event arrives. Returns (headers, body_bytes).
+        """Block until one event arrives. Returns ``(headers, body_bytes)``.
 
-        `body_bytes` is empty unless the event carried a `Content-Length` body.
-        For fswtch PCM events the body is the base64-encoded PCM string.
+        ``body_bytes`` is empty unless the event carried a ``Content-Length``
+        body (e.g. the base64 PCM string for ``fswtch::uplink_pcm``).
         """
-        headers = self._read_headers()
-        body = b""
-        n = headers.get("Content-Length")
+        top = _read_headers(self.sock, self._buf)
+        n = top.get("Content-Length")
         if n is not None:
             n = int(n)
-            while len(self._buf) < n:
+            while len(b"".join(self._buf)) < n:
                 chunk = self.sock.recv(4096)
                 if not chunk:
                     raise ESLError("ESL socket closed mid-body")
-                self._buf += chunk
-            body = self._buf[:n]
-            self._buf = self._buf[n:]
-        return headers, body
+                self._buf.append(chunk)
+            joined = b"".join(self._buf)
+            data = joined[:n]
+            self._buf.clear()
+            self._buf.append(joined[n:])
+        else:
+            data = b""
+
+        # ESL `event plain` wraps the event as: top-level `Content-Length`/
+        # `Content-Type`, then the Content-Length body is the EVENT serialization
+        # — event headers as `Key: Value\n` lines, optionally followed by a blank
+        # line (`\n\n`) + the event's own body (e.g. the base64 PCM). Parse those
+        # out so callers see real event headers.
+        event_headers: dict[str, str] = {}
+        event_body = b""
+        if b"\n\n" in data:
+            header_part, event_body = data.split(b"\n\n", 1)
+        else:
+            header_part = data
+        for line in header_part.split(b"\n"):
+            if b": " in line:
+                k, v = line.split(b": ", 1)
+                # ESL `event plain` URL-encodes header values (e.g. `::` → `%3A%3A`).
+                event_headers[k.decode(errors="replace")] = urllib.parse.unquote(
+                    v.decode(errors="replace")
+                )
+        return event_headers, event_body
 
     def send_event(
         self,
@@ -109,7 +166,7 @@ class ESLClient:
         if body:
             lines.append(f"Content-Length: {len(body)}".encode())
         self._send(b"\n".join(lines) + b"\n\n" + body)
-        return self._read_headers()  # command-reply
+        return _read_headers(self.sock, self._buf)  # command-reply
 
     def send_pcm(
         self,
@@ -138,3 +195,25 @@ class ESLClient:
             self.sock.close()
         except OSError:
             pass
+
+
+# ── TCP listener ───────────────────────────────────────────────────────────
+
+
+class ESLServer:
+    """Listens for outbound ESL connections from FreeSWITCH.
+
+    ``accept`` blocks until the dialplan's ``socket`` application dials in, then
+    returns a per-call [`ESLSession`].
+    """
+
+    def __init__(self, host: str = "127.0.0.1", port: int = 8084):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((host, port))
+        self.sock.listen(8)
+
+    def accept(self) -> ESLSession:
+        sock, addr = self.sock.accept()
+        sock.settimeout(None)  # blocking reads after accept
+        return ESLSession(sock, addr)
