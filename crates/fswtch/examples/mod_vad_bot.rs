@@ -161,7 +161,7 @@ impl EndpointIoRoutines for VadBot {
     /// machine to `CS_CONSUME_MEDIA`, and registers the per-call [`CallState`]. We do NOT call
     /// `thread_launch` — `switch_ivr_originate` does that after we return `CAUSE_SUCCESS`.
     fn outgoing_channel(
-        _session: Option<&Session>,
+        session: Option<&Session>,
         caller_profile: Option<CallerProfile>,
         endpoint: &EndpointInterfaceRef,
         flags: OriginateFlag,
@@ -209,33 +209,41 @@ impl EndpointIoRoutines for VadBot {
             }
         };
         // APM switches from channel variables (set via dialplan `export` on the A-leg).
-        let aec_enabled = channel
-            .variable("FSWTCH_AEC")
-            .ok()
-            .flatten()
-            .is_some_and(|v| v == "true" || v == "1");
-        let ns_level =
-            channel
-                .variable("FSWTCH_NS")
-                .ok()
-                .flatten()
-                .and_then(|v| match v.as_str() {
-                    "6" => Some(NsLevel::Db6),
-                    "12" => Some(NsLevel::Db12),
-                    "18" => Some(NsLevel::Db18),
-                    "21" => Some(NsLevel::Db21),
-                    _ => None,
-                });
-        let agc2_gain = channel
-            .variable("FSWTCH_AGC2")
-            .ok()
-            .flatten()
-            .and_then(|v| v.parse::<f32>().ok());
-        let hpf_enabled = channel
-            .variable("FSWTCH_HPF")
-            .ok()
-            .flatten()
-            .is_some_and(|v| v == "true" || v == "1");
+        // Read from the A-leg session — the B-leg (new_session) may not have exported vars yet
+        // at outgoing_channel time (variable propagation happens during bridge setup, after
+        // outgoing_channel returns).
+        let (aec_enabled, ns_level, agc2_gain, hpf_enabled) = session
+            .and_then(|s| s.channel())
+            .map(|ch| {
+                let aec = ch
+                    .variable("FSWTCH_AEC")
+                    .ok()
+                    .flatten()
+                    .is_some_and(|v| v == "true" || v == "1");
+                let ns = ch
+                    .variable("FSWTCH_NS")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| match v.as_str() {
+                        "6" => Some(NsLevel::Db6),
+                        "12" => Some(NsLevel::Db12),
+                        "18" => Some(NsLevel::Db18),
+                        "21" => Some(NsLevel::Db21),
+                        _ => None,
+                    });
+                let agc2 = ch
+                    .variable("FSWTCH_AGC2")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.parse::<f32>().ok());
+                let hpf = ch
+                    .variable("FSWTCH_HPF")
+                    .ok()
+                    .flatten()
+                    .is_some_and(|v| v == "true" || v == "1");
+                (aec, ns, agc2, hpf)
+            })
+            .unwrap_or((false, None, None, false));
         let aec = if aec_enabled {
             EchoCanceller3::new(PIPELINE_RATE as i32, CHANNELS as usize, CHANNELS as usize).ok()
         } else {

@@ -499,6 +499,7 @@ name = "fswtch"
 version = "0.1.8"
 dependencies = [
  "base64",
+ "fswtch-apm",
  "fswtch-sys",
  "futures-util",
  "reqwest 0.12.28",
