@@ -90,10 +90,14 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
 
         # In media bug mode (FSWTCH_MODE=bug), the dialplan's fswtch_vad_detect app
         # already attached a READ_REPLACE media bug. sendmsg park drives the read-frame
-        # loop, which triggers on_read_replace (VAD on caller audio). No sendmsg bridge
-        # needed — the bug taps the A-leg directly.
+        # loop, which triggers on_read_replace (VAD on caller audio).
+        # IMPORTANT: send park as a raw sendmsg WITHOUT reading the reply — park blocks
+        # until hangup, so send_app (which reads command/reply) would hang forever.
+        # Just fire-and-forget the sendmsg, then enter the event loop.
         if mode == "bug":
-            session.send_app("park")
+            session._send(
+                b"sendmsg\ncall-command: execute\nexecute-app-name: park\n\n"
+            )
         else:
             reply = session.send_app("bridge", "fswtch_vad_detect/1000")
             if not reply.get("Reply-Text", "").startswith("+OK"):
