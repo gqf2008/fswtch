@@ -1,12 +1,10 @@
-//! mod_vad_detect — unified VAD + APM + TTS bridge supporting two media modes.
+//! mod_vad_detect — endpoint-based VAD + APM + TTS bridge (the bot IS the call terminus).
 //!
-//! **endpoint mode**: `bridge fswtch_vad_detect/<num>` creates a B-leg; the
-//! endpoint's `read_frame`/`write_frame` handle media (the bot IS the call terminus).
+//! The brain connects via outbound ESL socket, answers the call, and bridges to
+//! `fswtch_vad_detect/<num>` (creates the B-leg). The endpoint's `read_frame`/
+//! `write_frame` handle media: VAD runs on caller audio, TTS drains toward the caller.
 //!
-//! **media bug mode**: `<action application="fswtch_vad_detect"/>` attaches a media
-//! bug to the existing call; `on_read`/`on_write_replace` handle media (no B-leg).
-//!
-//! Both modes share: VAD (per-segment, with pre-roll onset recovery + trailing-silence
+//! Features: VAD (per-segment, with pre-roll onset recovery + trailing-silence
 //! trim), APM chain (HPF → AEC3 → NS → AGC2, each independently switchable), barge-in
 //! (start-talking flushes the TTS queue), and the same ESL event contract.
 //!
@@ -16,23 +14,16 @@
 //!   `Bits-Per-Sample`(16)/`Sample-Format`(S16LE)/`Samples` + base64 PCM body. Per
 //!   stop-talking segment; the start/stop frame shares `Seq` with the matching `fswtch::vad`.
 //! - `fswtch::downlink_pcm` (brain→VAD): `Target-UUID`/`Sample-Rate`/`Channels`/
-//!   `Bits-Per-Sample`/`Sample-Format` + base64 TTS PCM body → queued, drained by the
-//!   output path (endpoint `read_frame` or media-bug `on_write_replace`).
+//!   `Bits-Per-Sample`/`Sample-Format` + base64 TTS PCM body → queued, drained by
+//!   the endpoint's `read_frame`.
 //!
-//! # Use — media bug mode (simplest, no B-leg, no sendmsg bridge)
+//! # Use
 //! ```text
 //! load mod_vad_detect
 //! <action application="export" data="FSWTCH_NS=12"/>
-//! <action application="fswtch_vad_detect"/>
 //! <action application="socket" data="127.0.0.1:8084 full"/>
-//! # brain: connect → event plain ALL → recv vad/uplink_pcm → send downlink_pcm
-//! ```
-//!
-//! # Use — endpoint mode (brain controls the bridge)
-//! ```text
-//! load mod_vad_detect
-//! <action application="socket" data="127.0.0.1:8084 full"/>
-//! # brain: connect → event plain ALL → sendmsg bridge fswtch_vad_detect/1000
+//! # brain: connect → sendmsg answer → event plain ALL → sendmsg bridge fswtch_vad_detect/1000
+//! #        → recv fswtch::vad/uplink_pcm → send fswtch::downlink_pcm
 //! ```
 
 use std::collections::{HashMap, VecDeque};
@@ -40,11 +31,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use fswtch::{
-    ApplicationInfo, CallDirection, CallerProfile, ChannelState, EndpointInterfaceRef,
-    EndpointIoBuilder, EndpointIoRoutines, Frame, FrameMut, MediaBugAction, MediaBugConfig,
-    MediaBugContext, MediaBugFlags, MediaBugHandler, MediaFrame, MediaFrameMut, OriginateFlag,
-    OutgoingResult, SUCCESS, Session, SpeechSegment, StateHandlerTable, Status, Vad, VadState,
-    request_session, snap_segments,
+    CallDirection, CallerProfile, ChannelState, EndpointInterfaceRef, EndpointIoBuilder,
+    EndpointIoRoutines, Frame, FrameMut, OriginateFlag, OutgoingResult, SUCCESS, Session,
+    SpeechSegment, StateHandlerTable, Status, Vad, VadState, request_session, snap_segments,
 };
 use fswtch_apm::{EchoCanceller3, GainController2, HighPassFilter, NoiseSuppressor, NsLevel};
 
@@ -558,147 +547,6 @@ impl EndpointIoRoutines for VadDetectEndpoint {
     }
 }
 
-// ── media bug mode ──────────────────────────────────────────────────────────
-
-struct VadDetectBug {
-    uuid: String,
-    state: Arc<Mutex<CallState>>,
-    /// Debug counter for on_read/on_write_replace logging (independent of CallState).
-    bug_frames: u64,
-}
-
-impl MediaBugHandler for VadDetectBug {
-    fn on_init(&mut self, _ctx: &mut MediaBugContext<'_>) -> MediaBugAction {
-        match REGISTRY.lock() {
-            Ok(mut reg) => {
-                reg.insert(self.uuid.clone(), Arc::clone(&self.state));
-                fswtch::log_info(
-                    "mod_vad_detect",
-                    format!("bug registered for {}", self.uuid),
-                );
-            }
-            Err(_) => fswtch::log_error("mod_vad_detect", "registry lock poisoned on init"),
-        }
-        MediaBugAction::Continue
-    }
-
-    fn on_read_replace(
-        &mut self,
-        _ctx: &mut MediaBugContext<'_>,
-        mut frame: MediaFrameMut<'_>,
-    ) -> MediaBugAction {
-        self.bug_frames = self.bug_frames.wrapping_add(1);
-        // READ_REPLACE provides decoded SLIN (16-bit PCM @ codec_rate), unlike
-        // READ_STREAM which gives native PCMU (8-bit → get_native_read_frame
-        // returns NULL → on_read never fires). Use pcm_i16_mut for the mutable
-        // replace frame; we read it (VAD) without modifying (pass-through).
-        let channels = frame.as_frame().channels().max(1) as usize;
-        let rate = frame.as_frame().rate();
-        let samples = frame.as_frame().samples();
-        let data_len = frame.as_frame().data_len();
-        let pcm = frame.pcm_i16_mut();
-        if self.bug_frames == 1 || self.bug_frames.is_multiple_of(50) {
-            fswtch::log_info(
-                "mod_vad_detect",
-                format!(
-                    "on_read_replace #{} {}: data_len={} samples={} rate={} channels={} pcm_i16={}",
-                    self.bug_frames,
-                    self.uuid,
-                    data_len,
-                    samples,
-                    rate,
-                    channels,
-                    pcm.as_deref().map(|p| p.len()).unwrap_or(0)
-                ),
-            );
-        }
-        let Some(pcm) = pcm else {
-            return MediaBugAction::Continue;
-        };
-        let (vad_label, seq, cleared_tts, speech_buffer) = {
-            let mut s = match self.state.lock() {
-                Ok(s) => s,
-                Err(_) => return MediaBugAction::Continue,
-            };
-            process_caller_pcm(&mut s, pcm, channels)
-        };
-        fire_events(&self.uuid, vad_label, seq, cleared_tts, speech_buffer);
-        MediaBugAction::Continue
-    }
-
-    fn on_write_replace(
-        &mut self,
-        _ctx: &mut MediaBugContext<'_>,
-        mut frame: MediaFrameMut<'_>,
-    ) -> MediaBugAction {
-        let Some(buf) = frame.pcm_i16_mut() else {
-            return MediaBugAction::Continue;
-        };
-        let mut s = match self.state.lock() {
-            Ok(s) => s,
-            Err(_) => return MediaBugAction::Continue,
-        };
-        // Pass through if queue empty — don't replace with silence (the caller's own
-        // write audio should pass through when no TTS is queued).
-        if s.tts_queue.is_empty() {
-            return MediaBugAction::Continue;
-        }
-        produce_tts_output(&mut s, buf);
-        MediaBugAction::Continue
-    }
-
-    fn on_close(&mut self, _ctx: &mut MediaBugContext<'_>) {
-        match REGISTRY.lock() {
-            Ok(mut reg) => {
-                reg.remove(&self.uuid);
-                fswtch::log_info("mod_vad_detect", format!("bug closed for {}", self.uuid));
-            }
-            Err(_) => fswtch::log_error("mod_vad_detect", "registry lock poisoned on close"),
-        }
-    }
-}
-
-// ── application entry (media bug mode) ───────────────────────────────────────
-
-fswtch::app_callback! {
-    fn vad_detect_app(session, _data) {
-        fswtch::log_info("mod_vad_detect", "application invoked");
-        let Some(session) = session else {
-            fswtch::log_error("mod_vad_detect", "missing session");
-            return;
-        };
-        let uuid = session.channel().and_then(|c| c.uuid()).unwrap_or_default();
-        if uuid.is_empty() {
-            fswtch::log_error("mod_vad_detect", "no uuid");
-            return;
-        }
-        let Some(state) = create_call_state(Some(&session)) else {
-            fswtch::log_error("mod_vad_detect", "create_call_state failed");
-            return;
-        };
-        let state = Arc::new(Mutex::new(state));
-        let config = match MediaBugConfig::new(
-            "fswtch_vad_detect",
-            "read-write-stream",
-            MediaBugFlags::READ_REPLACE | MediaBugFlags::WRITE_REPLACE | MediaBugFlags::NO_PAUSE,
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                fswtch::log_error("mod_vad_detect", format!("media bug config failed: {e}"));
-                return;
-            }
-        };
-        let handler = VadDetectBug {
-            uuid: uuid.clone(),
-            state,
-            bug_frames: 0,
-        };
-        if let Err(error) = fswtch::attach_media_bug(session, config, handler) {
-            fswtch::log_error("mod_vad_detect", format!("attach media bug failed: {error}"));
-        }
-    }
-}
-
 // ── inbound: fswtch::downlink_pcm (base64 TTS PCM) → TTS queue ──────────────
 
 fswtch::event_callback! {
@@ -831,19 +679,6 @@ fswtch::module_load! {
             let state_handler = StateHandlerTable::new_null();
             module
                 .endpoint("fswtch_vad_detect", io, state_handler)
-                .and_then(|m| {
-                    m.application(
-                        ApplicationInfo::new(
-                            "fswtch_vad_detect",
-                            "VAD + APM + TTS: attaches a media bug to the existing call \
-                             (read-stream VAD + write-replace TTS). APM switches via \
-                             FSWTCH_NS/AGC2/HPF/AEC channel variables.",
-                            "Rust VAD detect (media bug)",
-                            "fswtch_vad_detect",
-                        ),
-                        vad_detect_app,
-                    )
-                })
                 .and_then(|m| {
                     m.api(
                         "fswtch_vad_detect_stop_playback",

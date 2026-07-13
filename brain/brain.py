@@ -77,32 +77,19 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
     In **endpoint mode** (no ``FSWTCH_MODE``, or ``=endpoint``) the brain sends
     ``sendmsg bridge fswtch_vad_detect/1000`` to create the B-leg (endpoint)."""
     try:
-        # 1. Channel data (A-leg Unique-ID, variable_* APM switches, FSWTCH_MODE, …).
+        # 1. Channel data (A-leg Unique-ID, variable_* APM switches, …).
         ch = session.read_channel_data()
         a_uuid = ch.get("Unique-ID", "")
-        # ESL `event plain` uses lowercase `variable_` prefix for channel variables.
-        mode = ch.get("variable_FSWTCH_MODE", "")
-        log.info("call connected: A-leg %s (mode=%s)", a_uuid or "?", mode or "endpoint")
+        log.info("call connected: A-leg %s", a_uuid or "?")
 
-        # 2. Subscribe to events. `event plain ALL` + client-side Event-Subclass filter
-        #    (this FS build's `event plain CUSTOM` doesn't deliver CUSTOM events).
+        # 2. Answer the call (brain controls when to answer), subscribe to events,
+        #    and bridge to the VAD endpoint (creates B-leg, drives media).
+        session.send_app("answer")
         session.send_cmd("event plain ALL")
-
-        # In media bug mode (FSWTCH_MODE=bug), the dialplan's fswtch_vad_detect app
-        # already attached a READ_REPLACE media bug. sendmsg park drives the read-frame
-        # loop, which triggers on_read_replace (VAD on caller audio).
-        # IMPORTANT: send park as a raw sendmsg WITHOUT reading the reply — park blocks
-        # until hangup, so send_app (which reads command/reply) would hang forever.
-        # Just fire-and-forget the sendmsg, then enter the event loop.
-        if mode == "bug":
-            session._send(
-                b"sendmsg\ncall-command: execute\nexecute-app-name: park\n\n"
-            )
-        else:
-            reply = session.send_app("bridge", "fswtch_vad_detect/1000")
-            if not reply.get("Reply-Text", "").startswith("+OK"):
-                log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
-                return
+        reply = session.send_app("bridge", "fswtch_vad_detect/1000")
+        if not reply.get("Reply-Text", "").startswith("+OK"):
+            log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
+            return
 
         # 3. Event loop — per-call, no global state.
         cancel = threading.Event()
