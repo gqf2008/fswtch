@@ -68,33 +68,21 @@ def serve(host: str, port: int, pipeline: Pipeline) -> None:
 
 
 def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
-    """Per-call handler: subscribe to events, process VAD + TTS.
-
-    In **media bug mode** (``FSWTCH_MODE=bug`` in the dialplan) the
-    ``fswtch_vad_detect`` application already attached a media bug to the A-leg;
-    the brain only subscribes + exchanges events — no ``sendmsg bridge`` needed.
-
-    In **endpoint mode** (no ``FSWTCH_MODE``, or ``=endpoint``) the brain sends
-    ``sendmsg bridge fswtch_vad_detect/1000`` to create the B-leg (endpoint)."""
+    """Per-call handler. The dialplan runs ``fswtch_vad_detect`` (attaches a
+    READ_REPLACE+WRITE_REPLACE media bug) then ``socket async full`` which connects
+    us AND auto-parks (driving the read/write frame loop). No ``sendmsg park``,
+    no ``sendmsg bridge``, no endpoint — the park loop drives the bug directly."""
     try:
-        # 1. Channel data (A-leg Unique-ID, variable_* APM switches, …).
         ch = session.read_channel_data()
         a_uuid = ch.get("Unique-ID", "")
         log.info("call connected: A-leg %s", a_uuid or "?")
 
-        # 2. Subscribe → bridge → answer (in this order so VAD is running BEFORE
-        #    the caller hears "answered" — no early speech is lost).
-        #    `sendmsg answer` doesn't return command/reply on this FS build, so
-        #    use `api uuid_answer` instead (API commands return immediately).
-        session.send_cmd("event plain ALL")
-        reply = session.send_app("bridge", "fswtch_vad_detect/1000")
-        if not reply.get("Reply-Text", "").startswith("+OK"):
-            log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
-            return
+        # Answer + subscribe. `socket async full` already entered switch_ivr_park
+        # after we sent `connect` — the park loop is driving media now.
         session.send_cmd(f"api uuid_answer {a_uuid}")
-        if not reply.get("Reply-Text", "").startswith("+OK"):
-            log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
-            return
+        session.send_cmd("event plain ALL")
+
+        # Event loop — per-call, no global state.
 
         # 3. Event loop — per-call, no global state.
         cancel = threading.Event()
