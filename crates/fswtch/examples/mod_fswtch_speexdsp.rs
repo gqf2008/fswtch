@@ -17,12 +17,11 @@
 //! `data` keys: `aec=true|false`, `tail=2048`, `ns=true|false`, `ns_db=-20`,
 //! `echo_suppress=-6`, `agc=true|false`, `agc_target=3000`, `agc_max_gain=20`
 
-use std::ffi::c_char;
 use std::sync::{LazyLock, Mutex};
 
 use fswtch::{
     ApplicationInfo, MediaBugAction, MediaBugConfig, MediaBugContext, MediaBugFlags,
-    MediaBugHandler, MediaFrameMut, SpeexEcho, SpeexPreprocess,
+    MediaBugHandler, MediaFrameMut, SpeexEcho, SpeexPreprocess, XmlConfig,
 };
 
 fswtch::module_exports! {
@@ -107,61 +106,38 @@ fn parse_data(data: &str, global: SpeexDspConfig) -> SpeexDspConfig {
 static GLOBAL_CONFIG: LazyLock<Mutex<SpeexDspConfig>> =
     LazyLock::new(|| Mutex::new(SpeexDspConfig::default()));
 
-/// Read `fswtch_speexdsp.conf.xml` at module load via `switch_xml_open_cfg`.
-/// Iterates `<settings><param name="..." value="..."/></settings>`.
+/// Read `fswtch_speexdsp.conf.xml` at module load via the high-level `XmlConfig` API.
+/// Iterates `<settings><param name="..." value="..."/></settings>`. The `XmlConfig` guard
+/// frees the parsed tree on drop, so no manual `switch_xml_free` is needed.
 fn load_global_config() {
     let mut cfg = SpeexDspConfig::default();
-    unsafe {
-        let name = std::ffi::CString::new("fswtch_speexdsp").unwrap();
-        let xml = fswtch::sys::switch_xml_open_cfg(
-            name.as_ptr(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+    let Some(xml) = XmlConfig::open("fswtch_speexdsp") else {
+        fswtch::log_info("mod_fswtch_speexdsp", "no config file — using defaults");
+        return;
+    };
+    let Some(settings) = xml.settings().and_then(|node| node.child("settings")) else {
+        fswtch::log_info(
+            "mod_fswtch_speexdsp",
+            "no <settings> in config — using defaults",
         );
-        if xml.is_null() {
-            fswtch::log_info("mod_fswtch_speexdsp", "no config file — using defaults");
-            return;
-        }
-        // switch_xml_child(xml, "settings") → first <settings> child element.
-        let settings = fswtch::sys::switch_xml_child(xml, c"settings".as_ptr());
-        if settings.is_null() {
-            fswtch::sys::switch_xml_free(xml);
-            fswtch::log_info(
-                "mod_fswtch_speexdsp",
-                "no <settings> in config — using defaults",
-            );
-            return;
-        }
-        // Iterate <param> children inside <settings>.
-        let mut node = fswtch::sys::switch_xml_child(settings, c"param".as_ptr());
-        while !node.is_null() {
-            let tag_ptr = fswtch::sys::switch_xml_attr(node, c"name".as_ptr() as *const c_char);
-            let val_ptr = fswtch::sys::switch_xml_attr(node, c"value".as_ptr() as *const c_char);
-            if !tag_ptr.is_null() && !val_ptr.is_null() {
-                let tag = std::ffi::CStr::from_ptr(tag_ptr).to_string_lossy();
-                let val = std::ffi::CStr::from_ptr(val_ptr).to_string_lossy();
-                match tag.as_ref() {
-                    "aec_enabled" => cfg.aec_enabled = val == "true" || val == "1",
-                    "tail" => cfg.tail = val.parse().unwrap_or(2048),
-                    "ns_enabled" => cfg.ns_enabled = val == "true" || val == "1",
-                    "ns_db" => cfg.ns_db = val.parse().unwrap_or(-20),
-                    "echo_suppress_db" => {
-                        cfg.echo_suppress_db = val.parse().unwrap_or(-6);
-                    }
-                    "agc_enabled" => cfg.agc_enabled = val == "true" || val == "1",
-                    "agc_target_rms" => {
-                        cfg.agc_target_rms = val.parse().unwrap_or(3000.0);
-                    }
-                    "agc_max_gain_db" => {
-                        cfg.agc_max_gain_db = val.parse().unwrap_or(20.0);
-                    }
-                    _ => {}
-                }
+        return;
+    };
+    let mut node = settings.child("param");
+    while let Some(p) = node {
+        if let (Some(name), Some(val)) = (p.attr("name"), p.attr("value")) {
+            match name.as_str() {
+                "aec_enabled" => cfg.aec_enabled = val == "true" || val == "1",
+                "tail" => cfg.tail = val.parse().unwrap_or(2048),
+                "ns_enabled" => cfg.ns_enabled = val == "true" || val == "1",
+                "ns_db" => cfg.ns_db = val.parse().unwrap_or(-20),
+                "echo_suppress_db" => cfg.echo_suppress_db = val.parse().unwrap_or(-6),
+                "agc_enabled" => cfg.agc_enabled = val == "true" || val == "1",
+                "agc_target_rms" => cfg.agc_target_rms = val.parse().unwrap_or(3000.0),
+                "agc_max_gain_db" => cfg.agc_max_gain_db = val.parse().unwrap_or(20.0),
+                _ => {}
             }
-            // switch_xml_next not in bindgen allowlist — use struct field directly.
-            node = (*node).next;
         }
-        fswtch::sys::switch_xml_free(xml);
+        node = p.next();
     }
     if let Ok(mut global) = GLOBAL_CONFIG.lock() {
         *global = cfg;
@@ -211,12 +187,13 @@ impl Agc {
 
 // ── media bug handler ───────────────────────────────────────────────────────
 
-/// Field order matters: `echo` is declared before `preproc` so that `preproc`
-/// (which holds a raw pointer to `echo` via `set_echo_state`) is dropped first.
-/// Rust drops fields in declaration order, so `preproc` drops before `echo`.
+/// Field order matters: `preproc` borrows `echo` via `set_echo_state` (the preprocessor stores
+/// a raw pointer to the echo state), so `echo` must outlive `preproc`. Rust drops fields in
+/// declaration order, therefore `preproc` is declared first (dropped first) and `echo` last.
+/// See `SpeexPreprocess::set_echo_state` safety note.
 struct SpeexDspBug {
-    echo: Option<SpeexEcho>,
     preproc: Option<SpeexPreprocess>,
+    echo: Option<SpeexEcho>,
     agc: Option<Agc>,
     cur_play: Vec<i16>,
     aec_out: Vec<i16>,
@@ -307,6 +284,15 @@ impl SpeexDspBug {
             }
             return;
         };
+        // speex states are fixed to the first frame's size (`frame_size`); a later size
+        // mismatch (codec/ptime change) would overrun inside libspeexdsp. Fall back to
+        // AGC-only and skip speex for this frame.
+        if fs != self.frame_size {
+            if let Some(agc) = self.agc.as_mut() {
+                agc.process(pcm);
+            }
+            return;
+        }
 
         if cfg.aec_enabled && self.echo.is_some() {
             if self.cur_play.len() != fs {
@@ -394,8 +380,8 @@ fswtch::app_callback! {
             format!("attaching on {uuid}: aec={} ns={} agc={}", cfg.aec_enabled, cfg.ns_enabled, cfg.agc_enabled),
         );
         let handler = SpeexDspBug {
-            echo: None,
             preproc: None,
+            echo: None,
             agc: None,
             cur_play: Vec::new(),
             aec_out: Vec::new(),

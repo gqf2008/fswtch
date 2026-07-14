@@ -55,6 +55,11 @@ struct CallState {
     frame_count: u64,
 }
 
+// SAFETY: `CallState`'s only non-`Send` field is `Vad`, which is `!Send` by marker-convention
+// (`PhantomData<*const ()>`) — `switch_vad_t` is a plain heap struct with no thread affinity,
+// only mutated through `&self` (see `Vad::process`). Every other field is plain `Send` heap data
+// (`Vec`/`VecDeque`). `CallState` is only reached through `Arc<Mutex<..>>` and mutated under the
+// lock, so there is never concurrent or cross-thread access without synchronization.
 unsafe impl Send for CallState {}
 
 static REGISTRY: LazyLock<Mutex<HashMap<String, Arc<Mutex<CallState>>>>> =
