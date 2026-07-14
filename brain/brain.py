@@ -68,32 +68,26 @@ def serve(host: str, port: int, pipeline: Pipeline) -> None:
 
 
 def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
-    """Per-call handler. The dialplan runs ``fswtch_vad_detect`` (attaches a
-    READ_REPLACE+WRITE_REPLACE media bug) then ``socket async full`` which connects
-    us AND auto-parks.
-
-    Park alone only writes CNG (2-byte) frames → on_write_replace sees 1 sample,
-    TTS can't play. Fix: send ``sendmsg playback silence_stream://-1`` — in async
-    mode it's queued as a private event (returns +OK immediately). The park loop's
-    ``switch_ivr_parse_all_events`` dequeues it and runs playback inline, which
-    drives BOTH read_frame (→ on_read_replace → VAD) AND write_frame (→
-    on_write_replace → TTS drain) with full-size L16 frames."""
+    """Per-call handler. ``socket async full`` connects us AND auto-parks.
+    We send ``sendmsg bridge fswtch_vad_detect/1000`` — the park loop's
+    ``switch_ivr_parse_all_events`` processes it, creating a B-leg (endpoint).
+    The bridge drives both ``write_frame`` (caller audio → VAD → fire events)
+    and ``read_frame`` (drain TTS → caller). No media bug, no playback, no
+    park CNG issue."""
     try:
         ch = session.read_channel_data()
         a_uuid = ch.get("Unique-ID", "")
         log.info("call connected: A-leg %s", a_uuid or "?")
 
-        # Answer + subscribe. `socket async full` already entered switch_ivr_park
-        # after we sent `connect` — the park loop is processing events now.
+        # Answer + subscribe + bridge. `socket async full` already entered
+        # switch_ivr_park after we sent `connect` — the park loop processes
+        # our sendmsg commands via switch_ivr_parse_all_events.
         session.send_cmd(f"api uuid_answer {a_uuid}")
         session.send_cmd("event plain ALL")
-
-        # Drive the media loop: playback silence_stream replaces park's CNG
-        # write with full-size L16 silence frames → on_write_replace fires
-        # with 160 samples → TTS queue can drain. In async mode sendmsg
-        # returns +OK immediately (queued as private event).
-        session.send_app("playback", "silence_stream://-1")
-        log.info("playback silence_stream activated (drives read+write)")
+        reply = session.send_app("bridge", "fswtch_vad_detect/1000")
+        if not reply.get("Reply-Text", "").startswith("+OK"):
+            log.error("bridge failed on %s: %s", a_uuid, reply.get("Reply-Text"))
+            return
 
         # Event loop — per-call, no global state.
         cancel = threading.Event()
