@@ -201,6 +201,10 @@ struct SpeexDspBug {
     frame_size: usize,
     sample_rate: i32,
     initialized: bool,
+    /// Read frames processed (instrumentation for AEC far-end ref verification).
+    r_n: u64,
+    /// Write frames captured as far-end reference (instrumentation).
+    w_n: u64,
 }
 
 impl SpeexDspBug {
@@ -273,6 +277,22 @@ impl SpeexDspBug {
             return;
         }
         let fs = pcm.len();
+        self.r_n = self.r_n.wrapping_add(1);
+        if self.r_n <= 5 || self.r_n.is_multiple_of(50) {
+            fswtch::log_info(
+                "mod_fswtch_speexdsp",
+                format!(
+                    "proc#{} fs={} frame_size={} cur_play={} preproc={} echo={} agc={}",
+                    self.r_n,
+                    fs,
+                    self.frame_size,
+                    self.cur_play.len(),
+                    self.preproc.is_some(),
+                    self.echo.is_some(),
+                    self.agc.is_some()
+                ),
+            );
+        }
         if fs == 0 {
             return;
         }
@@ -296,7 +316,29 @@ impl SpeexDspBug {
 
         if cfg.aec_enabled && self.echo.is_some() {
             if self.cur_play.len() != fs {
+                if self.r_n <= 3 || self.r_n.is_multiple_of(50) {
+                    fswtch::log_info(
+                        "mod_fswtch_speexdsp",
+                        format!(
+                            "aec SKIP read#{}: cur_play={} fs={} (far-end ref not matched → AEC/NS/AGC bypassed)",
+                            self.r_n,
+                            self.cur_play.len(),
+                            fs
+                        ),
+                    );
+                }
                 return; // no far-end ref yet / variable ptime → skip
+            }
+            if self.r_n <= 3 || self.r_n.is_multiple_of(50) {
+                fswtch::log_info(
+                    "mod_fswtch_speexdsp",
+                    format!(
+                        "aec RUN read#{}: cur_play={} fs={}",
+                        self.r_n,
+                        self.cur_play.len(),
+                        fs
+                    ),
+                );
             }
             let Some(echo) = self.echo.as_ref() else {
                 return;
@@ -351,6 +393,17 @@ impl MediaBugHandler for SpeexDspBug {
         if let Some(pcm) = frame.pcm_i16_mut() {
             self.cur_play.clear();
             self.cur_play.extend_from_slice(pcm);
+            self.w_n = self.w_n.wrapping_add(1);
+            if self.w_n <= 3 || self.w_n.is_multiple_of(50) {
+                fswtch::log_info(
+                    "mod_fswtch_speexdsp",
+                    format!(
+                        "write ref#{}: captured {} samples",
+                        self.w_n,
+                        self.cur_play.len()
+                    ),
+                );
+            }
         }
         MediaBugAction::Continue
     }
@@ -389,6 +442,8 @@ fswtch::app_callback! {
             frame_size: 0,
             sample_rate,
             initialized: false,
+            r_n: 0,
+            w_n: 0,
         };
         let config = match MediaBugConfig::new(
             "fswtch_speexdsp",
