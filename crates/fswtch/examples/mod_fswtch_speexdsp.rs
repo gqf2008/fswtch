@@ -401,7 +401,7 @@ fswtch::app_callback! {
                 return;
             }
         };
-        if let Err(error) = fswtch::attach_media_bug(session, config, handler) {
+        if let Err(error) = session.attach_media_bug(config, handler) {
             fswtch::log_error("mod_fswtch_speexdsp", format!("attach media bug failed: {error}"));
         }
     }

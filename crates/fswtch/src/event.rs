@@ -155,6 +155,32 @@ impl EventType {
         v == sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_CREATE as u32
             || v == sys::switch_event_types_t::SWITCH_EVENT_CHANNEL_DESTROY as u32
     }
+
+    /// Returns the canonical name of an event type, or `None` when the type is unknown.
+    ///
+    /// Wraps `switch_event_name`. The returned string is static storage owned by FreeSWITCH.
+    pub fn name(self) -> Option<&'static str> {
+        // SAFETY: `switch_event_name` returns either a static C string or NULL; it reads no caller
+        // state and performs no allocation.
+        let ptr = unsafe { sys::switch_event_name(self.raw()) };
+        // SAFETY: The pointer is null or a static null-terminated C string.
+        unsafe { crate::borrowed_cstr_to_str(ptr) }
+    }
+
+    /// Parses a canonical event name into an [`EventType`].
+    ///
+    /// Wraps `switch_name_event`. Returns `None` when the name does not match a known event type.
+    pub fn from_name(name: impl AsRef<str>) -> Option<EventType> {
+        let name = cstring(name).ok()?;
+        let mut out: sys::switch_event_types_t = sys::switch_event_types_t::SWITCH_EVENT_CUSTOM;
+        // SAFETY: `name` is a valid C string; `out` is writable output storage.
+        let status = unsafe { sys::switch_name_event(name.as_ptr(), &mut out) };
+        if status == crate::SUCCESS.raw() {
+            Some(EventType::from_raw(out))
+        } else {
+            None
+        }
+    }
 }
 
 impl From<sys::switch_event_types_t> for EventType {
@@ -306,7 +332,7 @@ impl Event {
 
     /// Serializes the event into a compact binary representation (malloc'd by FreeSWITCH).
     ///
-    /// The returned buffer can later be rebuilt into an [`Event`] with [`binary_deserialize`].
+    /// The returned buffer can later be rebuilt into an [`Event`] with [`Event::binary_deserialize`].
     pub fn binary_serialize(&self) -> Result<Vec<u8>> {
         let Some(raw) = self.raw else {
             return Ok(Vec::new());
@@ -329,6 +355,34 @@ impl Event {
         // SAFETY: `data` was malloc'd by FreeSWITCH and is now copied out.
         unsafe { crate::free_cstr(data as *mut std::ffi::c_char) };
         Ok(bytes)
+    }
+
+    /// Rebuilds an [`Event`] from a buffer produced by [`Event::binary_serialize`].
+    ///
+    /// Wraps `switch_event_binary_deserialize`. The returned [`Event`] owns the new event and
+    /// destroys it on drop. `duplicate` controls whether FreeSWITCH copies the input buffer
+    /// (`SWITCH_TRUE`) or references it; passing `true` keeps the safe caller's `data` borrow
+    /// short-lived and is the default in the convenience wrapper below.
+    pub fn binary_deserialize(data: &[u8]) -> Result<Event> {
+        if data.is_empty() {
+            return Ok(Event { raw: None });
+        }
+        let mut raw: *mut sys::switch_event_t = std::ptr::null_mut();
+        // SAFETY: `raw` is writable output storage; `data_ptr`/`len` describe the caller's buffer.
+        // We pass `SWITCH_TRUE` so FreeSWITCH duplicates the buffer and does not retain the borrow.
+        let mut data_ptr = data.as_ptr() as *mut std::ffi::c_void;
+        let status = unsafe {
+            sys::switch_event_binary_deserialize(
+                &mut raw,
+                &mut data_ptr,
+                data.len() as sys::switch_size_t,
+                sys::switch_bool_t_SWITCH_TRUE,
+            )
+        };
+        status_to_result(status)?;
+        Ok(Event {
+            raw: NonNull::new(raw),
+        })
     }
 
     /// Copies the channel's presence-data columns onto this event under `prefix`.
@@ -1012,6 +1066,54 @@ impl EventBinder {
     pub fn as_ptr(&self) -> *mut sys::switch_event_node_t {
         self.node.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
+
+    /// Registers a permanent (non-removable) event subscription.
+    ///
+    /// Wraps `switch_event_bind`, the variant of [`EventBinder::bind`] that does not return a node
+    /// handle. Because there is no node to unbind, the registration lives for the lifetime of the
+    /// FreeSWITCH event subsystem and **cannot be revoked** from safe Rust. Prefer
+    /// [`EventBinder::bind`] when you need to unbind later.
+    ///
+    /// `callback` is the C trampoline FreeSWITCH will invoke (typically generated with the
+    /// `event_callback!` macro); `user_data` is stored on the node but is not passed back to the
+    /// callback (see [`EventBinder`] docs).
+    pub fn bind_permanent(
+        id: impl AsRef<str>,
+        event: EventType,
+        subclass: Option<&str>,
+        callback: sys::switch_event_callback_t,
+        user_data: *mut std::ffi::c_void,
+    ) -> Result<()> {
+        let id = cstring(id)?;
+        let subclass = match subclass {
+            Some(text) => Some(cstring(text)?),
+            None => None,
+        };
+        // SAFETY: `id` and `subclass` are valid C strings; the callback matches the expected ABI.
+        let status = unsafe {
+            sys::switch_event_bind(
+                id.as_ptr(),
+                event.raw(),
+                subclass
+                    .as_ref()
+                    .map_or(std::ptr::null(), |subclass| subclass.as_ptr()),
+                callback,
+                user_data,
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Removes every subscription registered with the given `callback`.
+    ///
+    /// Wraps `switch_event_unbind_callback`, which unbinds by callback function pointer rather than
+    /// by node handle. This is the counterpart to [`EventBinder::bind_permanent`] for callers that did not receive
+    /// a node.
+    pub fn unbind_callback(callback: sys::switch_event_callback_t) -> Result<()> {
+        // SAFETY: `callback` is the function pointer originally passed to `switch_event_bind`.
+        let status = unsafe { sys::switch_event_unbind_callback(callback) };
+        status_to_result(status)
+    }
 }
 
 impl Drop for EventBinder {
@@ -1024,84 +1126,8 @@ impl Drop for EventBinder {
     }
 }
 
-/// Registers a permanent (non-removable) event subscription.
-///
-/// Wraps `switch_event_bind`, the variant of [`EventBinder::bind`] that does not return a node
-/// handle. Because there is no node to unbind, the registration lives for the lifetime of the
-/// FreeSWITCH event subsystem and **cannot be revoked** from safe Rust. Prefer
-/// [`EventBinder::bind`] when you need to unbind later.
-///
-/// `callback` is the C trampoline FreeSWITCH will invoke (typically generated with the
-/// `event_callback!` macro); `user_data` is stored on the node but is not passed back to the
-/// callback (see [`EventBinder`] docs).
-pub fn bind_permanent(
-    id: impl AsRef<str>,
-    event: EventType,
-    subclass: Option<&str>,
-    callback: sys::switch_event_callback_t,
-    user_data: *mut std::ffi::c_void,
-) -> Result<()> {
-    let id = cstring(id)?;
-    let subclass = match subclass {
-        Some(text) => Some(cstring(text)?),
-        None => None,
-    };
-    // SAFETY: `id` and `subclass` are valid C strings; the callback matches the expected ABI.
-    let status = unsafe {
-        sys::switch_event_bind(
-            id.as_ptr(),
-            event.raw(),
-            subclass
-                .as_ref()
-                .map_or(std::ptr::null(), |subclass| subclass.as_ptr()),
-            callback,
-            user_data,
-        )
-    };
-    status_to_result(status)
-}
-
-/// Removes every subscription registered with the given `callback`.
-///
-/// Wraps `switch_event_unbind_callback`, which unbinds by callback function pointer rather than
-/// by node handle. This is the counterpart to [`bind_permanent`] for callers that did not receive
-/// a node.
-pub fn unbind_callback(callback: sys::switch_event_callback_t) -> Result<()> {
-    // SAFETY: `callback` is the function pointer originally passed to `switch_event_bind`.
-    let status = unsafe { sys::switch_event_unbind_callback(callback) };
-    status_to_result(status)
-}
-
-/// Rebuilds an [`Event`] from a buffer produced by [`Event::binary_serialize`].
-///
-/// Wraps `switch_event_binary_deserialize`. The returned [`Event`] owns the new event and
-/// destroys it on drop. `duplicate` controls whether FreeSWITCH copies the input buffer
-/// (`SWITCH_TRUE`) or references it; passing `true` keeps the safe caller's `data` borrow
-/// short-lived and is the default in the convenience wrapper below.
-pub fn binary_deserialize(data: &[u8]) -> Result<Event> {
-    if data.is_empty() {
-        return Ok(Event { raw: None });
-    }
-    let mut raw: *mut sys::switch_event_t = std::ptr::null_mut();
-    // SAFETY: `raw` is writable output storage; `data_ptr`/`len` describe the caller's buffer.
-    // We pass `SWITCH_TRUE` so FreeSWITCH duplicates the buffer and does not retain the borrow.
-    let mut data_ptr = data.as_ptr() as *mut std::ffi::c_void;
-    let status = unsafe {
-        sys::switch_event_binary_deserialize(
-            &mut raw,
-            &mut data_ptr,
-            data.len() as sys::switch_size_t,
-            sys::switch_bool_t_SWITCH_TRUE,
-        )
-    };
-    status_to_result(status)?;
-    Ok(Event {
-        raw: NonNull::new(raw),
-    })
-}
-
 /// Subscribes a callback to a named event channel (the FreeSWITCH "event channel" pub/sub bus,
-/// distinct from [`EventBinder`]/[`bind_permanent`] which subscribe to typed `switch_event_t`s).
+/// distinct from [`EventBinder`] / [`EventBinder::bind_permanent`] which subscribe to typed `switch_event_t`s).
 ///
 /// Wraps `switch_event_channel_bind`. The assigned channel id is returned so the caller can pass
 /// it to [`channel_broadcast`] / [`channel_deliver`]. Because `switch_event_channel_unbind`
@@ -1257,32 +1283,6 @@ impl Drop for EventXml {
             // SAFETY: `xml` was returned by `switch_event_xmlize` and is owned by this guard.
             unsafe { sys::switch_xml_free(xml.as_ptr()) };
         }
-    }
-}
-
-/// Returns the canonical name of an event type, or `None` when the type is unknown.
-///
-/// Wraps `switch_event_name`. The returned string is static storage owned by FreeSWITCH.
-pub fn event_name(event_type: EventType) -> Option<&'static str> {
-    // SAFETY: `switch_event_name` returns either a static C string or NULL; it reads no caller
-    // state and performs no allocation.
-    let ptr = unsafe { sys::switch_event_name(event_type.raw()) };
-    // SAFETY: The pointer is null or a static null-terminated C string.
-    unsafe { crate::borrowed_cstr_to_str(ptr) }
-}
-
-/// Parses a canonical event name into an [`EventType`].
-///
-/// Wraps `switch_name_event`. Returns `None` when the name does not match a known event type.
-pub fn name_event(name: impl AsRef<str>) -> Option<EventType> {
-    let name = cstring(name).ok()?;
-    let mut out: sys::switch_event_types_t = sys::switch_event_types_t::SWITCH_EVENT_CUSTOM;
-    // SAFETY: `name` is a valid C string; `out` is writable output storage.
-    let status = unsafe { sys::switch_name_event(name.as_ptr(), &mut out) };
-    if status == crate::SUCCESS.raw() {
-        Some(EventType::from_raw(out))
-    } else {
-        None
     }
 }
 

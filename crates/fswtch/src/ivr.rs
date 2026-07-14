@@ -121,285 +121,6 @@ impl From<sys::switch_digit_action_target_t> for DigitActionTarget {
     }
 }
 
-/// Records the session's media to `path`. `limit` is the maximum recording length in seconds
-/// (pass `0` for no limit). A null file handle lets FreeSWITCH open `path` itself.
-pub fn record_file(session: Session, path: impl AsRef<str>, limit: u32) -> Result<()> {
-    let path = cstring(path)?;
-    // SAFETY: `session.as_ptr()` is a live session; `path` is a valid C string; null file handle
-    // and input args select the default recording behavior.
-    let status = unsafe {
-        sys::switch_ivr_record_file(
-            session.as_ptr(),
-            std::ptr::null_mut(),
-            path.as_ptr(),
-            std::ptr::null_mut(),
-            limit,
-        )
-    };
-    status_to_result(status)
-}
-
-/// Parks the session. A `SWITCH_STATUS_FALSE`/break result indicates the channel left the park
-/// (typically a hangup); it is surfaced as `Err` like any non-success status.
-pub fn park(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session; a null input args pointer is permitted.
-    let status = unsafe { sys::switch_ivr_park(session.as_ptr(), std::ptr::null_mut()) };
-    status_to_result(status)
-}
-
-/// Plays an audio file to the session. This is a thin free-function wrapper around
-/// [`Session::play_file`](crate::Session::play_file); prefer that method when you already hold a
-/// [`Session`].
-pub fn play_file(session: Session, path: impl AsRef<str>) -> Result<()> {
-    session.play_file(path)
-}
-
-/// Collects digits from the session using a registered input callback. The `digit_timeout` and
-/// `abs_timeout` values are in milliseconds; pass `0` for no timeout on either.
-///
-/// The input-args struct (`switch_input_args_t`) is currently passed as null, which selects the
-/// default (no custom callback) behavior. A non-success status is surfaced as `Err`.
-pub fn collect_digits_callback(
-    session: Session,
-    digit_timeout: u32,
-    abs_timeout: u32,
-) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session; a null input-args pointer is permitted.
-    let status = unsafe {
-        sys::switch_ivr_collect_digits_callback(
-            session.as_ptr(),
-            std::ptr::null_mut(),
-            digit_timeout,
-            abs_timeout,
-        )
-    };
-    status_to_result(status)
-}
-
-/// Collects up to `max_digits` digits into `buf`, stopping early when a character from
-/// `terminators` is pressed. On success the number of digits collected is written to `out_count`.
-///
-/// `first_timeout` is the wait for the first digit, `digit_timeout` the inter-digit wait, and
-/// `abs_timeout` an absolute cap — all in milliseconds (`0` means no timeout). Any pressed
-/// terminator character is written to `out_terminator` (an empty string when none matched).
-#[allow(clippy::too_many_arguments)]
-pub fn collect_digits_count(
-    session: Session,
-    buf: &mut [u8],
-    max_digits: usize,
-    terminators: impl AsRef<str>,
-    first_timeout: u32,
-    digit_timeout: u32,
-    abs_timeout: u32,
-    out_count: &mut usize,
-    out_terminator: &mut String,
-) -> Result<()> {
-    let terminators = cstring(terminators)?;
-    let mut term_byte: MaybeUninit<c_char> = MaybeUninit::uninit();
-    // SAFETY: `session.as_ptr()` is a live session; `buf` is a writable byte buffer of length
-    // `buflen` for the duration of the call; `terminators` is a valid C string; `term_byte` is a
-    // valid single-byte output location.
-    let status = unsafe {
-        sys::switch_ivr_collect_digits_count(
-            session.as_ptr(),
-            buf.as_mut_ptr().cast::<c_char>(),
-            buf.len(),
-            max_digits,
-            terminators.as_ptr(),
-            term_byte.as_mut_ptr(),
-            first_timeout,
-            digit_timeout,
-            abs_timeout,
-        )
-    };
-    // SAFETY: `term_byte` is initialized by the callee on return (to NUL when no terminator fired).
-    let term = unsafe { term_byte.assume_init() };
-    if term != 0 {
-        out_terminator.clear();
-        out_terminator.push(term as u8 as char);
-    } else {
-        out_terminator.clear();
-    }
-    // The number of digits written is not returned by the C API; approximate it as the position of
-    // the first NUL byte in `buf`.
-    *out_count = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    status_to_result(status)
-}
-
-/// The main digit-collection primitive: prompts with `prompt_audio_file` (may be empty), then reads
-/// between `min_digits` and `max_digits` digits into `buf`, storing them in channel variable
-/// `var_name` when given. Stops early on any character from `valid_terminators`.
-///
-/// `timeout` is the wait for the first digit and `digit_timeout` the inter-digit wait, in
-/// milliseconds (`0` means no timeout). Pass an empty string for `prompt_audio_file` or
-/// `var_name` to omit them. On success the number of digits collected is written to `out_count`.
-#[allow(clippy::too_many_arguments)]
-pub fn read(
-    session: Session,
-    min_digits: u32,
-    max_digits: u32,
-    prompt_audio_file: impl AsRef<str>,
-    var_name: impl AsRef<str>,
-    buf: &mut [u8],
-    timeout: u32,
-    valid_terminators: impl AsRef<str>,
-    digit_timeout: u32,
-    out_count: &mut usize,
-) -> Result<()> {
-    let prompt = cstring(prompt_audio_file)?;
-    let var = cstring(var_name)?;
-    let terminators = cstring(valid_terminators)?;
-    // SAFETY: `session.as_ptr()` is a live session; `prompt`, `var`, and `terminators` are valid C
-    // strings for the call; `buf` is a writable byte buffer of length `digit_buffer_length`.
-    let status = unsafe {
-        sys::switch_ivr_read(
-            session.as_ptr(),
-            min_digits,
-            max_digits,
-            prompt.as_ptr(),
-            var.as_ptr(),
-            buf.as_mut_ptr().cast::<c_char>(),
-            buf.len(),
-            timeout,
-            terminators.as_ptr(),
-            digit_timeout,
-        )
-    };
-    *out_count = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    status_to_result(status)
-}
-
-/// Records the entire session to `file`. `limit` is the maximum length in seconds (`0` for no
-/// limit). The file-handle pointer is currently null, letting FreeSWITCH manage the file itself.
-pub fn record_session(session: Session, file: impl AsRef<str>, limit: u32) -> Result<()> {
-    let file = cstring(file)?;
-    // SAFETY: `session.as_ptr()` is a live session; `file` is a valid C string; a null file handle
-    // selects the default file management.
-    let status = unsafe {
-        sys::switch_ivr_record_session(session.as_ptr(), file.as_ptr(), limit, std::ptr::null_mut())
-    };
-    status_to_result(status)
-}
-
-/// Like [`record_session`] but seeds the recording with the given channel `variables` event.
-/// The file-handle pointer is currently null.
-pub fn record_session_event(
-    session: Session,
-    file: impl AsRef<str>,
-    limit: u32,
-    variables: &crate::Event,
-) -> Result<()> {
-    let file = cstring(file)?;
-    // SAFETY: `session.as_ptr()` is a live session; `file` is a valid C string; a null file handle
-    // selects the default file management; `variables.as_ptr()` is a live event pointer borrowed
-    // for the duration of the call.
-    let status = unsafe {
-        sys::switch_ivr_record_session_event(
-            session.as_ptr(),
-            file.as_ptr(),
-            limit,
-            std::ptr::null_mut(),
-            variables.as_ptr(),
-        )
-    };
-    status_to_result(status)
-}
-
-/// Masks (or unmasks) recording of `file` on the session. Pass `on = true` to mask, `false` to
-/// unmask. Masking suppresses captured audio for the file's recording without stopping it.
-pub fn record_session_mask(session: Session, file: impl AsRef<str>, on: bool) -> Result<()> {
-    let file = cstring(file)?;
-    let on = if on {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: `session.as_ptr()` is a live session; `file` is a valid C string.
-    let status =
-        unsafe { sys::switch_ivr_record_session_mask(session.as_ptr(), file.as_ptr(), on) };
-    status_to_result(status)
-}
-
-/// Pauses (or resumes) recording of `file` on the session. Pass `on = true` to pause, `false` to
-/// resume.
-pub fn record_session_pause(session: Session, file: impl AsRef<str>, on: bool) -> Result<()> {
-    let file = cstring(file)?;
-    let on = if on {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: `session.as_ptr()` is a live session; `file` is a valid C string.
-    let status =
-        unsafe { sys::switch_ivr_record_session_pause(session.as_ptr(), file.as_ptr(), on) };
-    status_to_result(status)
-}
-
-/// Displaces the session's audio with the contents of `file`. `limit` is the maximum length in
-/// seconds (`0` for no limit). `flags` is a FreeSWITCH displace flag string (e.g. `"w"` to write,
-/// `"r"` to read, `"l"` to loop).
-pub fn displace_session(
-    session: Session,
-    file: impl AsRef<str>,
-    limit: u32,
-    flags: impl AsRef<str>,
-) -> Result<()> {
-    let file = cstring(file)?;
-    let flags = cstring(flags)?;
-    // SAFETY: `session.as_ptr()` is a live session; `file` and `flags` are valid C strings.
-    let status = unsafe {
-        sys::switch_ivr_displace_session(session.as_ptr(), file.as_ptr(), limit, flags.as_ptr())
-    };
-    status_to_result(status)
-}
-
-/// Plays a delayed echo of the session's audio back to the caller. `delay_ms` is the echo delay in
-/// milliseconds. The C function returns no status; errors (if any) are surfaced via the underlying
-/// media layer rather than here.
-pub fn delay_echo(session: Session, delay_ms: u32) {
-    // SAFETY: `session.as_ptr()` is a live session; `delay_ms` is a plain value.
-    unsafe { sys::switch_ivr_delay_echo(session.as_ptr(), delay_ms) };
-}
-
-/// Blocks DTMF on the session. Subsequent DTMF events are queued rather than delivered to the
-/// channel until [`unblock_dtmf_session`] is called.
-pub fn block_dtmf_session(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_block_dtmf_session(session.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Unblocks previously-blocked DTMF on the session, releasing queued events.
-pub fn unblock_dtmf_session(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_unblock_dtmf_session(session.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Enables or disables RFC 4103 real-time text capture on the session.
-pub fn capture_text(session: Session, on: bool) -> Result<()> {
-    let on = if on {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_capture_text(session.as_ptr(), on) };
-    status_to_result(status)
-}
-
-/// Returns `true` when the session's channel is currently on hold.
-///
-/// The underlying `switch_ivr_check_hold` returns no status, so this never fails; the answer is
-/// derived from the channel's `CF_HOLD` flag, which is the same flag the C function consults.
-pub fn check_hold(session: Session) -> bool {
-    // SAFETY: `session.as_ptr()` is a live session; the function is a pure query with no outputs.
-    unsafe { sys::switch_ivr_check_hold(session.as_ptr()) };
-    session
-        .channel()
-        .is_some_and(|ch| ch.test_flag(crate::ChannelFlag::HOLD))
-}
-
 /// Broadcasts `path` (a media path or app/arg string) to the channel identified by `uuid`, applying
 /// `flags` (a FreeSWITCH `switch_media_flag_t` bitset; pass `0` for the default).
 ///
@@ -417,62 +138,6 @@ pub fn broadcast(uuid: impl AsRef<str>, path: impl AsRef<str>, flags: u32) -> Re
         )
     };
     status_to_result(status)
-}
-
-/// Broadcasts `app` to the session from a new background thread. `flags` is an opaque integer
-/// passed through to the application. Returns an error if `app` contains an interior NUL.
-///
-/// `switch_ivr_broadcast_in_thread` stores the `app` pointer and spawns a detached thread that
-/// reads it asynchronously (verified against `switch_ivr_async.c`: `bch->app = app` without
-/// `strdup`). The pointer must therefore outlive the caller's stack frame. This wrapper copies
-/// `app` into the session's memory pool via `switch_core_session_strdup` so the spawned thread's
-/// reference remains valid for the session's lifetime.
-pub fn broadcast_in_thread(session: Session, app: impl AsRef<str>, flags: i32) -> Result<()> {
-    let app = cstring(app)?;
-    // SAFETY: `session.as_ptr()` is a live session; `app` is a valid C string for this call. The
-    // returned pointer is allocated from the session's pool and lives for the session's lifetime,
-    // so the spawned thread's `bch->app` reference is valid.
-    let pooled = unsafe {
-        sys::switch_core_perform_session_strdup(
-            session.as_ptr(),
-            app.as_ptr(),
-            c"fswtch-rs".as_ptr(),
-            c"broadcast_in_thread".as_ptr(),
-            line!() as _,
-        )
-    };
-    if pooled.is_null() {
-        return Err(crate::SwitchError(crate::GENERR));
-    }
-    // SAFETY: `session.as_ptr()` is a live session; `pooled` is a pool-allocated C string valid for
-    // the session's lifetime, so the spawned thread's async read is sound.
-    unsafe { sys::switch_ivr_broadcast_in_thread(session.as_ptr(), pooled, flags) };
-    Ok(())
-}
-
-/// Runs the dialplan application `app` (with argument `arg`) against every session currently
-/// eavesdropping on `session`.
-pub fn eavesdrop_exec_all(session: Session, app: impl AsRef<str>, arg: &str) -> Result<()> {
-    let app = cstring(app)?;
-    let arg = cstring(arg)?;
-    // SAFETY: `session.as_ptr()` is a live session; `app` and `arg` are valid C strings.
-    let status =
-        unsafe { sys::switch_ivr_eavesdrop_exec_all(session.as_ptr(), app.as_ptr(), arg.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Pops the next session eavesdropping on `session` and returns it. Returns `Ok(None)` when no
-/// eavesdropper is present. The returned [`Session`] is a non-owning wrapper; the caller must not
-/// use it after the originating session is destroyed.
-pub fn eavesdrop_pop_eavesdropper(session: Session) -> Result<Option<Session>> {
-    let mut out: *mut sys::switch_core_session_t = std::ptr::null_mut();
-    // SAFETY: `session.as_ptr()` is a live session; `out` is a valid output location for a session
-    // pointer.
-    let status =
-        unsafe { sys::switch_ivr_eavesdrop_pop_eavesdropper(session.as_ptr(), &mut out as *mut _) };
-    status_to_result(status)?;
-    // SAFETY: `out` is either null or a live session pointer provided by FreeSWITCH.
-    Ok(unsafe { Session::from_raw(out) })
 }
 
 /// Looks up the presence mapping for `exten_name` in `domain_name` and returns the resolved
@@ -495,7 +160,7 @@ pub fn check_presence_mapping(
 // Originate / bridge
 // ---------------------------------------------------------------------------
 
-/// Outcome of [`originate`] / [`originate_raw`]: the (possibly absent) created B-leg session, the
+/// Outcome of [`Session::originate`] / [`Session::originate_raw`]: the (possibly absent) created B-leg session, the
 /// disconnect cause FreeSWITCH assigned to the attempt, and the cancel cause (set when the
 /// originate was aborted before completing).
 pub struct OriginateOutcome {
@@ -517,139 +182,6 @@ impl std::fmt::Debug for OriginateOutcome {
             .field("cancel_cause", &self.cancel_cause)
             .finish()
     }
-}
-
-/// Originates a call from `session` to `bridge_to` (a dial string such as `"user/1000"` or
-/// `"sofia/gateway/mygw/15551234"`).
-///
-/// `timelimit_sec` caps the ringing/answer window. `cid_name` / `cid_num`, when given, override the
-/// caller-id presented on the B-leg. The complex parameters (state-handler table, caller-profile
-/// override, variable event, dial handle) are passed as null — use [`originate_raw`] to supply them.
-///
-/// On success the returned `peer` is the answered B-leg session and `cause` is
-/// `CAUSE_NORMAL_CLEARING`; on failure `peer` is `None` and `cause` carries the disconnect reason.
-/// The originate *status* is mapped to `Result`: a non-success status returns `Err`.
-pub fn originate(
-    session: Session,
-    bridge_to: impl AsRef<str>,
-    timelimit_sec: u32,
-    cid_name: Option<&str>,
-    cid_num: Option<&str>,
-) -> Result<OriginateOutcome> {
-    let bridge_to = cstring(bridge_to)?;
-    let cid_name = cid_name.map(cstring).transpose()?;
-    let cid_num = cid_num.map(cstring).transpose()?;
-    originate_raw(
-        session,
-        bridge_to.as_ptr(),
-        timelimit_sec,
-        std::ptr::null(),
-        cid_name.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-        cid_num.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        0,
-        std::ptr::null_mut(),
-    )
-}
-
-/// Full-featured originate escape hatch, exposing every parameter of `switch_ivr_originate`.
-///
-/// # Safety / contract
-///
-/// - `bridge_to` must be a valid null-terminated C string for the call.
-/// - `cid_name` / `cid_num`, when non-null, must be valid C strings for the call.
-/// - `caller_profile_override` must be null or a valid `switch_caller_profile_t *` whose lifetime
-///   outlasts the call.
-/// - `ovars` must be null or a valid `switch_event_t *` whose lifetime outlasts the call.
-/// - `table` must be null or a valid `switch_state_handler_table_t *` whose lifetime outlasts the
-///   call.
-/// - `dh` must be null or a valid `switch_dial_handle_t *` (built by FreeSWITCH's dial-handle API)
-///   whose lifetime outlasts the call.
-/// - `flags` is a bitmask of `SOF_*` originate flags (see `sys::switch_originate_flag_enum_t_*`).
-///
-/// See [`originate`] for the meaning of the returned `OriginateOutcome`.
-#[allow(clippy::too_many_arguments)]
-pub fn originate_raw(
-    session: Session,
-    bridge_to: *const c_char,
-    timelimit_sec: u32,
-    table: *const sys::switch_state_handler_table_t,
-    cid_name: *const c_char,
-    cid_num: *const c_char,
-    caller_profile_override: *mut sys::switch_caller_profile_t,
-    ovars: *mut sys::switch_event_t,
-    flags: sys::switch_originate_flag_t,
-    dh: *mut sys::switch_dial_handle_t,
-) -> Result<OriginateOutcome> {
-    let mut peer: *mut sys::switch_core_session_t = std::ptr::null_mut();
-    let mut cause: sys::switch_call_cause_t = 0;
-    let mut cancel_cause: sys::switch_call_cause_t = 0;
-    // SAFETY: `session.as_ptr()` is a live session; `bridge_to`/`cid_*` are valid C strings or null
-    // per the caller's contract; the out-pointers are valid stack slots; the complex raw pointers
-    // are valid or null per the caller's contract.
-    let status = unsafe {
-        sys::switch_ivr_originate(
-            session.as_ptr(),
-            &mut peer,
-            &mut cause,
-            bridge_to,
-            timelimit_sec,
-            table,
-            cid_name,
-            cid_num,
-            caller_profile_override,
-            ovars,
-            flags,
-            &mut cancel_cause,
-            dh,
-        )
-    };
-    // SAFETY: `peer` was just produced by FreeSWITCH as a live session when non-null.
-    let peer = unsafe { Session::from_raw(peer) };
-    status_to_result(status)?;
-    Ok(OriginateOutcome {
-        peer,
-        cause: Cause::from_raw(cause),
-        cancel_cause: Cause::from_raw(cancel_cause),
-    })
-}
-
-/// Bridges two sessions on the current thread: `session` (A-leg) and `peer` (B-leg). The bridge runs
-/// until one side hangs up or breaks. A null dtmf callback and null per-session user data select the
-/// default bridging behavior; use [`multi_threaded_bridge_raw`] to supply them.
-pub fn multi_threaded_bridge(session: Session, peer: Session) -> Result<()> {
-    multi_threaded_bridge_raw(
-        session,
-        peer,
-        None,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-    )
-}
-
-/// Full-featured [`multi_threaded_bridge`] escape hatch, accepting an optional input callback and
-/// opaque per-session user data pointers. The callback and user data must remain valid for the
-/// duration of the bridge.
-pub fn multi_threaded_bridge_raw(
-    session: Session,
-    peer: Session,
-    dtmf_callback: sys::switch_input_callback_function_t,
-    session_data: *mut std::ffi::c_void,
-    peer_session_data: *mut std::ffi::c_void,
-) -> Result<()> {
-    // SAFETY: both session pointers are live; the callback (when provided) is a valid function
-    // pointer; the user-data pointers are opaque to FreeSWITCH and valid per the caller's contract.
-    let status = unsafe {
-        sys::switch_ivr_multi_threaded_bridge(
-            session.as_ptr(),
-            peer.as_ptr(),
-            dtmf_callback,
-            session_data,
-            peer_session_data,
-        )
-    };
-    status_to_result(status)
 }
 
 /// Takes media (pushes the named session into the `CS_CONSUME_MEDIA`/early-media path) on the
@@ -677,129 +209,6 @@ pub fn nomedia(uuid: impl AsRef<str>, flags: MediaFlag) -> Result<()> {
 // Say (pronunciation)
 // ---------------------------------------------------------------------------
 
-/// Pronounces `to_say` on `session` using the named say module, type, method, and gender.
-///
-/// `module_name` selects the say engine (e.g. `"en"`); `say_type` is one of `"NUMBER"`, `"ITEMS"`,
-/// `"PERSONS"`, `"CURRENCY"`, `"CURRENT_DATE_TIME"`, `"TELEPHONE_NUMBER"`, etc.; `say_method` is
-/// one of `"PRONOUNCED"`, `"ITERATED"`, `"COUNTED"`, `"PRONOUNCED_YEAR"`; `say_gender` may be
-/// `"NEUTER"` or `None`. A null input-args pointer selects the default behavior.
-pub fn say(
-    session: Session,
-    to_say: impl AsRef<str>,
-    module_name: impl AsRef<str>,
-    say_type: impl AsRef<str>,
-    say_method: impl AsRef<str>,
-    say_gender: Option<&str>,
-) -> Result<()> {
-    let to_say = cstring(to_say)?;
-    let module_name = cstring(module_name)?;
-    let say_type = cstring(say_type)?;
-    let say_method = cstring(say_method)?;
-    let say_gender = say_gender.map(cstring).transpose()?;
-    // SAFETY: `session.as_ptr()` is live; all string pointers are valid C strings for the call; a
-    // null input-args pointer is permitted.
-    let status = unsafe {
-        sys::switch_ivr_say(
-            session.as_ptr(),
-            to_say.as_ptr(),
-            module_name.as_ptr(),
-            say_type.as_ptr(),
-            say_method.as_ptr(),
-            say_gender.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-            std::ptr::null_mut(),
-        )
-    };
-    status_to_result(status)
-}
-
-/// Computes the pronunciation string for `to_say` without speaking it, using the given `lang` and
-/// `ext` (module extension), say type/method/gender. Returns the produced string (an owned copy of
-/// FreeSWITCH-allocated storage, freed before returning).
-#[allow(clippy::too_many_arguments)]
-pub fn say_string(
-    session: Session,
-    lang: Option<&str>,
-    ext: Option<&str>,
-    to_say: impl AsRef<str>,
-    module_name: impl AsRef<str>,
-    say_type: impl AsRef<str>,
-    say_method: impl AsRef<str>,
-    say_gender: Option<&str>,
-) -> Result<Option<String>> {
-    let lang = lang.map(cstring).transpose()?;
-    let ext = ext.map(cstring).transpose()?;
-    let to_say = cstring(to_say)?;
-    let module_name = cstring(module_name)?;
-    let say_type = cstring(say_type)?;
-    let say_method = cstring(say_method)?;
-    let say_gender = say_gender.map(cstring).transpose()?;
-    let mut rstr: *mut c_char = std::ptr::null_mut();
-    // SAFETY: `session.as_ptr()` is live; all string pointers are valid C strings or null for the
-    // call; `rstr` is a valid out-pointer. On SUCCESS `rstr` is malloc'd by FreeSWITCH.
-    let status = unsafe {
-        sys::switch_ivr_say_string(
-            session.as_ptr(),
-            lang.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-            ext.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-            to_say.as_ptr(),
-            module_name.as_ptr(),
-            say_type.as_ptr(),
-            say_method.as_ptr(),
-            say_gender.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-            &mut rstr,
-        )
-    };
-    status_to_result(status)?;
-    // SAFETY: on SUCCESS `rstr` is null or a malloc'd C string that has not been freed.
-    Ok(unsafe { strdup_to_string(rstr) })
-}
-
-/// Spells `to_say` on `session` using the given `switch_say_args_t` (built by the caller). A null
-/// input-args pointer selects the default behavior.
-pub fn say_spell(
-    session: Session,
-    to_say: impl AsRef<str>,
-    say_args: *mut sys::switch_say_args_t,
-) -> Result<()> {
-    let to_say = cstring(to_say)?;
-    // SAFETY: `session.as_ptr()` is live; `to_say` is a valid C string for the call; `say_args` is
-    // valid or null per the caller's contract; a null input-args pointer is permitted.
-    let status = unsafe {
-        sys::switch_ivr_say_spell(
-            session.as_ptr(),
-            to_say.as_ptr() as *mut c_char,
-            say_args,
-            std::ptr::null_mut(),
-        )
-    };
-    status_to_result(status)
-}
-
-/// Pronounces an IP address on `session`, using the provided `number_func` (a say callback) to
-/// vocalize each octet, plus the given `switch_say_args_t`. A null input-args pointer selects the
-/// default behavior.
-pub fn say_ip(
-    session: Session,
-    to_say: impl AsRef<str>,
-    number_func: sys::switch_say_callback_t,
-    say_args: *mut sys::switch_say_args_t,
-) -> Result<()> {
-    let to_say = cstring(to_say)?;
-    // SAFETY: `session.as_ptr()` is live; `to_say` is a valid C string for the call; `number_func`
-    // and `say_args` are valid or null per the caller's contract; a null input-args pointer is
-    // permitted.
-    let status = unsafe {
-        sys::switch_ivr_say_ip(
-            session.as_ptr(),
-            to_say.as_ptr() as *mut c_char,
-            number_func,
-            say_args,
-            std::ptr::null_mut(),
-        )
-    };
-    status_to_result(status)
-}
-
 // ---------------------------------------------------------------------------
 // UUID presence
 // ---------------------------------------------------------------------------
@@ -824,199 +233,6 @@ pub fn uuid_force_exists(uuid: impl AsRef<str>) -> Result<bool> {
 // ---------------------------------------------------------------------------
 // Event parsing
 // ---------------------------------------------------------------------------
-
-/// Parses a single queued event for `session` (DTMF, custom events, etc.). Pass the event via its
-/// `*mut switch_event_t` pointer (the [`crate::EventRef`] / [`crate::Event`] escape hatch). A null
-/// event pointer selects the default behavior.
-pub fn parse_event(session: Session, event: *mut sys::switch_event_t) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is live; `event` is null or a valid event pointer per the caller's
-    // contract.
-    let status = unsafe { sys::switch_ivr_parse_event(session.as_ptr(), event) };
-    status_to_result(status)
-}
-
-/// Parses all queued events for `session`.
-pub fn parse_all_events(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_parse_all_events(session.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Parses the next single queued event for `session`.
-pub fn parse_next_event(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_parse_next_event(session.as_ptr()) };
-    status_to_result(status)
-}
-
-// ---------------------------------------------------------------------------
-// CDR generation
-// ---------------------------------------------------------------------------
-
-/// Generates a JSON CDR document for `session`. `urlencode` controls whether the body is URL-encoded.
-/// The returned `*mut cJSON` is owned by the caller and must be freed with `cJSON_Delete` (the
-/// underlying `cJSON` type is opaque to this wrapper).
-pub fn generate_json_cdr(session: Session, urlencode: bool) -> Result<*mut sys::cJSON> {
-    let mut json: *mut sys::cJSON = std::ptr::null_mut();
-    // SAFETY: `session.as_ptr()` is live; `json` is a valid out-pointer.
-    let status = unsafe {
-        sys::switch_ivr_generate_json_cdr(
-            session.as_ptr(),
-            &mut json,
-            if urlencode {
-                sys::switch_bool_t_SWITCH_TRUE
-            } else {
-                sys::switch_bool_t_SWITCH_FALSE
-            },
-        )
-    };
-    status_to_result(status)?;
-    Ok(json)
-}
-
-/// Generates an XML CDR document for `session`. The returned `switch_xml_t` is owned by the caller
-/// and must be freed with `switch_xml_free` (the underlying `switch_xml` type is opaque to this
-/// wrapper); a null out-slot selects a freshly allocated document.
-pub fn generate_xml_cdr(session: Session) -> Result<sys::switch_xml_t> {
-    let mut xml: sys::switch_xml_t = std::ptr::null_mut();
-    // SAFETY: `session.as_ptr()` is live; `xml` is a valid out-pointer (null slot => fresh doc).
-    let status = unsafe { sys::switch_ivr_generate_xml_cdr(session.as_ptr(), &mut xml) };
-    status_to_result(status)?;
-    Ok(xml)
-}
-
-// ---------------------------------------------------------------------------
-// ASR / speech detection
-// ---------------------------------------------------------------------------
-
-/// Initializes ASR speech detection on `session` using the named module (`mod_name`, e.g.
-/// `"pocketsphinx"`) and `dest` (the recognition destination/path). The `switch_asr_handle_t` slot
-/// (`ah`) is filled by FreeSWITCH; pass a pointer to a `switch_asr_handle_t`.
-pub fn detect_speech_init(
-    session: Session,
-    mod_name: impl AsRef<str>,
-    dest: impl AsRef<str>,
-    ah: *mut sys::switch_asr_handle_t,
-) -> Result<()> {
-    let mod_name = cstring(mod_name)?;
-    let dest = cstring(dest)?;
-    // SAFETY: `session.as_ptr()` is live; both strings are valid C strings for the call; `ah` is a
-    // valid pointer to a `switch_asr_handle_t` per the caller's contract.
-    let status = unsafe {
-        sys::switch_ivr_detect_speech_init(session.as_ptr(), mod_name.as_ptr(), dest.as_ptr(), ah)
-    };
-    status_to_result(status)
-}
-
-/// Starts ASR speech detection on `session` using `mod_name`, loading `grammar` under the name
-/// `name`, with recognition `dest`. The `switch_asr_handle_t` slot (`ah`) is filled by FreeSWITCH.
-pub fn detect_speech(
-    session: Session,
-    mod_name: impl AsRef<str>,
-    grammar: impl AsRef<str>,
-    name: impl AsRef<str>,
-    dest: impl AsRef<str>,
-    ah: *mut sys::switch_asr_handle_t,
-) -> Result<()> {
-    let mod_name = cstring(mod_name)?;
-    let grammar = cstring(grammar)?;
-    let name = cstring(name)?;
-    let dest = cstring(dest)?;
-    // SAFETY: `session.as_ptr()` is live; all strings are valid C strings for the call; `ah` is a
-    // valid pointer per the caller's contract.
-    let status = unsafe {
-        sys::switch_ivr_detect_speech(
-            session.as_ptr(),
-            mod_name.as_ptr(),
-            grammar.as_ptr(),
-            name.as_ptr(),
-            dest.as_ptr(),
-            ah,
-        )
-    };
-    status_to_result(status)
-}
-
-/// Stops ASR speech detection on `session`.
-pub fn stop_detect_speech(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_stop_detect_speech(session.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Pauses ASR speech detection on `session`.
-pub fn pause_detect_speech(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_pause_detect_speech(session.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Resumes ASR speech detection on `session`.
-pub fn resume_detect_speech(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_resume_detect_speech(session.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Loads a named ASR `grammar` on `session`, registering it under `name`.
-pub fn detect_speech_load_grammar(
-    session: Session,
-    grammar: impl AsRef<str>,
-    name: impl AsRef<str>,
-) -> Result<()> {
-    let grammar = cstring(grammar)?;
-    let name = cstring(name)?;
-    // SAFETY: `session.as_ptr()` is live; both strings are valid C strings for the call.
-    let status = unsafe {
-        sys::switch_ivr_detect_speech_load_grammar(
-            session.as_ptr(),
-            grammar.as_ptr(),
-            name.as_ptr(),
-        )
-    };
-    status_to_result(status)
-}
-
-/// Unloads the named ASR grammar (`name`) from `session`.
-pub fn detect_speech_unload_grammar(session: Session, name: impl AsRef<str>) -> Result<()> {
-    let name = cstring(name)?;
-    // SAFETY: `session.as_ptr()` is live; `name` is a valid C string for the call.
-    let status =
-        unsafe { sys::switch_ivr_detect_speech_unload_grammar(session.as_ptr(), name.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Enables the named ASR grammar (`name`) on `session`.
-pub fn detect_speech_enable_grammar(session: Session, name: impl AsRef<str>) -> Result<()> {
-    let name = cstring(name)?;
-    // SAFETY: `session.as_ptr()` is live; `name` is a valid C string for the call.
-    let status =
-        unsafe { sys::switch_ivr_detect_speech_enable_grammar(session.as_ptr(), name.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Disables the named ASR grammar (`name`) on `session`.
-pub fn detect_speech_disable_grammar(session: Session, name: impl AsRef<str>) -> Result<()> {
-    let name = cstring(name)?;
-    // SAFETY: `session.as_ptr()` is live; `name` is a valid C string for the call.
-    let status =
-        unsafe { sys::switch_ivr_detect_speech_disable_grammar(session.as_ptr(), name.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Disables all ASR grammars on `session`.
-pub fn detect_speech_disable_all_grammars(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_detect_speech_disable_all_grammars(session.as_ptr()) };
-    status_to_result(status)
-}
-
-/// Starts the ASR input timers on `session` (begins the recognition timeout window).
-pub fn detect_speech_start_input_timers(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    let status = unsafe { sys::switch_ivr_detect_speech_start_input_timers(session.as_ptr()) };
-    status_to_result(status)
-}
 
 // ---------------------------------------------------------------------------
 // IVR menu (switch_ivr_menu_*) — owned wrapper over switch_ivr_menu_t
@@ -1592,44 +808,6 @@ mod tests {
 
 // ── TTS / hold / transfer / bridge / kill (high-frequency) ────────────────
 
-/// Synthesizes and plays `text` on `session` via TTS (`switch_ivr_speak_text`). `tts_name` is
-/// the TTS engine (e.g. `"flite"`, `"cepstral"`), `voice_name` the voice, `args` an optional
-/// `switch_input_args_t*` (pass `null_mut()` for none). Interior NUL rejected.
-pub fn speak_text(
-    session: Session,
-    tts_name: impl AsRef<str>,
-    voice_name: impl AsRef<str>,
-    text: impl AsRef<str>,
-    args: *mut sys::switch_input_args_t,
-) -> Result<()> {
-    let tts = cstring(tts_name)?;
-    let voice = cstring(voice_name)?;
-    let text = cstring(text)?;
-    // SAFETY: live session; three valid C strings; `args` is null or a valid args struct.
-    status_to_result(unsafe {
-        sys::switch_ivr_speak_text(
-            session.as_ptr(),
-            tts.as_ptr(),
-            voice.as_ptr(),
-            text.as_ptr(),
-            args,
-        )
-    })
-}
-
-/// Holds `session`. `message` is an optional announcement string (may be empty); `moh` plays
-/// music-on-hold while held.
-pub fn hold(session: Session, message: impl AsRef<str>, moh: bool) -> Result<()> {
-    let message = cstring(message)?;
-    let moh = if moh {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: live session; valid C string; valid bool.
-    status_to_result(unsafe { sys::switch_ivr_hold(session.as_ptr(), message.as_ptr(), moh) })
-}
-
 /// Holds the session identified by `uuid`.
 pub fn hold_uuid(uuid: impl AsRef<str>, message: impl AsRef<str>, moh: bool) -> Result<()> {
     let uuid = cstring(uuid)?;
@@ -1658,33 +836,11 @@ pub fn hold_toggle_uuid(uuid: impl AsRef<str>, message: impl AsRef<str>, moh: bo
     })
 }
 
-/// Unholds `session`.
-pub fn unhold(session: Session) -> Result<()> {
-    // SAFETY: live session.
-    status_to_result(unsafe { sys::switch_ivr_unhold(session.as_ptr()) })
-}
-
 /// Unholds the session identified by `uuid`.
 pub fn unhold_uuid(uuid: impl AsRef<str>) -> Result<()> {
     let uuid = cstring(uuid)?;
     // SAFETY: valid uuid.
     status_to_result(unsafe { sys::switch_ivr_unhold_uuid(uuid.as_ptr()) })
-}
-
-/// Transfers `session` to `extension`/`dialplan`/`context`. Pass empty strings for defaults.
-pub fn session_transfer(
-    session: Session,
-    extension: impl AsRef<str>,
-    dialplan: impl AsRef<str>,
-    context: impl AsRef<str>,
-) -> Result<()> {
-    let ext = cstring(extension)?;
-    let dp = cstring(dialplan)?;
-    let ctx = cstring(context)?;
-    // SAFETY: live session; three valid C strings.
-    status_to_result(unsafe {
-        sys::switch_ivr_session_transfer(session.as_ptr(), ext.as_ptr(), dp.as_ptr(), ctx.as_ptr())
-    })
 }
 
 /// Bridges two sessions by UUID (originator ↔ originatee).
@@ -1698,30 +854,6 @@ pub fn uuid_bridge(
     status_to_result(unsafe { sys::switch_ivr_uuid_bridge(a.as_ptr(), b.as_ptr()) })
 }
 
-/// Signal-bridges `session` and `peer_session` (no media bridge, just signalling).
-pub fn signal_bridge(session: Session, peer_session: Session) -> Result<()> {
-    // SAFETY: both sessions live.
-    status_to_result(unsafe {
-        sys::switch_ivr_signal_bridge(session.as_ptr(), peer_session.as_ptr())
-    })
-}
-
-/// Soft-holds `session` with an `unhold_key` (DTMF that releases) and MOH for each leg.
-pub fn soft_hold(
-    session: Session,
-    unhold_key: impl AsRef<str>,
-    moh_a: impl AsRef<str>,
-    moh_b: impl AsRef<str>,
-) -> Result<()> {
-    let k = cstring(unhold_key)?;
-    let a = cstring(moh_a)?;
-    let b = cstring(moh_b)?;
-    // SAFETY: live session; three valid C strings.
-    status_to_result(unsafe {
-        sys::switch_ivr_soft_hold(session.as_ptr(), k.as_ptr(), a.as_ptr(), b.as_ptr())
-    })
-}
-
 /// Hangs up the session identified by `uuid` with `cause`.
 pub fn kill_uuid(uuid: impl AsRef<str>, cause: Cause) -> Result<()> {
     let uuid = cstring(uuid)?;
@@ -1729,141 +861,7 @@ pub fn kill_uuid(uuid: impl AsRef<str>, cause: Cause) -> Result<()> {
     status_to_result(unsafe { sys::switch_ivr_kill_uuid(uuid.as_ptr(), cause.raw()) })
 }
 
-/// Generates/plays tones from `script` on `session`, `loops` times. `args` is an optional
-/// `switch_input_args_t*` (`null_mut()` for none).
-pub fn gentones(
-    session: Session,
-    script: impl AsRef<str>,
-    loops: i32,
-    args: *mut sys::switch_input_args_t,
-) -> Result<()> {
-    let script = cstring(script)?;
-    // SAFETY: live session; valid C string; plain int; `args` null or valid.
-    status_to_result(unsafe {
-        sys::switch_ivr_gentones(session.as_ptr(), script.as_ptr(), loops, args)
-    })
-}
-
-/// Inserts `insert_file` into `file` at `sample_point` (records one into the other).
-pub fn insert_file(
-    session: Session,
-    file: impl AsRef<str>,
-    insert_file: impl AsRef<str>,
-    sample_point: u64,
-) -> Result<()> {
-    let file = cstring(file)?;
-    let ins = cstring(insert_file)?;
-    // SAFETY: live session; two valid C strings; plain size.
-    status_to_result(unsafe {
-        sys::switch_ivr_insert_file(
-            session.as_ptr(),
-            file.as_ptr(),
-            ins.as_ptr(),
-            sample_point as sys::switch_size_t,
-        )
-    })
-}
-
 // ── originate / eavesdrop / intercept / schedule / detect ──────────────────
-
-/// Enterprise-originates a new leg from `session` to `bridgeto` with a `timelimit_sec` and
-/// optional overrides. The b-leg session and cause are returned via out-params (`null_mut()`
-/// to ignore). Advanced; prefer [`originate`] for simple cases.
-pub fn enterprise_originate(
-    session: Session,
-    bleg: *mut *mut sys::switch_core_session_t,
-    cause: *mut sys::switch_call_cause_t,
-    bridgeto: impl AsRef<str>,
-    timelimit_sec: u32,
-    table: *const sys::switch_state_handler_table_t,
-    cid_name_override: *const std::os::raw::c_char,
-    cid_num_override: *const std::os::raw::c_char,
-    caller_profile_override: *mut sys::switch_caller_profile_t,
-    ovars: *mut sys::switch_event_t,
-    flags: sys::switch_originate_flag_t,
-    cancel_cause: *mut sys::switch_call_cause_t,
-    hl: *mut sys::switch_dial_handle_list_t,
-) -> Result<()> {
-    let bt = cstring(bridgeto)?;
-    // SAFETY: live session; all args per caller contract; valid C string.
-    status_to_result(unsafe {
-        sys::switch_ivr_enterprise_originate(
-            session.as_ptr(),
-            bleg,
-            cause,
-            bt.as_ptr(),
-            timelimit_sec,
-            table,
-            cid_name_override,
-            cid_num_override,
-            caller_profile_override,
-            ovars,
-            flags,
-            cancel_cause,
-            hl,
-        )
-    })
-}
-
-/// Enterprise-originates and bridges in one call. `data` is the dial string; `hl` a dial-handle
-/// list (may be null); `cause` out-param.
-pub fn enterprise_orig_and_bridge(
-    session: Session,
-    data: impl AsRef<str>,
-    hl: *mut sys::switch_dial_handle_list_t,
-    cause: *mut sys::switch_call_cause_t,
-) -> Result<()> {
-    let data = cstring(data)?;
-    // SAFETY: live session; valid C string; `hl`/`cause` per caller.
-    status_to_result(unsafe {
-        sys::switch_ivr_enterprise_orig_and_bridge(session.as_ptr(), data.as_ptr(), hl, cause)
-    })
-}
-
-/// Originates and bridges in one call. `data` is the dial string; `dh` a dial handle (may be
-/// null); `cause` out-param.
-pub fn orig_and_bridge(
-    session: Session,
-    data: impl AsRef<str>,
-    dh: *mut sys::switch_dial_handle_t,
-    cause: *mut sys::switch_call_cause_t,
-) -> Result<()> {
-    let data = cstring(data)?;
-    // SAFETY: live session; valid C string; `dh`/`cause` per caller.
-    status_to_result(unsafe {
-        sys::switch_ivr_orig_and_bridge(session.as_ptr(), data.as_ptr(), dh, cause)
-    })
-}
-
-/// Eavesdrops on the session `uuid` from `session`. `require_group` restricts to a spy group
-/// (may be empty); `flags` is a `switch_eavesdrop_flag_t` bitmask.
-pub fn eavesdrop_session(
-    session: Session,
-    uuid: impl AsRef<str>,
-    require_group: impl AsRef<str>,
-    flags: sys::switch_eavesdrop_flag_t,
-) -> Result<()> {
-    let uuid = cstring(uuid)?;
-    let group = cstring(require_group)?;
-    // SAFETY: live session; two valid C strings; `flags` valid bitmask.
-    status_to_result(unsafe {
-        sys::switch_ivr_eavesdrop_session(session.as_ptr(), uuid.as_ptr(), group.as_ptr(), flags)
-    })
-}
-
-/// Intercepts `uuid` onto `session`. `bleg` intercepts the b-leg too.
-pub fn intercept_session(session: Session, uuid: impl AsRef<str>, bleg: bool) -> Result<()> {
-    let uuid = cstring(uuid)?;
-    let bleg = if bleg {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: live session; valid uuid; valid bool.
-    status_to_result(unsafe {
-        sys::switch_ivr_intercept_session(session.as_ptr(), uuid.as_ptr(), bleg)
-    })
-}
 
 /// Schedules a broadcast of `path` onto `uuid` at `runtime` (epoch seconds). Returns the task id.
 pub fn schedule_broadcast(
@@ -1935,68 +933,6 @@ pub unsafe fn schedule_transfer(
             context_ptr,
         )
     }
-}
-
-/// Detects audio above `thresh` for `audio_hits` frames within `timeout_ms` on `session`,
-/// optionally recording to `file` (empty for none).
-pub fn detect_audio(
-    session: Session,
-    thresh: u32,
-    audio_hits: u32,
-    timeout_ms: u32,
-    file: impl AsRef<str>,
-) -> Result<()> {
-    let file = cstring(file)?;
-    // SAFETY: live session; plain ints; valid C string.
-    status_to_result(unsafe {
-        sys::switch_ivr_detect_audio(
-            session.as_ptr(),
-            thresh,
-            audio_hits,
-            timeout_ms,
-            file.as_ptr(),
-        )
-    })
-}
-
-/// Detects silence below `thresh` for `silence_hits` frames within `timeout_ms` on `session`,
-/// optionally recording to `file`.
-pub fn detect_silence(
-    session: Session,
-    thresh: u32,
-    silence_hits: u32,
-    timeout_ms: u32,
-    file: impl AsRef<str>,
-) -> Result<()> {
-    let file = cstring(file)?;
-    // SAFETY: live session; plain ints; valid C string.
-    status_to_result(unsafe {
-        sys::switch_ivr_detect_silence(
-            session.as_ptr(),
-            thresh,
-            silence_hits,
-            timeout_ms,
-            file.as_ptr(),
-        )
-    })
-}
-
-// ── AEC / 降噪 / AGC (switch_ivr_preprocess_session) ──────────────────────
-
-/// AEC / noise suppression / AGC via `switch_ivr_preprocess_session` (libspeexdsp).
-///
-/// `cmds` is a FreeSWITCH preprocessor DSL with `r.` (read-leg) / `w.` (write-leg) prefix:
-/// - `echo_cancel=<tail>` — enable echo cancellation (tail in samples, default 1024);
-///   `echo_cancel=false` disables.
-/// - `noise_suppress=<-db>` — noise suppression level (negative dB).
-/// - `echo_suppress=<-db>` — residual echo suppression.
-/// - `agc=<true|level>` — automatic gain control.
-///
-/// Example: `"r.echo_cancel=1024 r.noise_suppress=-30 r.agc=true"`.
-pub fn preprocess_session(session: Session, cmds: impl AsRef<str>) -> Result<()> {
-    let cmds = cstring(cmds)?;
-    // SAFETY: live session; valid C string. Returns switch_status_t.
-    status_to_result(unsafe { sys::switch_ivr_preprocess_session(session.as_ptr(), cmds.as_ptr()) })
 }
 
 // ── TTS speech interface (switch_core_speech_*) ────────────────────────────
@@ -2116,4 +1052,1060 @@ pub fn speech_close(
 ) -> Result<()> {
     // SAFETY: `sh` live; `flags` in/out.
     status_to_result(unsafe { sys::switch_core_speech_close(sh, flags) })
+}
+
+// ---------------------------------------------------------------------------
+// Session IVR methods (switch_ivr_*)
+// ---------------------------------------------------------------------------
+// Migrated from module-level free functions that took `session: Session` as their first
+// parameter. `Session` is a `Copy` handle, so these methods take `self` by value. The two-session
+// bridges (`multi_threaded_bridge*`, `signal_bridge`) take the originator as `self` and the peer
+// as a plain parameter. `session_transfer` was renamed to `transfer`.
+impl Session {
+    /// Records the session's media to `path`. `limit` is the maximum recording length in seconds
+    /// (pass `0` for no limit). A null file handle lets FreeSWITCH open `path` itself.
+    pub fn record_file(self, path: impl AsRef<str>, limit: u32) -> Result<()> {
+        let path = cstring(path)?;
+        // SAFETY: `self.as_ptr()` is a live session; `path` is a valid C string; null file handle
+        // and input args select the default recording behavior.
+        let status = unsafe {
+            sys::switch_ivr_record_file(
+                self.as_ptr(),
+                std::ptr::null_mut(),
+                path.as_ptr(),
+                std::ptr::null_mut(),
+                limit,
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Parks the session. A `SWITCH_STATUS_FALSE`/break result indicates the channel left the park
+    /// (typically a hangup); it is surfaced as `Err` like any non-success status.
+    pub fn park(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session; a null input args pointer is permitted.
+        let status = unsafe { sys::switch_ivr_park(self.as_ptr(), std::ptr::null_mut()) };
+        status_to_result(status)
+    }
+
+    /// Collects digits from the session using a registered input callback. The `digit_timeout` and
+    /// `abs_timeout` values are in milliseconds; pass `0` for no timeout on either.
+    ///
+    /// The input-args struct (`switch_input_args_t`) is currently passed as null, which selects the
+    /// default (no custom callback) behavior. A non-success status is surfaced as `Err`.
+    pub fn collect_digits_callback(self, digit_timeout: u32, abs_timeout: u32) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session; a null input-args pointer is permitted.
+        let status = unsafe {
+            sys::switch_ivr_collect_digits_callback(
+                self.as_ptr(),
+                std::ptr::null_mut(),
+                digit_timeout,
+                abs_timeout,
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Collects up to `max_digits` digits into `buf`, stopping early when a character from
+    /// `terminators` is pressed. On success the number of digits collected is written to `out_count`.
+    ///
+    /// `first_timeout` is the wait for the first digit, `digit_timeout` the inter-digit wait, and
+    /// `abs_timeout` an absolute cap — all in milliseconds (`0` means no timeout). Any pressed
+    /// terminator character is written to `out_terminator` (an empty string when none matched).
+    #[allow(clippy::too_many_arguments)]
+    pub fn collect_digits_count(
+        self,
+        buf: &mut [u8],
+        max_digits: usize,
+        terminators: impl AsRef<str>,
+        first_timeout: u32,
+        digit_timeout: u32,
+        abs_timeout: u32,
+        out_count: &mut usize,
+        out_terminator: &mut String,
+    ) -> Result<()> {
+        let terminators = cstring(terminators)?;
+        let mut term_byte: MaybeUninit<c_char> = MaybeUninit::uninit();
+        // SAFETY: `self.as_ptr()` is a live session; `buf` is a writable byte buffer of length
+        // `buflen` for the duration of the call; `terminators` is a valid C string; `term_byte` is a
+        // valid single-byte output location.
+        let status = unsafe {
+            sys::switch_ivr_collect_digits_count(
+                self.as_ptr(),
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf.len(),
+                max_digits,
+                terminators.as_ptr(),
+                term_byte.as_mut_ptr(),
+                first_timeout,
+                digit_timeout,
+                abs_timeout,
+            )
+        };
+        // SAFETY: `term_byte` is initialized by the callee on return (to NUL when no terminator fired).
+        let term = unsafe { term_byte.assume_init() };
+        if term != 0 {
+            out_terminator.clear();
+            out_terminator.push(term as u8 as char);
+        } else {
+            out_terminator.clear();
+        }
+        // The number of digits written is not returned by the C API; approximate it as the position of
+        // the first NUL byte in `buf`.
+        *out_count = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        status_to_result(status)
+    }
+
+    /// The main digit-collection primitive: prompts with `prompt_audio_file` (may be empty), then reads
+    /// between `min_digits` and `max_digits` digits into `buf`, storing them in channel variable
+    /// `var_name` when given. Stops early on any character from `valid_terminators`.
+    ///
+    /// `timeout` is the wait for the first digit and `digit_timeout` the inter-digit wait, in
+    /// milliseconds (`0` means no timeout). Pass an empty string for `prompt_audio_file` or
+    /// `var_name` to omit them. On success the number of digits collected is written to `out_count`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read(
+        self,
+        min_digits: u32,
+        max_digits: u32,
+        prompt_audio_file: impl AsRef<str>,
+        var_name: impl AsRef<str>,
+        buf: &mut [u8],
+        timeout: u32,
+        valid_terminators: impl AsRef<str>,
+        digit_timeout: u32,
+        out_count: &mut usize,
+    ) -> Result<()> {
+        let prompt = cstring(prompt_audio_file)?;
+        let var = cstring(var_name)?;
+        let terminators = cstring(valid_terminators)?;
+        // SAFETY: `self.as_ptr()` is a live session; `prompt`, `var`, and `terminators` are valid C
+        // strings for the call; `buf` is a writable byte buffer of length `digit_buffer_length`.
+        let status = unsafe {
+            sys::switch_ivr_read(
+                self.as_ptr(),
+                min_digits,
+                max_digits,
+                prompt.as_ptr(),
+                var.as_ptr(),
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf.len(),
+                timeout,
+                terminators.as_ptr(),
+                digit_timeout,
+            )
+        };
+        *out_count = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        status_to_result(status)
+    }
+
+    /// Records the entire session to `file`. `limit` is the maximum length in seconds (`0` for no
+    /// limit). The file-handle pointer is currently null, letting FreeSWITCH manage the file itself.
+    pub fn record_session(self, file: impl AsRef<str>, limit: u32) -> Result<()> {
+        let file = cstring(file)?;
+        // SAFETY: `self.as_ptr()` is a live session; `file` is a valid C string; a null file handle
+        // selects the default file management.
+        let status = unsafe {
+            sys::switch_ivr_record_session(
+                self.as_ptr(),
+                file.as_ptr(),
+                limit,
+                std::ptr::null_mut(),
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Like [`record_session`](Self::record_session) but seeds the recording with the given channel
+    /// `variables` event. The file-handle pointer is currently null.
+    pub fn record_session_event(
+        self,
+        file: impl AsRef<str>,
+        limit: u32,
+        variables: &crate::Event,
+    ) -> Result<()> {
+        let file = cstring(file)?;
+        // SAFETY: `self.as_ptr()` is a live session; `file` is a valid C string; a null file handle
+        // selects the default file management; `variables.as_ptr()` is a live event pointer borrowed
+        // for the duration of the call.
+        let status = unsafe {
+            sys::switch_ivr_record_session_event(
+                self.as_ptr(),
+                file.as_ptr(),
+                limit,
+                std::ptr::null_mut(),
+                variables.as_ptr(),
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Masks (or unmasks) recording of `file` on the session. Pass `on = true` to mask, `false` to
+    /// unmask. Masking suppresses captured audio for the file's recording without stopping it.
+    pub fn record_session_mask(self, file: impl AsRef<str>, on: bool) -> Result<()> {
+        let file = cstring(file)?;
+        let on = if on {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: `self.as_ptr()` is a live session; `file` is a valid C string.
+        let status =
+            unsafe { sys::switch_ivr_record_session_mask(self.as_ptr(), file.as_ptr(), on) };
+        status_to_result(status)
+    }
+
+    /// Pauses (or resumes) recording of `file` on the session. Pass `on = true` to pause, `false` to
+    /// resume.
+    pub fn record_session_pause(self, file: impl AsRef<str>, on: bool) -> Result<()> {
+        let file = cstring(file)?;
+        let on = if on {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: `self.as_ptr()` is a live session; `file` is a valid C string.
+        let status =
+            unsafe { sys::switch_ivr_record_session_pause(self.as_ptr(), file.as_ptr(), on) };
+        status_to_result(status)
+    }
+
+    /// Displaces the session's audio with the contents of `file`. `limit` is the maximum length in
+    /// seconds (`0` for no limit). `flags` is a FreeSWITCH displace flag string (e.g. `"w"` to write,
+    /// `"r"` to read, `"l"` to loop).
+    pub fn displace_session(
+        self,
+        file: impl AsRef<str>,
+        limit: u32,
+        flags: impl AsRef<str>,
+    ) -> Result<()> {
+        let file = cstring(file)?;
+        let flags = cstring(flags)?;
+        // SAFETY: `self.as_ptr()` is a live session; `file` and `flags` are valid C strings.
+        let status = unsafe {
+            sys::switch_ivr_displace_session(self.as_ptr(), file.as_ptr(), limit, flags.as_ptr())
+        };
+        status_to_result(status)
+    }
+
+    /// Plays a delayed echo of the session's audio back to the caller. `delay_ms` is the echo delay in
+    /// milliseconds. The C function returns no status; errors (if any) are surfaced via the underlying
+    /// media layer rather than here.
+    pub fn delay_echo(self, delay_ms: u32) {
+        // SAFETY: `self.as_ptr()` is a live session; `delay_ms` is a plain value.
+        unsafe { sys::switch_ivr_delay_echo(self.as_ptr(), delay_ms) };
+    }
+
+    /// Blocks DTMF on the session. Subsequent DTMF events are queued rather than delivered to the
+    /// channel until [`unblock_dtmf_session`](Self::unblock_dtmf_session) is called.
+    pub fn block_dtmf_session(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_block_dtmf_session(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Unblocks previously-blocked DTMF on the session, releasing queued events.
+    pub fn unblock_dtmf_session(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_unblock_dtmf_session(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Enables or disables RFC 4103 real-time text capture on the session.
+    pub fn capture_text(self, on: bool) -> Result<()> {
+        let on = if on {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_capture_text(self.as_ptr(), on) };
+        status_to_result(status)
+    }
+
+    /// Returns `true` when the session's channel is currently on hold.
+    ///
+    /// The underlying `switch_ivr_check_hold` returns no status, so this never fails; the answer is
+    /// derived from the channel's `CF_HOLD` flag, which is the same flag the C function consults.
+    pub fn check_hold(self) -> bool {
+        // SAFETY: `self.as_ptr()` is a live session; the function is a pure query with no outputs.
+        unsafe { sys::switch_ivr_check_hold(self.as_ptr()) };
+        self.channel()
+            .is_some_and(|ch| ch.test_flag(crate::ChannelFlag::HOLD))
+    }
+
+    /// Broadcasts `app` to the session from a new background thread. `flags` is an opaque integer
+    /// passed through to the application. Returns an error if `app` contains an interior NUL.
+    ///
+    /// `switch_ivr_broadcast_in_thread` stores the `app` pointer and spawns a detached thread that
+    /// reads it asynchronously (verified against `switch_ivr_async.c`: `bch->app = app` without
+    /// `strdup`). The pointer must therefore outlive the caller's stack frame. This wrapper copies
+    /// `app` into the session's memory pool via `switch_core_session_strdup` so the spawned thread's
+    /// reference remains valid for the session's lifetime.
+    pub fn broadcast_in_thread(self, app: impl AsRef<str>, flags: i32) -> Result<()> {
+        let app = cstring(app)?;
+        // SAFETY: `self.as_ptr()` is a live session; `app` is a valid C string for this call. The
+        // returned pointer is allocated from the session's pool and lives for the session's lifetime,
+        // so the spawned thread's `bch->app` reference is valid.
+        let pooled = unsafe {
+            sys::switch_core_perform_session_strdup(
+                self.as_ptr(),
+                app.as_ptr(),
+                c"fswtch-rs".as_ptr(),
+                c"broadcast_in_thread".as_ptr(),
+                line!() as _,
+            )
+        };
+        if pooled.is_null() {
+            return Err(crate::SwitchError(crate::GENERR));
+        }
+        // SAFETY: `self.as_ptr()` is a live session; `pooled` is a pool-allocated C string valid for
+        // the session's lifetime, so the spawned thread's async read is sound.
+        unsafe { sys::switch_ivr_broadcast_in_thread(self.as_ptr(), pooled, flags) };
+        Ok(())
+    }
+
+    /// Runs the dialplan application `app` (with argument `arg`) against every session currently
+    /// eavesdropping on `session`.
+    pub fn eavesdrop_exec_all(self, app: impl AsRef<str>, arg: &str) -> Result<()> {
+        let app = cstring(app)?;
+        let arg = cstring(arg)?;
+        // SAFETY: `self.as_ptr()` is a live session; `app` and `arg` are valid C strings.
+        let status = unsafe {
+            sys::switch_ivr_eavesdrop_exec_all(self.as_ptr(), app.as_ptr(), arg.as_ptr())
+        };
+        status_to_result(status)
+    }
+
+    /// Pops the next session eavesdropping on `session` and returns it. Returns `Ok(None)` when no
+    /// eavesdropper is present. The returned [`Session`] is a non-owning wrapper; the caller must not
+    /// use it after the originating session is destroyed.
+    pub fn eavesdrop_pop_eavesdropper(self) -> Result<Option<Session>> {
+        let mut out: *mut sys::switch_core_session_t = std::ptr::null_mut();
+        // SAFETY: `self.as_ptr()` is a live session; `out` is a valid output location for a session
+        // pointer.
+        let status = unsafe {
+            sys::switch_ivr_eavesdrop_pop_eavesdropper(self.as_ptr(), &mut out as *mut _)
+        };
+        status_to_result(status)?;
+        // SAFETY: `out` is either null or a live session pointer provided by FreeSWITCH.
+        Ok(unsafe { Session::from_raw(out) })
+    }
+
+    /// Originates a call from `session` to `bridge_to` (a dial string such as `"user/1000"` or
+    /// `"sofia/gateway/mygw/15551234"`).
+    ///
+    /// `timelimit_sec` caps the ringing/answer window. `cid_name` / `cid_num`, when given, override the
+    /// caller-id presented on the B-leg. The complex parameters (state-handler table, caller-profile
+    /// override, variable event, dial handle) are passed as null — use
+    /// [`originate_raw`](Self::originate_raw) to supply them.
+    ///
+    /// On success the returned `peer` is the answered B-leg session and `cause` is
+    /// `CAUSE_NORMAL_CLEARING`; on failure `peer` is `None` and `cause` carries the disconnect reason.
+    /// The originate *status* is mapped to `Result`: a non-success status returns `Err`.
+    pub fn originate(
+        self,
+        bridge_to: impl AsRef<str>,
+        timelimit_sec: u32,
+        cid_name: Option<&str>,
+        cid_num: Option<&str>,
+    ) -> Result<OriginateOutcome> {
+        let bridge_to = cstring(bridge_to)?;
+        let cid_name = cid_name.map(cstring).transpose()?;
+        let cid_num = cid_num.map(cstring).transpose()?;
+        self.originate_raw(
+            bridge_to.as_ptr(),
+            timelimit_sec,
+            std::ptr::null(),
+            cid_name.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            cid_num.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+        )
+    }
+
+    /// Full-featured originate escape hatch, exposing every parameter of `switch_ivr_originate`.
+    ///
+    /// # Safety / contract
+    ///
+    /// - `bridge_to` must be a valid null-terminated C string for the call.
+    /// - `cid_name` / `cid_num`, when non-null, must be valid C strings for the call.
+    /// - `caller_profile_override` must be null or a valid `switch_caller_profile_t *` whose lifetime
+    ///   outlasts the call.
+    /// - `ovars` must be null or a valid `switch_event_t *` whose lifetime outlasts the call.
+    /// - `table` must be null or a valid `switch_state_handler_table_t *` whose lifetime outlasts the
+    ///   call.
+    /// - `dh` must be null or a valid `switch_dial_handle_t *` (built by FreeSWITCH's dial-handle API)
+    ///   whose lifetime outlasts the call.
+    /// - `flags` is a bitmask of `SOF_*` originate flags (see `sys::switch_originate_flag_enum_t_*`).
+    ///
+    /// See [`originate`](Self::originate) for the meaning of the returned `OriginateOutcome`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn originate_raw(
+        self,
+        bridge_to: *const c_char,
+        timelimit_sec: u32,
+        table: *const sys::switch_state_handler_table_t,
+        cid_name: *const c_char,
+        cid_num: *const c_char,
+        caller_profile_override: *mut sys::switch_caller_profile_t,
+        ovars: *mut sys::switch_event_t,
+        flags: sys::switch_originate_flag_t,
+        dh: *mut sys::switch_dial_handle_t,
+    ) -> Result<OriginateOutcome> {
+        let mut peer: *mut sys::switch_core_session_t = std::ptr::null_mut();
+        let mut cause: sys::switch_call_cause_t = 0;
+        let mut cancel_cause: sys::switch_call_cause_t = 0;
+        // SAFETY: `self.as_ptr()` is a live session; `bridge_to`/`cid_*` are valid C strings or null
+        // per the caller's contract; the out-pointers are valid stack slots; the complex raw pointers
+        // are valid or null per the caller's contract.
+        let status = unsafe {
+            sys::switch_ivr_originate(
+                self.as_ptr(),
+                &mut peer,
+                &mut cause,
+                bridge_to,
+                timelimit_sec,
+                table,
+                cid_name,
+                cid_num,
+                caller_profile_override,
+                ovars,
+                flags,
+                &mut cancel_cause,
+                dh,
+            )
+        };
+        // SAFETY: `peer` was just produced by FreeSWITCH as a live session when non-null.
+        let peer = unsafe { Session::from_raw(peer) };
+        status_to_result(status)?;
+        Ok(OriginateOutcome {
+            peer,
+            cause: Cause::from_raw(cause),
+            cancel_cause: Cause::from_raw(cancel_cause),
+        })
+    }
+
+    /// Bridges two sessions on the current thread: `self` (A-leg) and `peer` (B-leg). The bridge runs
+    /// until one side hangs up or breaks. A null dtmf callback and null per-session user data select the
+    /// default bridging behavior; use [`multi_threaded_bridge_raw`](Self::multi_threaded_bridge_raw)
+    /// to supply them.
+    pub fn multi_threaded_bridge(self, peer: Session) -> Result<()> {
+        self.multi_threaded_bridge_raw(peer, None, std::ptr::null_mut(), std::ptr::null_mut())
+    }
+
+    /// Full-featured [`multi_threaded_bridge`](Self::multi_threaded_bridge) escape hatch, accepting
+    /// an optional input callback and opaque per-session user data pointers. The callback and user
+    /// data must remain valid for the duration of the bridge.
+    pub fn multi_threaded_bridge_raw(
+        self,
+        peer: Session,
+        dtmf_callback: sys::switch_input_callback_function_t,
+        session_data: *mut std::ffi::c_void,
+        peer_session_data: *mut std::ffi::c_void,
+    ) -> Result<()> {
+        // SAFETY: both session pointers are live; the callback (when provided) is a valid function
+        // pointer; the user-data pointers are opaque to FreeSWITCH and valid per the caller's contract.
+        let status = unsafe {
+            sys::switch_ivr_multi_threaded_bridge(
+                self.as_ptr(),
+                peer.as_ptr(),
+                dtmf_callback,
+                session_data,
+                peer_session_data,
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Pronounces `to_say` on `session` using the named say module, type, method, and gender.
+    ///
+    /// `module_name` selects the say engine (e.g. `"en"`); `say_type` is one of `"NUMBER"`, `"ITEMS"`,
+    /// `"PERSONS"`, `"CURRENCY"`, `"CURRENT_DATE_TIME"`, `"TELEPHONE_NUMBER"`, etc.; `say_method` is
+    /// one of `"PRONOUNCED"`, `"ITERATED"`, `"COUNTED"`, `"PRONOUNCED_YEAR"`; `say_gender` may be
+    /// `"NEUTER"` or `None`. A null input-args pointer selects the default behavior.
+    pub fn say(
+        self,
+        to_say: impl AsRef<str>,
+        module_name: impl AsRef<str>,
+        say_type: impl AsRef<str>,
+        say_method: impl AsRef<str>,
+        say_gender: Option<&str>,
+    ) -> Result<()> {
+        let to_say = cstring(to_say)?;
+        let module_name = cstring(module_name)?;
+        let say_type = cstring(say_type)?;
+        let say_method = cstring(say_method)?;
+        let say_gender = say_gender.map(cstring).transpose()?;
+        // SAFETY: `self.as_ptr()` is live; all string pointers are valid C strings for the call; a
+        // null input-args pointer is permitted.
+        let status = unsafe {
+            sys::switch_ivr_say(
+                self.as_ptr(),
+                to_say.as_ptr(),
+                module_name.as_ptr(),
+                say_type.as_ptr(),
+                say_method.as_ptr(),
+                say_gender.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                std::ptr::null_mut(),
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Computes the pronunciation string for `to_say` without speaking it, using the given `lang` and
+    /// `ext` (module extension), say type/method/gender. Returns the produced string (an owned copy of
+    /// FreeSWITCH-allocated storage, freed before returning).
+    #[allow(clippy::too_many_arguments)]
+    pub fn say_string(
+        self,
+        lang: Option<&str>,
+        ext: Option<&str>,
+        to_say: impl AsRef<str>,
+        module_name: impl AsRef<str>,
+        say_type: impl AsRef<str>,
+        say_method: impl AsRef<str>,
+        say_gender: Option<&str>,
+    ) -> Result<Option<String>> {
+        let lang = lang.map(cstring).transpose()?;
+        let ext = ext.map(cstring).transpose()?;
+        let to_say = cstring(to_say)?;
+        let module_name = cstring(module_name)?;
+        let say_type = cstring(say_type)?;
+        let say_method = cstring(say_method)?;
+        let say_gender = say_gender.map(cstring).transpose()?;
+        let mut rstr: *mut c_char = std::ptr::null_mut();
+        // SAFETY: `self.as_ptr()` is live; all string pointers are valid C strings or null for the
+        // call; `rstr` is a valid out-pointer. On SUCCESS `rstr` is malloc'd by FreeSWITCH.
+        let status = unsafe {
+            sys::switch_ivr_say_string(
+                self.as_ptr(),
+                lang.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                ext.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                to_say.as_ptr(),
+                module_name.as_ptr(),
+                say_type.as_ptr(),
+                say_method.as_ptr(),
+                say_gender.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                &mut rstr,
+            )
+        };
+        status_to_result(status)?;
+        // SAFETY: on SUCCESS `rstr` is null or a malloc'd C string that has not been freed.
+        Ok(unsafe { strdup_to_string(rstr) })
+    }
+
+    /// Spells `to_say` on `session` using the given `switch_say_args_t` (built by the caller). A null
+    /// input-args pointer selects the default behavior.
+    pub fn say_spell(
+        self,
+        to_say: impl AsRef<str>,
+        say_args: *mut sys::switch_say_args_t,
+    ) -> Result<()> {
+        let to_say = cstring(to_say)?;
+        // SAFETY: `self.as_ptr()` is live; `to_say` is a valid C string for the call; `say_args` is
+        // valid or null per the caller's contract; a null input-args pointer is permitted.
+        let status = unsafe {
+            sys::switch_ivr_say_spell(
+                self.as_ptr(),
+                to_say.as_ptr() as *mut c_char,
+                say_args,
+                std::ptr::null_mut(),
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Pronounces an IP address on `session`, using the provided `number_func` (a say callback) to
+    /// vocalize each octet, plus the given `switch_say_args_t`. A null input-args pointer selects the
+    /// default behavior.
+    pub fn say_ip(
+        self,
+        to_say: impl AsRef<str>,
+        number_func: sys::switch_say_callback_t,
+        say_args: *mut sys::switch_say_args_t,
+    ) -> Result<()> {
+        let to_say = cstring(to_say)?;
+        // SAFETY: `self.as_ptr()` is live; `to_say` is a valid C string for the call; `number_func`
+        // and `say_args` are valid or null per the caller's contract; a null input-args pointer is
+        // permitted.
+        let status = unsafe {
+            sys::switch_ivr_say_ip(
+                self.as_ptr(),
+                to_say.as_ptr() as *mut c_char,
+                number_func,
+                say_args,
+                std::ptr::null_mut(),
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Parses a single queued event for `session` (DTMF, custom events, etc.). Pass the event via its
+    /// `*mut switch_event_t` pointer (the [`crate::EventRef`] / [`crate::Event`] escape hatch). A null
+    /// event pointer selects the default behavior.
+    pub fn parse_event(self, event: *mut sys::switch_event_t) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is live; `event` is null or a valid event pointer per the caller's
+        // contract.
+        let status = unsafe { sys::switch_ivr_parse_event(self.as_ptr(), event) };
+        status_to_result(status)
+    }
+
+    /// Parses all queued events for `session`.
+    pub fn parse_all_events(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_parse_all_events(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Parses the next single queued event for `session`.
+    pub fn parse_next_event(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_parse_next_event(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Generates a JSON CDR document for `session`. `urlencode` controls whether the body is URL-encoded.
+    /// The returned `*mut cJSON` is owned by the caller and must be freed with `cJSON_Delete` (the
+    /// underlying `cJSON` type is opaque to this wrapper).
+    pub fn generate_json_cdr(self, urlencode: bool) -> Result<*mut sys::cJSON> {
+        let mut json: *mut sys::cJSON = std::ptr::null_mut();
+        // SAFETY: `self.as_ptr()` is live; `json` is a valid out-pointer.
+        let status = unsafe {
+            sys::switch_ivr_generate_json_cdr(
+                self.as_ptr(),
+                &mut json,
+                if urlencode {
+                    sys::switch_bool_t_SWITCH_TRUE
+                } else {
+                    sys::switch_bool_t_SWITCH_FALSE
+                },
+            )
+        };
+        status_to_result(status)?;
+        Ok(json)
+    }
+
+    /// Generates an XML CDR document for `session`. The returned `switch_xml_t` is owned by the caller
+    /// and must be freed with `switch_xml_free` (the underlying `switch_xml` type is opaque to this
+    /// wrapper); a null out-slot selects a freshly allocated document.
+    pub fn generate_xml_cdr(self) -> Result<sys::switch_xml_t> {
+        let mut xml: sys::switch_xml_t = std::ptr::null_mut();
+        // SAFETY: `self.as_ptr()` is live; `xml` is a valid out-pointer (null slot => fresh doc).
+        let status = unsafe { sys::switch_ivr_generate_xml_cdr(self.as_ptr(), &mut xml) };
+        status_to_result(status)?;
+        Ok(xml)
+    }
+
+    /// Initializes ASR speech detection on `session` using the named module (`mod_name`, e.g.
+    /// `"pocketsphinx"`) and `dest` (the recognition destination/path). The `switch_asr_handle_t` slot
+    /// (`ah`) is filled by FreeSWITCH; pass a pointer to a `switch_asr_handle_t`.
+    pub fn detect_speech_init(
+        self,
+        mod_name: impl AsRef<str>,
+        dest: impl AsRef<str>,
+        ah: *mut sys::switch_asr_handle_t,
+    ) -> Result<()> {
+        let mod_name = cstring(mod_name)?;
+        let dest = cstring(dest)?;
+        // SAFETY: `self.as_ptr()` is live; both strings are valid C strings for the call; `ah` is a
+        // valid pointer to a `switch_asr_handle_t` per the caller's contract.
+        let status = unsafe {
+            sys::switch_ivr_detect_speech_init(self.as_ptr(), mod_name.as_ptr(), dest.as_ptr(), ah)
+        };
+        status_to_result(status)
+    }
+
+    /// Starts ASR speech detection on `session` using `mod_name`, loading `grammar` under the name
+    /// `name`, with recognition `dest`. The `switch_asr_handle_t` slot (`ah`) is filled by FreeSWITCH.
+    pub fn detect_speech(
+        self,
+        mod_name: impl AsRef<str>,
+        grammar: impl AsRef<str>,
+        name: impl AsRef<str>,
+        dest: impl AsRef<str>,
+        ah: *mut sys::switch_asr_handle_t,
+    ) -> Result<()> {
+        let mod_name = cstring(mod_name)?;
+        let grammar = cstring(grammar)?;
+        let name = cstring(name)?;
+        let dest = cstring(dest)?;
+        // SAFETY: `self.as_ptr()` is live; all strings are valid C strings for the call; `ah` is a
+        // valid pointer per the caller's contract.
+        let status = unsafe {
+            sys::switch_ivr_detect_speech(
+                self.as_ptr(),
+                mod_name.as_ptr(),
+                grammar.as_ptr(),
+                name.as_ptr(),
+                dest.as_ptr(),
+                ah,
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Stops ASR speech detection on `session`.
+    pub fn stop_detect_speech(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_stop_detect_speech(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Pauses ASR speech detection on `session`.
+    pub fn pause_detect_speech(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_pause_detect_speech(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Resumes ASR speech detection on `session`.
+    pub fn resume_detect_speech(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_resume_detect_speech(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Loads a named ASR `grammar` on `session`, registering it under `name`.
+    pub fn detect_speech_load_grammar(
+        self,
+        grammar: impl AsRef<str>,
+        name: impl AsRef<str>,
+    ) -> Result<()> {
+        let grammar = cstring(grammar)?;
+        let name = cstring(name)?;
+        // SAFETY: `self.as_ptr()` is live; both strings are valid C strings for the call.
+        let status = unsafe {
+            sys::switch_ivr_detect_speech_load_grammar(
+                self.as_ptr(),
+                grammar.as_ptr(),
+                name.as_ptr(),
+            )
+        };
+        status_to_result(status)
+    }
+
+    /// Unloads the named ASR grammar (`name`) from `session`.
+    pub fn detect_speech_unload_grammar(self, name: impl AsRef<str>) -> Result<()> {
+        let name = cstring(name)?;
+        // SAFETY: `self.as_ptr()` is live; `name` is a valid C string for the call.
+        let status =
+            unsafe { sys::switch_ivr_detect_speech_unload_grammar(self.as_ptr(), name.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Enables the named ASR grammar (`name`) on `session`.
+    pub fn detect_speech_enable_grammar(self, name: impl AsRef<str>) -> Result<()> {
+        let name = cstring(name)?;
+        // SAFETY: `self.as_ptr()` is live; `name` is a valid C string for the call.
+        let status =
+            unsafe { sys::switch_ivr_detect_speech_enable_grammar(self.as_ptr(), name.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Disables the named ASR grammar (`name`) on `session`.
+    pub fn detect_speech_disable_grammar(self, name: impl AsRef<str>) -> Result<()> {
+        let name = cstring(name)?;
+        // SAFETY: `self.as_ptr()` is live; `name` is a valid C string for the call.
+        let status =
+            unsafe { sys::switch_ivr_detect_speech_disable_grammar(self.as_ptr(), name.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Disables all ASR grammars on `session`.
+    pub fn detect_speech_disable_all_grammars(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_detect_speech_disable_all_grammars(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Starts the ASR input timers on `session` (begins the recognition timeout window).
+    pub fn detect_speech_start_input_timers(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        let status = unsafe { sys::switch_ivr_detect_speech_start_input_timers(self.as_ptr()) };
+        status_to_result(status)
+    }
+
+    /// Synthesizes and plays `text` on `session` via TTS (`switch_ivr_speak_text`). `tts_name` is
+    /// the TTS engine (e.g. `"flite"`, `"cepstral"`), `voice_name` the voice, `args` an optional
+    /// `switch_input_args_t*` (pass `null_mut()` for none). Interior NUL rejected.
+    pub fn speak_text(
+        self,
+        tts_name: impl AsRef<str>,
+        voice_name: impl AsRef<str>,
+        text: impl AsRef<str>,
+        args: *mut sys::switch_input_args_t,
+    ) -> Result<()> {
+        let tts = cstring(tts_name)?;
+        let voice = cstring(voice_name)?;
+        let text = cstring(text)?;
+        // SAFETY: live session; three valid C strings; `args` is null or a valid args struct.
+        status_to_result(unsafe {
+            sys::switch_ivr_speak_text(
+                self.as_ptr(),
+                tts.as_ptr(),
+                voice.as_ptr(),
+                text.as_ptr(),
+                args,
+            )
+        })
+    }
+
+    /// Holds `session`. `message` is an optional announcement string (may be empty); `moh` plays
+    /// music-on-hold while held.
+    pub fn hold(self, message: impl AsRef<str>, moh: bool) -> Result<()> {
+        let message = cstring(message)?;
+        let moh = if moh {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: live session; valid C string; valid bool.
+        status_to_result(unsafe { sys::switch_ivr_hold(self.as_ptr(), message.as_ptr(), moh) })
+    }
+
+    /// Unholds `session`.
+    pub fn unhold(self) -> Result<()> {
+        // SAFETY: live session.
+        status_to_result(unsafe { sys::switch_ivr_unhold(self.as_ptr()) })
+    }
+
+    /// Soft-holds `session` with an `unhold_key` (DTMF that releases) and MOH for each leg.
+    pub fn soft_hold(
+        self,
+        unhold_key: impl AsRef<str>,
+        moh_a: impl AsRef<str>,
+        moh_b: impl AsRef<str>,
+    ) -> Result<()> {
+        let k = cstring(unhold_key)?;
+        let a = cstring(moh_a)?;
+        let b = cstring(moh_b)?;
+        // SAFETY: live session; three valid C strings.
+        status_to_result(unsafe {
+            sys::switch_ivr_soft_hold(self.as_ptr(), k.as_ptr(), a.as_ptr(), b.as_ptr())
+        })
+    }
+
+    /// Generates/plays tones from `script` on `session`, `loops` times. `args` is an optional
+    /// `switch_input_args_t*` (`null_mut()` for none).
+    pub fn gentones(
+        self,
+        script: impl AsRef<str>,
+        loops: i32,
+        args: *mut sys::switch_input_args_t,
+    ) -> Result<()> {
+        let script = cstring(script)?;
+        // SAFETY: live session; valid C string; plain int; `args` null or valid.
+        status_to_result(unsafe {
+            sys::switch_ivr_gentones(self.as_ptr(), script.as_ptr(), loops, args)
+        })
+    }
+
+    /// Inserts `insert_file` into `file` at `sample_point` (records one into the other).
+    pub fn insert_file(
+        self,
+        file: impl AsRef<str>,
+        insert_file: impl AsRef<str>,
+        sample_point: u64,
+    ) -> Result<()> {
+        let file = cstring(file)?;
+        let ins = cstring(insert_file)?;
+        // SAFETY: live session; two valid C strings; plain size.
+        status_to_result(unsafe {
+            sys::switch_ivr_insert_file(
+                self.as_ptr(),
+                file.as_ptr(),
+                ins.as_ptr(),
+                sample_point as sys::switch_size_t,
+            )
+        })
+    }
+
+    /// Enterprise-originates a new leg from `session` to `bridgeto` with a `timelimit_sec` and
+    /// optional overrides. The b-leg session and cause are returned via out-params (`null_mut()`
+    /// to ignore). Advanced; prefer [`originate`](Self::originate) for simple cases.
+    #[allow(clippy::too_many_arguments)]
+    pub fn enterprise_originate(
+        self,
+        bleg: *mut *mut sys::switch_core_session_t,
+        cause: *mut sys::switch_call_cause_t,
+        bridgeto: impl AsRef<str>,
+        timelimit_sec: u32,
+        table: *const sys::switch_state_handler_table_t,
+        cid_name_override: *const std::os::raw::c_char,
+        cid_num_override: *const std::os::raw::c_char,
+        caller_profile_override: *mut sys::switch_caller_profile_t,
+        ovars: *mut sys::switch_event_t,
+        flags: sys::switch_originate_flag_t,
+        cancel_cause: *mut sys::switch_call_cause_t,
+        hl: *mut sys::switch_dial_handle_list_t,
+    ) -> Result<()> {
+        let bt = cstring(bridgeto)?;
+        // SAFETY: live session; all args per caller contract; valid C string.
+        status_to_result(unsafe {
+            sys::switch_ivr_enterprise_originate(
+                self.as_ptr(),
+                bleg,
+                cause,
+                bt.as_ptr(),
+                timelimit_sec,
+                table,
+                cid_name_override,
+                cid_num_override,
+                caller_profile_override,
+                ovars,
+                flags,
+                cancel_cause,
+                hl,
+            )
+        })
+    }
+
+    /// Enterprise-originates and bridges in one call. `data` is the dial string; `hl` a dial-handle
+    /// list (may be null); `cause` out-param.
+    pub fn enterprise_orig_and_bridge(
+        self,
+        data: impl AsRef<str>,
+        hl: *mut sys::switch_dial_handle_list_t,
+        cause: *mut sys::switch_call_cause_t,
+    ) -> Result<()> {
+        let data = cstring(data)?;
+        // SAFETY: live session; valid C string; `hl`/`cause` per caller.
+        status_to_result(unsafe {
+            sys::switch_ivr_enterprise_orig_and_bridge(self.as_ptr(), data.as_ptr(), hl, cause)
+        })
+    }
+
+    /// Originates and bridges in one call. `data` is the dial string; `dh` a dial handle (may be
+    /// null); `cause` out-param.
+    pub fn orig_and_bridge(
+        self,
+        data: impl AsRef<str>,
+        dh: *mut sys::switch_dial_handle_t,
+        cause: *mut sys::switch_call_cause_t,
+    ) -> Result<()> {
+        let data = cstring(data)?;
+        // SAFETY: live session; valid C string; `dh`/`cause` per caller.
+        status_to_result(unsafe {
+            sys::switch_ivr_orig_and_bridge(self.as_ptr(), data.as_ptr(), dh, cause)
+        })
+    }
+
+    /// Eavesdrops on the session `uuid` from `session`. `require_group` restricts to a spy group
+    /// (may be empty); `flags` is a `switch_eavesdrop_flag_t` bitmask.
+    pub fn eavesdrop_session(
+        self,
+        uuid: impl AsRef<str>,
+        require_group: impl AsRef<str>,
+        flags: sys::switch_eavesdrop_flag_t,
+    ) -> Result<()> {
+        let uuid = cstring(uuid)?;
+        let group = cstring(require_group)?;
+        // SAFETY: live session; two valid C strings; `flags` valid bitmask.
+        status_to_result(unsafe {
+            sys::switch_ivr_eavesdrop_session(self.as_ptr(), uuid.as_ptr(), group.as_ptr(), flags)
+        })
+    }
+
+    /// Intercepts `uuid` onto `session`. `bleg` intercepts the b-leg too.
+    pub fn intercept_session(self, uuid: impl AsRef<str>, bleg: bool) -> Result<()> {
+        let uuid = cstring(uuid)?;
+        let bleg = if bleg {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: live session; valid uuid; valid bool.
+        status_to_result(unsafe {
+            sys::switch_ivr_intercept_session(self.as_ptr(), uuid.as_ptr(), bleg)
+        })
+    }
+
+    /// Detects audio above `thresh` for `audio_hits` frames within `timeout_ms` on `session`,
+    /// optionally recording to `file` (empty for none).
+    pub fn detect_audio(
+        self,
+        thresh: u32,
+        audio_hits: u32,
+        timeout_ms: u32,
+        file: impl AsRef<str>,
+    ) -> Result<()> {
+        let file = cstring(file)?;
+        // SAFETY: live session; plain ints; valid C string.
+        status_to_result(unsafe {
+            sys::switch_ivr_detect_audio(
+                self.as_ptr(),
+                thresh,
+                audio_hits,
+                timeout_ms,
+                file.as_ptr(),
+            )
+        })
+    }
+
+    /// Detects silence below `thresh` for `silence_hits` frames within `timeout_ms` on `session`,
+    /// optionally recording to `file`.
+    pub fn detect_silence(
+        self,
+        thresh: u32,
+        silence_hits: u32,
+        timeout_ms: u32,
+        file: impl AsRef<str>,
+    ) -> Result<()> {
+        let file = cstring(file)?;
+        // SAFETY: live session; plain ints; valid C string.
+        status_to_result(unsafe {
+            sys::switch_ivr_detect_silence(
+                self.as_ptr(),
+                thresh,
+                silence_hits,
+                timeout_ms,
+                file.as_ptr(),
+            )
+        })
+    }
+
+    /// AEC / noise suppression / AGC via `switch_ivr_preprocess_session` (libspeexdsp).
+    ///
+    /// `cmds` is a FreeSWITCH preprocessor DSL with `r.` (read-leg) / `w.` (write-leg) prefix:
+    /// - `echo_cancel=<tail>` — enable echo cancellation (tail in samples, default 1024);
+    ///   `echo_cancel=false` disables.
+    /// - `noise_suppress=<-db>` — noise suppression level (negative dB).
+    /// - `echo_suppress=<-db>` — residual echo suppression.
+    /// - `agc=<true|level>` — automatic gain control.
+    ///
+    /// Example: `"r.echo_cancel=1024 r.noise_suppress=-30 r.agc=true"`.
+    pub fn preprocess_session(self, cmds: impl AsRef<str>) -> Result<()> {
+        let cmds = cstring(cmds)?;
+        // SAFETY: live session; valid C string. Returns switch_status_t.
+        status_to_result(unsafe {
+            sys::switch_ivr_preprocess_session(self.as_ptr(), cmds.as_ptr())
+        })
+    }
+
+    /// Transfers `session` to `extension`/`dialplan`/`context`. Pass empty strings for defaults.
+    pub fn transfer(
+        self,
+        extension: impl AsRef<str>,
+        dialplan: impl AsRef<str>,
+        context: impl AsRef<str>,
+    ) -> Result<()> {
+        let ext = cstring(extension)?;
+        let dp = cstring(dialplan)?;
+        let ctx = cstring(context)?;
+        // SAFETY: live session; three valid C strings.
+        status_to_result(unsafe {
+            sys::switch_ivr_session_transfer(self.as_ptr(), ext.as_ptr(), dp.as_ptr(), ctx.as_ptr())
+        })
+    }
+
+    /// Signal-bridges `session` and `peer_session` (no media bridge, just signalling).
+    pub fn signal_bridge(self, peer_session: Session) -> Result<()> {
+        // SAFETY: both sessions live.
+        status_to_result(unsafe {
+            sys::switch_ivr_signal_bridge(self.as_ptr(), peer_session.as_ptr())
+        })
+    }
 }

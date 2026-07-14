@@ -328,6 +328,234 @@ impl Session {
     }
 }
 
+impl Session {
+    /// Dequeues one event from `session`'s event queue. Returns an owned `*mut switch_event_t` the
+    /// caller must destroy (`switch_event_destroy`), or `None` if empty. `force` bypasses
+    /// private-event filtering.
+    pub fn dequeue_event(self, force: bool) -> Result<Option<*mut sys::switch_event_t>> {
+        let mut ev: *mut sys::switch_event_t = std::ptr::null_mut();
+        let force = if force {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: `session.as_ptr()` live; `&mut ev` valid out-param; `force` valid bool.
+        let s = unsafe { sys::switch_core_session_dequeue_event(self.as_ptr(), &mut ev, force) };
+        status_to_result(s)?;
+        Ok(if ev.is_null() { None } else { Some(ev) })
+    }
+
+    /// Queues an event onto `session`'s queue (ownership of `*event` transfers to the queue).
+    pub fn queue_event(self, event: &mut *mut sys::switch_event_t) -> Result<()> {
+        // SAFETY: live session; `event` is a valid `*mut *mut` per caller.
+        status_to_result(unsafe { sys::switch_core_session_queue_event(self.as_ptr(), event) })
+    }
+
+    /// Receives an event into `session` (ownership of `*event` transfers).
+    pub fn receive_event(self, event: &mut *mut sys::switch_event_t) -> Result<()> {
+        // SAFETY: live session; `event` valid `*mut *mut`.
+        status_to_result(unsafe { sys::switch_core_session_receive_event(self.as_ptr(), event) })
+    }
+
+    /// Number of events queued on `session`.
+    pub fn event_count(self) -> u32 {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_event_count(self.as_ptr()) }
+    }
+
+    /// Number of messages waiting on `session`.
+    pub fn messages_waiting(self) -> u32 {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_messages_waiting(self.as_ptr()) }
+    }
+
+    /// Dequeues one message from `session`. Returns an owned `*mut switch_core_session_message_t`
+    /// (caller frees via `switch_core_session_free_message`), or `None` if empty.
+    pub fn dequeue_message(self) -> Result<Option<*mut sys::switch_core_session_message_t>> {
+        let mut m: *mut sys::switch_core_session_message_t = std::ptr::null_mut();
+        // SAFETY: live session; `&mut m` valid out.
+        let s = unsafe { sys::switch_core_session_dequeue_message(self.as_ptr(), &mut m) };
+        status_to_result(s)?;
+        Ok(if m.is_null() { None } else { Some(m) })
+    }
+
+    /// Queues a message onto `session` (`message` borrowed for the call).
+    pub fn queue_message(self, message: *mut sys::switch_core_session_message_t) -> Result<()> {
+        // SAFETY: live session; `message` valid per caller.
+        status_to_result(unsafe { sys::switch_core_session_queue_message(self.as_ptr(), message) })
+    }
+
+    /// The session's application log (a `*mut switch_app_log_t` borrowed from the session; do not free).
+    pub fn get_app_log(self) -> *mut sys::switch_app_log_t {
+        // SAFETY: live session; the returned pointer borrows session storage.
+        unsafe { sys::switch_core_session_get_app_log(self.as_ptr()) }
+    }
+
+    /// URL-encodes `url` against the session's vars (substitutes `${var}` etc.). Returns the owned
+    /// string, or `None` if encoding produced nothing.
+    pub fn url_encode(self, url: impl AsRef<str>) -> Option<String> {
+        let url = match cstring(url) {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        // SAFETY: live session; valid C string; returns null or a malloc'd C string.
+        let ptr = unsafe { sys::switch_core_session_url_encode(self.as_ptr(), url.as_ptr()) };
+        // SAFETY: `ptr` is null or a malloc'd C string; `strdup_to_string` copies it out and frees
+        // the original.
+        unsafe { strdup_to_string(ptr) }
+    }
+
+    /// Read-locks `session`. Pair with `switch_core_session_rwunlock` (or prefer
+    /// [`SessionGuard::locate`], which read-locks and auto-unlocks). Returns `Err` if the session is
+    /// gone.
+    pub fn read_lock(self) -> Result<()> {
+        // SAFETY: live session.
+        status_to_result(unsafe { sys::switch_core_session_read_lock(self.as_ptr()) })
+    }
+
+    /// Write-locks `session`. Pair with `switch_core_session_rwunlock`.
+    pub fn write_lock(self) {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_write_lock(self.as_ptr()) };
+    }
+
+    /// Read-lock that survives hangup (for cleanup paths). Pair with `rwunlock`.
+    pub fn read_lock_hangup(self) -> Result<()> {
+        // SAFETY: live session.
+        status_to_result(unsafe { sys::switch_core_session_read_lock_hangup(self.as_ptr()) })
+    }
+
+    /// Soft-locks `session` for `sec` seconds (waits on hangup during that window).
+    pub fn soft_lock(self, sec: u32) {
+        // SAFETY: live session; plain u32.
+        unsafe { sys::switch_core_session_soft_lock(self.as_ptr(), sec) };
+    }
+
+    /// Releases a soft lock.
+    pub fn soft_unlock(self) {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_soft_unlock(self.as_ptr()) };
+    }
+
+    /// Receives an outbound DTMF on `session` (`dtmf` borrowed for the call).
+    pub fn recv_dtmf(self, dtmf: *const sys::switch_dtmf_t) -> Result<()> {
+        // SAFETY: live session; `dtmf` valid per caller.
+        status_to_result(unsafe { sys::switch_core_session_recv_dtmf(self.as_ptr(), dtmf) })
+    }
+
+    /// Signals a state change on `session` (re-runs the state machine).
+    pub fn signal_state_change(self) {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_signal_state_change(self.as_ptr()) };
+    }
+
+    /// Runs the reporting state on `session`.
+    pub fn reporting_state(self) {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_reporting_state(self.as_ptr()) };
+    }
+
+    /// Runs the hangup state on `session`. `force` bypasses state checks.
+    pub fn hangup_state(self, force: bool) {
+        let force = if force {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: live session; valid bool.
+        unsafe { sys::switch_core_session_hangup_state(self.as_ptr(), force) };
+    }
+
+    /// Resets `session`: `flush_dtmf` clears the DTMF queue, `reset_read_codec` re-inits the read
+    /// codec. Renamed from `reset_session` to `reset`; the method scope avoids any clash with the
+    /// free function [`crate::limit::reset`].
+    pub fn reset(self, flush_dtmf: bool, reset_read_codec: bool) {
+        let fd = if flush_dtmf {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        let rc = if reset_read_codec {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: live session; two valid bools.
+        unsafe { sys::switch_core_session_reset(self.as_ptr(), fd, rc) };
+    }
+
+    /// Stops media on `session` (tears down RTP/media).
+    pub fn stop_media(self) {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_stop_media(self.as_ptr()) };
+    }
+
+    /// `true` if `session`'s state-machine thread is running.
+    pub fn running(self) -> bool {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_running(self.as_ptr()) != 0 }
+    }
+
+    /// `true` if `session` has started (passed CS_INIT).
+    pub fn started(self) -> bool {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_started(self.as_ptr()) != 0 }
+    }
+
+    /// The session's numeric id.
+    pub fn id(self) -> u64 {
+        // SAFETY: live session.
+        unsafe { sys::switch_core_session_get_id(self.as_ptr()) as u64 }
+    }
+
+    /// Sets the session's external id (a caller-supplied string). Interior NUL rejected.
+    pub fn set_external_id(self, external_id: impl AsRef<str>) -> Result<()> {
+        let id = cstring(external_id)?;
+        // SAFETY: live session; valid C string.
+        status_to_result(unsafe {
+            sys::switch_core_session_set_external_id(self.as_ptr(), id.as_ptr())
+        })
+    }
+
+    /// The session's external id (borrowed from session storage; do not free). Null if unset.
+    pub fn external_id(self) -> *const std::os::raw::c_char {
+        // SAFETY: live session; returns null or a borrowed static-ish string.
+        unsafe { sys::switch_core_session_get_external_id(self.as_ptr()) }
+    }
+
+    /// Reads one media frame from `session` into `*frame` (out-param). `flags`/`stream_id` per FS.
+    pub fn read_frame(
+        self,
+        frame: &mut *mut sys::switch_frame_t,
+        flags: sys::switch_io_flag_t,
+        stream_id: i32,
+    ) -> Result<()> {
+        // SAFETY: live session; `frame` valid out; plain args.
+        status_to_result(unsafe {
+            sys::switch_core_session_read_frame(self.as_ptr(), frame, flags, stream_id)
+        })
+    }
+
+    /// Writes one media frame to `session`. `frame` borrowed; `flags`/`stream_id` per FS.
+    pub fn write_frame(
+        self,
+        frame: *mut sys::switch_frame_t,
+        flags: sys::switch_io_flag_t,
+        stream_id: i32,
+    ) -> Result<()> {
+        // SAFETY: live session; `frame` valid; plain args.
+        status_to_result(unsafe {
+            sys::switch_core_session_write_frame(self.as_ptr(), frame, flags, stream_id)
+        })
+    }
+
+    /// Sets the per-session log level.
+    pub fn set_loglevel(self, loglevel: sys::switch_log_level_t) -> Result<()> {
+        // SAFETY: live session; valid enum.
+        status_to_result(unsafe { sys::switch_core_session_set_loglevel(self.as_ptr(), loglevel) })
+    }
+}
+
 /// RAII guard for a session looked up by UUID via `switch_core_session_perform_locate`.
 ///
 /// The session is read-locked for the guard's lifetime; `switch_core_session_rwunlock` runs on drop.
@@ -419,72 +647,11 @@ pub fn execute_application_async(
 // free call (e.g. `switch_event_destroy`); they are passed through raw because fswtch does not
 // yet RAII every FS container type.
 
-/// Dequeues one event from `session`'s event queue. Returns an owned `*mut switch_event_t` the
-/// caller must destroy (`switch_event_destroy`), or `None` if empty. `force` bypasses
-/// private-event filtering.
-pub fn dequeue_event(session: Session, force: bool) -> Result<Option<*mut sys::switch_event_t>> {
-    let mut ev: *mut sys::switch_event_t = std::ptr::null_mut();
-    let force = if force {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: `session.as_ptr()` live; `&mut ev` valid out-param; `force` valid bool.
-    let s = unsafe { sys::switch_core_session_dequeue_event(session.as_ptr(), &mut ev, force) };
-    status_to_result(s)?;
-    Ok(if ev.is_null() { None } else { Some(ev) })
-}
-
-/// Queues an event onto `session`'s queue (ownership of `*event` transfers to the queue).
-pub fn queue_event(session: Session, event: &mut *mut sys::switch_event_t) -> Result<()> {
-    // SAFETY: live session; `event` is a valid `*mut *mut` per caller.
-    status_to_result(unsafe { sys::switch_core_session_queue_event(session.as_ptr(), event) })
-}
-
-/// Receives an event into `session` (ownership of `*event` transfers).
-pub fn receive_event(session: Session, event: &mut *mut sys::switch_event_t) -> Result<()> {
-    // SAFETY: live session; `event` valid `*mut *mut`.
-    status_to_result(unsafe { sys::switch_core_session_receive_event(session.as_ptr(), event) })
-}
-
-/// Number of events queued on `session`.
-pub fn event_count(session: Session) -> u32 {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_event_count(session.as_ptr()) }
-}
-
 /// Sends an event to the session identified by `uuid` (ownership of `*event` transfers).
 pub fn event_send(uuid: impl AsRef<str>, event: &mut *mut sys::switch_event_t) -> Result<()> {
     let uuid = cstring(uuid)?;
     // SAFETY: valid C string; `event` valid `*mut *mut`.
     status_to_result(unsafe { sys::switch_core_session_event_send(uuid.as_ptr(), event) })
-}
-
-/// Number of messages waiting on `session`.
-pub fn messages_waiting(session: Session) -> u32 {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_messages_waiting(session.as_ptr()) }
-}
-
-/// Dequeues one message from `session`. Returns an owned `*mut switch_core_session_message_t`
-/// (caller frees via `switch_core_session_free_message`), or `None` if empty.
-pub fn dequeue_message(
-    session: Session,
-) -> Result<Option<*mut sys::switch_core_session_message_t>> {
-    let mut m: *mut sys::switch_core_session_message_t = std::ptr::null_mut();
-    // SAFETY: live session; `&mut m` valid out.
-    let s = unsafe { sys::switch_core_session_dequeue_message(session.as_ptr(), &mut m) };
-    status_to_result(s)?;
-    Ok(if m.is_null() { None } else { Some(m) })
-}
-
-/// Queues a message onto `session` (`message` borrowed for the call).
-pub fn queue_message(
-    session: Session,
-    message: *mut sys::switch_core_session_message_t,
-) -> Result<()> {
-    // SAFETY: live session; `message` valid per caller.
-    status_to_result(unsafe { sys::switch_core_session_queue_message(session.as_ptr(), message) })
 }
 
 /// Finds every session whose channel variable `var_name == var_val`. Returns a
@@ -516,111 +683,7 @@ pub fn get_app_flags(app: impl AsRef<str>) -> Result<i32> {
     Ok(flags)
 }
 
-/// The session's application log (a `*mut switch_app_log_t` borrowed from the session; do not free).
-pub fn get_app_log(session: Session) -> *mut sys::switch_app_log_t {
-    // SAFETY: live session; the returned pointer borrows session storage.
-    unsafe { sys::switch_core_session_get_app_log(session.as_ptr()) }
-}
-
-/// URL-encodes `url` against the session's vars (substitutes `${var}` etc.). Returns the owned
-/// string, or `None` if encoding produced nothing.
-pub fn session_url_encode(session: Session, url: impl AsRef<str>) -> Option<String> {
-    let url = match cstring(url) {
-        Ok(s) => s,
-        Err(_) => return None,
-    };
-    // SAFETY: live session; valid C string; returns null or a malloc'd C string.
-    let ptr = unsafe { sys::switch_core_session_url_encode(session.as_ptr(), url.as_ptr()) };
-    // SAFETY: `ptr` is null or a malloc'd C string; `strdup_to_string` copies it out and frees
-    // the original.
-    unsafe { strdup_to_string(ptr) }
-}
-
 // ── locks / state machine / media frames (high-frequency) ─────────────────
-
-/// Read-locks `session`. Pair with `switch_core_session_rwunlock` (or prefer
-/// [`SessionGuard::locate`], which read-locks and auto-unlocks). Returns `Err` if the session is
-/// gone.
-pub fn read_lock(session: Session) -> Result<()> {
-    // SAFETY: live session.
-    status_to_result(unsafe { sys::switch_core_session_read_lock(session.as_ptr()) })
-}
-
-/// Write-locks `session`. Pair with `switch_core_session_rwunlock`.
-pub fn write_lock(session: Session) {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_write_lock(session.as_ptr()) };
-}
-
-/// Read-lock that survives hangup (for cleanup paths). Pair with `rwunlock`.
-pub fn read_lock_hangup(session: Session) -> Result<()> {
-    // SAFETY: live session.
-    status_to_result(unsafe { sys::switch_core_session_read_lock_hangup(session.as_ptr()) })
-}
-
-/// Soft-locks `session` for `sec` seconds (waits on hangup during that window).
-pub fn soft_lock(session: Session, sec: u32) {
-    // SAFETY: live session; plain u32.
-    unsafe { sys::switch_core_session_soft_lock(session.as_ptr(), sec) };
-}
-
-/// Releases a soft lock.
-pub fn soft_unlock(session: Session) {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_soft_unlock(session.as_ptr()) };
-}
-
-/// Receives an outbound DTMF on `session` (`dtmf` borrowed for the call).
-pub fn recv_dtmf(session: Session, dtmf: *const sys::switch_dtmf_t) -> Result<()> {
-    // SAFETY: live session; `dtmf` valid per caller.
-    status_to_result(unsafe { sys::switch_core_session_recv_dtmf(session.as_ptr(), dtmf) })
-}
-
-/// Signals a state change on `session` (re-runs the state machine).
-pub fn signal_state_change(session: Session) {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_signal_state_change(session.as_ptr()) };
-}
-
-/// Runs the reporting state on `session`.
-pub fn reporting_state(session: Session) {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_reporting_state(session.as_ptr()) };
-}
-
-/// Runs the hangup state on `session`. `force` bypasses state checks.
-pub fn hangup_state(session: Session, force: bool) {
-    let force = if force {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: live session; valid bool.
-    unsafe { sys::switch_core_session_hangup_state(session.as_ptr(), force) };
-}
-
-/// Resets `session`: `flush_dtmf` clears the DTMF queue, `reset_read_codec` re-inits the read
-/// codec. Named `reset_session` to avoid clashing with [`crate::limit::reset`].
-pub fn reset_session(session: Session, flush_dtmf: bool, reset_read_codec: bool) {
-    let fd = if flush_dtmf {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    let rc = if reset_read_codec {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: live session; two valid bools.
-    unsafe { sys::switch_core_session_reset(session.as_ptr(), fd, rc) };
-}
-
-/// Stops media on `session` (tears down RTP/media).
-pub fn stop_media(session: Session) {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_stop_media(session.as_ptr()) };
-}
 
 /// `true` if `session_a` and `session_b` are transcoding `type_` media between each other.
 pub fn transcoding(
@@ -635,43 +698,10 @@ pub fn transcoding(
     r != sys::switch_bool_t_SWITCH_FALSE
 }
 
-/// `true` if `session`'s state-machine thread is running.
-pub fn running(session: Session) -> bool {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_running(session.as_ptr()) != 0 }
-}
-
-/// `true` if `session` has started (passed CS_INIT).
-pub fn started(session: Session) -> bool {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_started(session.as_ptr()) != 0 }
-}
-
-/// The session's numeric id.
-pub fn session_id(session: Session) -> u64 {
-    // SAFETY: live session.
-    unsafe { sys::switch_core_session_get_id(session.as_ptr()) as u64 }
-}
-
 /// The global session id counter.
 pub fn current_session_id() -> u64 {
     // SAFETY: no args.
     unsafe { sys::switch_core_session_id() as u64 }
-}
-
-/// Sets the session's external id (a caller-supplied string). Interior NUL rejected.
-pub fn set_external_id(session: Session, external_id: impl AsRef<str>) -> Result<()> {
-    let id = cstring(external_id)?;
-    // SAFETY: live session; valid C string.
-    status_to_result(unsafe {
-        sys::switch_core_session_set_external_id(session.as_ptr(), id.as_ptr())
-    })
-}
-
-/// The session's external id (borrowed from session storage; do not free). Null if unset.
-pub fn external_id(session: Session) -> *const std::os::raw::c_char {
-    // SAFETY: live session; returns null or a borrowed static-ish string.
-    unsafe { sys::switch_core_session_get_external_id(session.as_ptr()) }
 }
 
 /// Reads/sets the session-count limit. Pass `0` to read without changing; nonzero sets it.
@@ -679,36 +709,4 @@ pub fn external_id(session: Session) -> *const std::os::raw::c_char {
 pub fn session_limit(new_limit: u32) -> u32 {
     // SAFETY: plain u32.
     unsafe { sys::switch_core_session_limit(new_limit) }
-}
-
-/// Reads one media frame from `session` into `*frame` (out-param). `flags`/`stream_id` per FS.
-pub fn read_frame(
-    session: Session,
-    frame: &mut *mut sys::switch_frame_t,
-    flags: sys::switch_io_flag_t,
-    stream_id: i32,
-) -> Result<()> {
-    // SAFETY: live session; `frame` valid out; plain args.
-    status_to_result(unsafe {
-        sys::switch_core_session_read_frame(session.as_ptr(), frame, flags, stream_id)
-    })
-}
-
-/// Writes one media frame to `session`. `frame` borrowed; `flags`/`stream_id` per FS.
-pub fn write_frame(
-    session: Session,
-    frame: *mut sys::switch_frame_t,
-    flags: sys::switch_io_flag_t,
-    stream_id: i32,
-) -> Result<()> {
-    // SAFETY: live session; `frame` valid; plain args.
-    status_to_result(unsafe {
-        sys::switch_core_session_write_frame(session.as_ptr(), frame, flags, stream_id)
-    })
-}
-
-/// Sets the per-session log level.
-pub fn set_loglevel(session: Session, loglevel: sys::switch_log_level_t) -> Result<()> {
-    // SAFETY: live session; valid enum.
-    status_to_result(unsafe { sys::switch_core_session_set_loglevel(session.as_ptr(), loglevel) })
 }

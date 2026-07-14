@@ -241,6 +241,14 @@ impl MediaBug {
     }
 }
 
+impl MediaBug {
+    /// Sets the spy format on this bug (video spy). Advanced.
+    pub fn set_spy_fmt(self, spy_fmt: sys::switch_vid_spy_fmt_t) {
+        // SAFETY: `self.as_ptr()` is a live bug.
+        call_ffi!(sys::switch_media_bug_set_spy_fmt(self.as_ptr(), spy_fmt));
+    }
+}
+
 pub trait MediaBugHandler: 'static {
     fn on_init(&mut self, _ctx: &mut MediaBugContext<'_>) -> MediaBugAction {
         MediaBugAction::Continue
@@ -279,33 +287,6 @@ pub trait MediaBugHandler: 'static {
     }
 
     fn on_close(&mut self, _ctx: &mut MediaBugContext<'_>) {}
-}
-
-/// Attaches a FreeSWITCH media bug and owns `handler` until FreeSWITCH closes the bug.
-///
-pub fn attach_media_bug<H>(session: Session, config: MediaBugConfig, handler: H) -> Result<MediaBug>
-where
-    H: MediaBugHandler,
-{
-    let state = Box::into_raw(Box::new(MediaBugState { handler }));
-    let mut bug = std::ptr::null_mut();
-
-    // SAFETY: `session` is live and `state` remains allocated until close or failure cleanup.
-    let status = call_ffi!(add_media_bug::<H>(session, config, state.cast(), &mut bug));
-
-    if status != crate::SUCCESS.raw() {
-        // SAFETY: FreeSWITCH did not take ownership on failure.
-        call_ffi!(drop(Box::from_raw(state)));
-        return Err(SwitchError(crate::Status::from_raw(status)));
-    }
-
-    let Some(raw) = NonNull::new(bug) else {
-        // SAFETY: FreeSWITCH did not return a bug handle, so there is no close callback that can
-        // reclaim the state.
-        call_ffi!(drop(Box::from_raw(state)));
-        return Err(SwitchError(crate::GENERR));
-    };
-    Ok(MediaBug { raw })
 }
 
 /// # Safety
@@ -782,150 +763,168 @@ fn callback_result(result: std::thread::Result<MediaBugAction>) -> sys::switch_b
 // These operate on every bug attached to a session (the `*_media_bug_pause` family takes a
 // session, not a single bug). Thread-safe per FreeSWITCH's media-bug locking.
 
-/// Pauses every media bug attached to `session`.
-pub fn pause_media_bugs(session: Session) {
-    // SAFETY: `session.as_ptr()` is a live session.
-    call_ffi!(sys::switch_core_media_bug_pause(session.as_ptr()));
-}
+impl Session {
+    /// Attaches a FreeSWITCH media bug and owns `handler` until FreeSWITCH closes the bug.
+    ///
+    pub fn attach_media_bug<H>(self, config: MediaBugConfig, handler: H) -> Result<MediaBug>
+    where
+        H: MediaBugHandler,
+    {
+        let state = Box::into_raw(Box::new(MediaBugState { handler }));
+        let mut bug = std::ptr::null_mut();
 
-/// Resumes every paused media bug attached to `session`.
-pub fn resume_media_bugs(session: Session) {
-    // SAFETY: `session.as_ptr()` is a live session.
-    call_ffi!(sys::switch_core_media_bug_resume(session.as_ptr()));
-}
+        // SAFETY: `self` is live and `state` remains allocated until close or failure cleanup.
+        let status = call_ffi!(add_media_bug::<H>(self, config, state.cast(), &mut bug));
 
-/// Removes bugs flagged `SMBF_PRUNE` from `session`. Returns the number pruned.
-pub fn prune_media_bugs(session: Session) -> u32 {
-    // SAFETY: `session.as_ptr()` is a live session.
-    call_ffi!(sys::switch_core_media_bug_prune(session.as_ptr()))
-}
+        if status != crate::SUCCESS.raw() {
+            // SAFETY: FreeSWITCH did not take ownership on failure.
+            call_ffi!(drop(Box::from_raw(state)));
+            return Err(SwitchError(crate::Status::from_raw(status)));
+        }
 
-/// Flushes every media bug's buffers on `session`.
-pub fn flush_all_media_bugs(session: Session) -> Result<()> {
-    // SAFETY: `session.as_ptr()` is a live session.
-    status_to_result(call_ffi!(sys::switch_core_media_bug_flush_all(
-        session.as_ptr()
-    )))
-}
+        let Some(raw) = NonNull::new(bug) else {
+            // SAFETY: FreeSWITCH did not return a bug handle, so there is no close callback that can
+            // reclaim the state.
+            call_ffi!(drop(Box::from_raw(state)));
+            return Err(SwitchError(crate::GENERR));
+        };
+        Ok(MediaBug { raw })
+    }
 
-/// Number of media bugs on `session` registered under `function` (the name passed to
-/// [`attach_media_bug`]). Interior NUL in `function` is rejected.
-pub fn count_media_bugs(session: Session, function: impl AsRef<str>) -> Result<u32> {
-    let function = cstring(function)?;
-    // SAFETY: `session.as_ptr()` is a live session; `function` is a valid C string.
-    Ok(call_ffi!(sys::switch_core_media_bug_count(
-        session.as_ptr(),
-        function.as_ptr()
-    )))
-}
+    /// Pauses every media bug attached to this session.
+    pub fn pause_media_bugs(self) {
+        // SAFETY: `self.as_ptr()` is a live session.
+        call_ffi!(sys::switch_core_media_bug_pause(self.as_ptr()));
+    }
 
-/// Removes every bug on `session` registered under `function`.
-pub fn remove_media_bugs_by_function(session: Session, function: impl AsRef<str>) -> Result<()> {
-    let function = cstring(function)?;
-    // SAFETY: live session; valid C string.
-    status_to_result(call_ffi!(sys::switch_core_media_bug_remove_all_function(
-        session.as_ptr(),
-        function.as_ptr()
-    )))
-}
+    /// Resumes every paused media bug attached to this session.
+    pub fn resume_media_bugs(self) {
+        // SAFETY: `self.as_ptr()` is a live session.
+        call_ffi!(sys::switch_core_media_bug_resume(self.as_ptr()));
+    }
 
-/// Pops (detaches) one bug registered under `function` from `session`, returning its handle.
-pub fn pop_media_bug(session: Session, function: impl AsRef<str>) -> Result<Option<MediaBug>> {
-    let function = cstring(function)?;
-    let mut bug: *mut sys::switch_media_bug_t = std::ptr::null_mut();
-    // SAFETY: live session; valid C string; `&mut bug` is a valid out-param.
-    let status = call_ffi!(sys::switch_core_media_bug_pop(
-        session.as_ptr(),
-        function.as_ptr(),
-        &mut bug
-    ));
-    status_to_result(status)?;
-    Ok(NonNull::new(bug).map(|raw| MediaBug { raw }))
-}
+    /// Removes bugs flagged `SMBF_PRUNE` from this session. Returns the number pruned.
+    pub fn prune_media_bugs(self) -> u32 {
+        // SAFETY: `self.as_ptr()` is a live session.
+        call_ffi!(sys::switch_core_media_bug_prune(self.as_ptr()))
+    }
 
-/// Removes `bug` from its session. The `MediaBug` handle (and all copies) is invalid afterwards.
-pub fn remove_media_bug(session: Session, bug: &mut MediaBug) -> Result<()> {
-    let mut ptr = bug.raw.as_ptr();
-    // SAFETY: live session; `bug.raw` is a live bug; `&mut ptr` is a valid `*mut *mut`.
-    let status = call_ffi!(sys::switch_core_media_bug_remove(
-        session.as_ptr(),
-        &mut ptr
-    ));
-    status_to_result(status)
-}
+    /// Flushes every media bug's buffers on this session.
+    pub fn flush_all_media_bugs(self) -> Result<()> {
+        // SAFETY: `self.as_ptr()` is a live session.
+        status_to_result(call_ffi!(sys::switch_core_media_bug_flush_all(
+            self.as_ptr()
+        )))
+    }
 
-/// Runs `cb` against every bug on `session` registered under `function`. Advanced.
-pub fn exec_all_media_bugs(
-    session: Session,
-    function: impl AsRef<str>,
-    cb: sys::switch_media_bug_exec_cb_t,
-    user_data: *mut c_void,
-) -> Result<()> {
-    let function = cstring(function)?;
-    // SAFETY: live session; valid C string; `cb` is a valid fn pointer.
-    status_to_result(call_ffi!(sys::switch_core_media_bug_exec_all(
-        session.as_ptr(),
-        function.as_ptr(),
-        cb,
-        user_data
-    )))
-}
+    /// Number of media bugs on this session registered under `function` (the name passed to
+    /// [`Session::attach_media_bug`]). Interior NUL in `function` is rejected.
+    pub fn count_media_bugs(self, function: impl AsRef<str>) -> Result<u32> {
+        let function = cstring(function)?;
+        // SAFETY: `self.as_ptr()` is a live session; `function` is a valid C string.
+        Ok(call_ffi!(sys::switch_core_media_bug_count(
+            self.as_ptr(),
+            function.as_ptr()
+        )))
+    }
 
-/// Removes every bug on `session` whose callback matches `callback`.
-pub fn remove_media_bugs_by_callback(
-    session: Session,
-    callback: sys::switch_media_bug_callback_t,
-) -> Result<()> {
-    // SAFETY: live session; valid fn pointer.
-    status_to_result(call_ffi!(sys::switch_core_media_bug_remove_callback(
-        session.as_ptr(),
-        callback
-    )))
-}
+    /// Removes every bug on this session registered under `function`.
+    pub fn remove_media_bugs_by_function(self, function: impl AsRef<str>) -> Result<()> {
+        let function = cstring(function)?;
+        // SAFETY: live session; valid C string.
+        status_to_result(call_ffi!(sys::switch_core_media_bug_remove_all_function(
+            self.as_ptr(),
+            function.as_ptr()
+        )))
+    }
 
-/// Transfers bugs matching `callback` from `orig` to `new_session`, optionally duplicating
-/// `user_data` via `dup`. Advanced.
-pub fn transfer_media_bug_callback(
-    orig: Session,
-    new_session: Session,
-    callback: sys::switch_media_bug_callback_t,
-    dup: Option<unsafe extern "C" fn(*mut sys::switch_core_session_t, *mut c_void) -> *mut c_void>,
-) -> Result<()> {
-    // SAFETY: both sessions live; valid fn pointer; `dup` is null or a matching callback.
-    status_to_result(call_ffi!(sys::switch_core_media_bug_transfer_callback(
-        orig.as_ptr(),
-        new_session.as_ptr(),
-        callback,
-        dup
-    )))
-}
+    /// Pops (detaches) one bug registered under `function` from this session, returning its handle.
+    pub fn pop_media_bug(self, function: impl AsRef<str>) -> Result<Option<MediaBug>> {
+        let function = cstring(function)?;
+        let mut bug: *mut sys::switch_media_bug_t = std::ptr::null_mut();
+        // SAFETY: live session; valid C string; `&mut bug` is a valid out-param.
+        let status = call_ffi!(sys::switch_core_media_bug_pop(
+            self.as_ptr(),
+            function.as_ptr(),
+            &mut bug
+        ));
+        status_to_result(status)?;
+        Ok(NonNull::new(bug).map(|raw| MediaBug { raw }))
+    }
 
-/// Enumerates the bugs on `session` into a stream handle (debug dump). `stream` is a
-/// `switch_stream_handle_t*` (e.g. from an api callback's stream).
-pub fn enumerate_media_bugs(
-    session: Session,
-    stream: *mut sys::switch_stream_handle_t,
-) -> Result<()> {
-    // SAFETY: live session; `stream` is a valid stream handle per caller.
-    status_to_result(call_ffi!(sys::switch_core_media_bug_enumerate(
-        session.as_ptr(),
-        stream
-    )))
-}
+    /// Removes `bug` from this session. The `MediaBug` handle (and all copies) is invalid
+    /// afterwards.
+    pub fn remove_media_bug(self, bug: &mut MediaBug) -> Result<()> {
+        let mut ptr = bug.raw.as_ptr();
+        // SAFETY: live session; `bug.raw` is a live bug; `&mut ptr` is a valid `*mut *mut`.
+        let status = call_ffi!(sys::switch_core_media_bug_remove(self.as_ptr(), &mut ptr));
+        status_to_result(status)
+    }
 
-/// Patches video bugs on `session` against `frame` (video pipeline). Returns a switch_bool_t.
-pub fn patch_video_media_bugs(session: Session, frame: *mut sys::switch_frame_t) -> u32 {
-    // SAFETY: live session; `frame` is a valid frame pointer for the call.
-    call_ffi!(sys::switch_core_media_bug_patch_video(
-        session.as_ptr(),
-        frame
-    ))
-}
+    /// Runs `cb` against every bug on this session registered under `function`. Advanced.
+    pub fn exec_all_media_bugs(
+        self,
+        function: impl AsRef<str>,
+        cb: sys::switch_media_bug_exec_cb_t,
+        user_data: *mut c_void,
+    ) -> Result<()> {
+        let function = cstring(function)?;
+        // SAFETY: live session; valid C string; `cb` is a valid fn pointer.
+        status_to_result(call_ffi!(sys::switch_core_media_bug_exec_all(
+            self.as_ptr(),
+            function.as_ptr(),
+            cb,
+            user_data
+        )))
+    }
 
-/// Sets the spy format on `bug` (video spy). Advanced.
-pub fn set_spy_fmt(bug: MediaBug, spy_fmt: sys::switch_vid_spy_fmt_t) {
-    // SAFETY: `bug.as_ptr()` is a live bug.
-    call_ffi!(sys::switch_media_bug_set_spy_fmt(bug.as_ptr(), spy_fmt));
+    /// Removes every bug on this session whose callback matches `callback`.
+    pub fn remove_media_bugs_by_callback(
+        self,
+        callback: sys::switch_media_bug_callback_t,
+    ) -> Result<()> {
+        // SAFETY: live session; valid fn pointer.
+        status_to_result(call_ffi!(sys::switch_core_media_bug_remove_callback(
+            self.as_ptr(),
+            callback
+        )))
+    }
+
+    /// Transfers bugs matching `callback` from this session to `new_session`, optionally
+    /// duplicating `user_data` via `dup`. Advanced.
+    pub fn transfer_media_bug_callback(
+        self,
+        new_session: Session,
+        callback: sys::switch_media_bug_callback_t,
+        dup: Option<
+            unsafe extern "C" fn(*mut sys::switch_core_session_t, *mut c_void) -> *mut c_void,
+        >,
+    ) -> Result<()> {
+        // SAFETY: both sessions live; valid fn pointer; `dup` is null or a matching callback.
+        status_to_result(call_ffi!(sys::switch_core_media_bug_transfer_callback(
+            self.as_ptr(),
+            new_session.as_ptr(),
+            callback,
+            dup
+        )))
+    }
+
+    /// Enumerates the bugs on this session into a stream handle (debug dump). `stream` is a
+    /// `switch_stream_handle_t*` (e.g. from an api callback's stream).
+    pub fn enumerate_media_bugs(self, stream: *mut sys::switch_stream_handle_t) -> Result<()> {
+        // SAFETY: live session; `stream` is a valid stream handle per caller.
+        status_to_result(call_ffi!(sys::switch_core_media_bug_enumerate(
+            self.as_ptr(),
+            stream
+        )))
+    }
+
+    /// Patches video bugs on this session against `frame` (video pipeline). Returns a
+    /// switch_bool_t.
+    pub fn patch_video_media_bugs(self, frame: *mut sys::switch_frame_t) -> u32 {
+        // SAFETY: live session; `frame` is a valid frame pointer for the call.
+        call_ffi!(sys::switch_core_media_bug_patch_video(self.as_ptr(), frame))
+    }
 }
 
 /// Parses a spy-format name (e.g. `"split"`) into a `switch_vid_spy_fmt_t`.

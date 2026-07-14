@@ -183,14 +183,16 @@ pub fn codec_reset(codec: *mut crate::sys::switch_codec_t) -> crate::Result<()> 
     crate::status_to_result(unsafe { crate::sys::switch_core_codec_reset(codec) })
 }
 
-pub fn codec_lock_full(session: crate::Session) {
-    // SAFETY: live session.
-    unsafe { crate::sys::switch_core_codec_lock_full(session.as_ptr()) };
-}
+impl crate::Session {
+    pub fn codec_lock_full(self) {
+        // SAFETY: live session.
+        unsafe { crate::sys::switch_core_codec_lock_full(self.as_ptr()) };
+    }
 
-pub fn codec_unlock_full(session: crate::Session) {
-    // SAFETY: live session.
-    unsafe { crate::sys::switch_core_codec_unlock_full(session.as_ptr()) };
+    pub fn codec_unlock_full(self) {
+        // SAFETY: live session.
+        unsafe { crate::sys::switch_core_codec_unlock_full(self.as_ptr()) };
+    }
 }
 
 pub fn codec_decode_video(

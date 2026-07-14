@@ -128,6 +128,19 @@ impl Pool {
         }
         Ok(mem)
     }
+
+    /// Clears (destroys and re-creates) the pool, releasing its allocations.
+    pub fn clear(&self) {
+        // SAFETY: `self.as_ptr()` is a live APR pool.
+        unsafe { sys::switch_pool_clear(self.as_ptr()) };
+    }
+
+    /// Strips whitespace from `s` in place. `s` is a C string stored in pool memory that
+    /// FreeSWITCH modifies in place.
+    pub fn strip_whitespace(&self, s: *const std::os::raw::c_char) {
+        // SAFETY: live pool; `s` valid C string per caller (FS modifies in-place on pool memory).
+        unsafe { sys::switch_pool_strip_whitespace(self.as_ptr(), s) };
+    }
 }
 
 impl Drop for Pool {
@@ -183,16 +196,6 @@ mod tests {
 }
 
 // ── pool helpers ───────────────────────────────────────────────────────────
-
-pub fn pool_clear(pool: &Pool) {
-    // SAFETY: `pool.as_ptr()` is a live APR pool.
-    unsafe { crate::sys::switch_pool_clear(pool.as_ptr()) };
-}
-
-pub fn pool_strip_whitespace(pool: &Pool, s: *const std::os::raw::c_char) {
-    // SAFETY: live pool; `s` valid C string per caller (FS modifies in-place on pool memory).
-    unsafe { crate::sys::switch_pool_strip_whitespace(pool.as_ptr(), s) };
-}
 
 pub fn pool_stats(stream: *mut crate::sys::switch_stream_handle_t) {
     // SAFETY: `stream` valid per caller.

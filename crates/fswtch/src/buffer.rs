@@ -220,6 +220,34 @@ impl Buffer {
         // SAFETY: `self.raw` is a live owned buffer.
         unsafe { sys::switch_buffer_zero(self.raw.as_ptr()) };
     }
+
+    /// Acquires the buffer's mutex.
+    pub fn lock(&self) {
+        // SAFETY: live buffer.
+        unsafe { sys::switch_buffer_lock(self.as_ptr()) };
+    }
+
+    /// Tries to acquire the buffer's mutex. Returns `Err` on failure.
+    pub fn trylock(&self) -> Result<()> {
+        // SAFETY: live buffer.
+        status_to_result(unsafe { sys::switch_buffer_trylock(self.as_ptr()) })
+    }
+
+    /// Releases the buffer's mutex.
+    pub fn unlock(&self) {
+        // SAFETY: live buffer.
+        unsafe { sys::switch_buffer_unlock(self.as_ptr()) };
+    }
+
+    /// Peeks at the buffer's contiguous in-place data without copying. Returns the raw data
+    /// pointer and its length in bytes; the pointer borrows buffer storage and is valid only
+    /// while the buffer is unmodified.
+    pub fn peek_zerocopy(&self) -> (*const std::ffi::c_void, u64) {
+        let mut ptr: *const std::ffi::c_void = std::ptr::null();
+        // SAFETY: live buffer; `&mut ptr` valid out.
+        let len = unsafe { sys::switch_buffer_peek_zerocopy(self.as_ptr(), &mut ptr) };
+        (ptr, len as u64)
+    }
 }
 
 impl Drop for Buffer {
@@ -318,28 +346,4 @@ mod tests {
         assert_eq!(n, 3);
         assert!(buf.is_empty());
     }
-}
-
-// ── buffer lock/peek helpers ─────────────────────────────────────────────
-
-pub fn buffer_lock(buffer: &Buffer) {
-    // SAFETY: live buffer.
-    unsafe { crate::sys::switch_buffer_lock(buffer.as_ptr()) };
-}
-
-pub fn buffer_trylock(buffer: &Buffer) -> crate::Result<()> {
-    // SAFETY: live buffer.
-    crate::status_to_result(unsafe { crate::sys::switch_buffer_trylock(buffer.as_ptr()) })
-}
-
-pub fn buffer_unlock(buffer: &Buffer) {
-    // SAFETY: live buffer.
-    unsafe { crate::sys::switch_buffer_unlock(buffer.as_ptr()) };
-}
-
-pub fn buffer_peek_zerocopy(buffer: &Buffer) -> (*const std::ffi::c_void, u64) {
-    let mut ptr: *const std::ffi::c_void = std::ptr::null();
-    // SAFETY: live buffer; `&mut ptr` valid out.
-    let len = unsafe { crate::sys::switch_buffer_peek_zerocopy(buffer.as_ptr(), &mut ptr) };
-    (ptr, len as u64)
 }

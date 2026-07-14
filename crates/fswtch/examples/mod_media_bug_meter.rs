@@ -110,7 +110,7 @@ fswtch::app_callback! {
             write_audio_bytes: 0,
         };
 
-        match fswtch::attach_media_bug(session, config, handler) {
+        match session.attach_media_bug(config, handler) {
             Ok(_) => {
                 COUNTERS.bugs_attached.fetch_add(1, Ordering::Relaxed);
                 fswtch::log_info("mod_media_bug_meter", "media bug attached");

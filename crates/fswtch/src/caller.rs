@@ -187,24 +187,34 @@ pub fn caller_extension_clone(
     })
 }
 
-pub fn caller_extension_add_application(
-    session: crate::Session,
-    ext: *mut crate::sys::switch_caller_extension_t,
-    application_name: impl AsRef<str>,
-    extra_data: impl AsRef<str>,
-) -> crate::Result<()> {
-    let name = crate::cstring(application_name)?;
-    let extra = crate::cstring(extra_data)?;
-    // SAFETY: live session; valid ext; two valid C strings. Returns void.
-    unsafe {
-        crate::sys::switch_caller_extension_add_application(
-            session.as_ptr(),
-            ext,
-            name.as_ptr(),
-            extra.as_ptr(),
-        );
+impl crate::Session {
+    pub fn caller_extension_add_application(
+        self,
+        ext: *mut crate::sys::switch_caller_extension_t,
+        application_name: impl AsRef<str>,
+        extra_data: impl AsRef<str>,
+    ) -> crate::Result<()> {
+        let name = crate::cstring(application_name)?;
+        let extra = crate::cstring(extra_data)?;
+        // SAFETY: live session; valid ext; two valid C strings. Returns void.
+        unsafe {
+            crate::sys::switch_caller_extension_add_application(
+                self.as_ptr(),
+                ext,
+                name.as_ptr(),
+                extra.as_ptr(),
+            );
+        }
+        Ok(())
     }
-    Ok(())
+
+    pub fn caller_profile_clone(
+        self,
+        tocopy: *mut crate::sys::switch_caller_profile_t,
+    ) -> *mut crate::sys::switch_caller_profile_t {
+        // SAFETY: live session; `tocopy` live.
+        unsafe { crate::sys::switch_caller_profile_clone(self.as_ptr(), tocopy) }
+    }
 }
 
 pub fn caller_profile_dup(
@@ -213,14 +223,6 @@ pub fn caller_profile_dup(
 ) -> *mut crate::sys::switch_caller_profile_t {
     // SAFETY: live pool; `tocopy` live per caller.
     unsafe { crate::sys::switch_caller_profile_dup(pool.as_ptr(), tocopy) }
-}
-
-pub fn caller_profile_clone(
-    session: crate::Session,
-    tocopy: *mut crate::sys::switch_caller_profile_t,
-) -> *mut crate::sys::switch_caller_profile_t {
-    // SAFETY: live session; `tocopy` live.
-    unsafe { crate::sys::switch_caller_profile_clone(session.as_ptr(), tocopy) }
 }
 
 pub fn caller_profile_event_set_data(

@@ -64,10 +64,9 @@ pub use endpoint::{
 };
 pub use estimators::{CusumDetector, KalmanEstimator, is_slow_link};
 pub use event::{
-    Event, EventBinder, EventRef, EventType, EventXml, HeaderIter, Priority, binary_deserialize,
-    bind_permanent, channel_bind, channel_broadcast, channel_deliver, channel_permission_clear,
-    channel_permission_modify, channel_permission_verify, channel_unbind, event_name,
-    event_running, name_event, unbind_callback,
+    Event, EventBinder, EventRef, EventType, EventXml, HeaderIter, Priority, channel_bind,
+    channel_broadcast, channel_deliver, channel_permission_clear, channel_permission_modify,
+    channel_permission_verify, channel_unbind, event_running,
 };
 pub use file::*;
 pub use ivr::*;

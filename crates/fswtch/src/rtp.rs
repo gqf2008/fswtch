@@ -591,113 +591,133 @@ mod packet_tests {
 // Wrap `switch_rtp_*` control helpers on an existing [`Rtp`] engine. Take `&Rtp` (the engine is
 // `!Copy`); all `unsafe` stays inside.
 
-pub fn rtp_flush(rtp: &Rtp) {
-    // SAFETY: `rtp.as_ptr()` is a live RTP engine.
-    unsafe { sys::switch_rtp_flush(rtp.as_ptr()) };
-}
-pub fn rtp_reset(rtp: &Rtp) {
-    // SAFETY: live RTP engine.
-    unsafe { sys::switch_rtp_reset(rtp.as_ptr()) };
-}
-pub fn rtp_break(rtp: &Rtp) {
-    // SAFETY: live RTP engine.
-    unsafe { sys::switch_rtp_break(rtp.as_ptr()) };
-}
-pub fn rtp_ping(rtp: &Rtp) {
-    // SAFETY: live RTP engine.
-    unsafe { sys::switch_rtp_ping(rtp.as_ptr()) };
-}
-pub fn rtp_get_ssrc(rtp: &Rtp) -> u32 {
-    // SAFETY: live RTP engine.
-    unsafe { sys::switch_rtp_get_ssrc(rtp.as_ptr()) }
-}
-pub fn rtp_set_ssrc(rtp: &Rtp, ssrc: u32) -> Result<()> {
-    // SAFETY: live RTP engine; plain u32.
-    status_to_result(unsafe { sys::switch_rtp_set_ssrc(rtp.as_ptr(), ssrc) })
-}
-pub fn rtp_set_remote_ssrc(rtp: &Rtp, ssrc: u32) -> Result<()> {
-    // SAFETY: live RTP engine; plain u32.
-    status_to_result(unsafe { sys::switch_rtp_set_remote_ssrc(rtp.as_ptr(), ssrc) })
-}
-pub fn rtp_sync_stats(rtp: &Rtp) -> Result<()> {
-    // SAFETY: live RTP engine.
-    status_to_result(unsafe { sys::switch_rtp_sync_stats(rtp.as_ptr()) })
-}
-pub fn rtp_test_flag(rtp: &Rtp, flags: sys::switch_rtp_flag_t) -> bool {
-    // SAFETY: live RTP engine; valid flag bitmask.
-    unsafe { sys::switch_rtp_test_flag(rtp.as_ptr(), flags) != 0 }
-}
-pub fn rtp_set_flag(rtp: &Rtp, flag: sys::switch_rtp_flag_t) {
-    // SAFETY: live RTP engine; valid flag.
-    unsafe { sys::switch_rtp_set_flag(rtp.as_ptr(), flag) };
-}
-pub fn rtp_clear_flag(rtp: &Rtp, flag: sys::switch_rtp_flag_t) {
-    // SAFETY: live RTP engine; valid flag.
-    unsafe { sys::switch_rtp_clear_flag(rtp.as_ptr(), flag) };
-}
+impl Rtp {
+    pub fn flush(&self) {
+        // SAFETY: `self.as_ptr()` is a live RTP engine.
+        unsafe { sys::switch_rtp_flush(self.as_ptr()) };
+    }
+    pub fn reset(&self) {
+        // SAFETY: live RTP engine.
+        unsafe { sys::switch_rtp_reset(self.as_ptr()) };
+    }
+    pub fn break_(&self) {
+        // SAFETY: live RTP engine.
+        unsafe { sys::switch_rtp_break(self.as_ptr()) };
+    }
+    pub fn ping(&self) {
+        // SAFETY: live RTP engine.
+        unsafe { sys::switch_rtp_ping(self.as_ptr()) };
+    }
+    pub fn get_ssrc(&self) -> u32 {
+        // SAFETY: live RTP engine.
+        unsafe { sys::switch_rtp_get_ssrc(self.as_ptr()) }
+    }
+    pub fn set_ssrc(&self, ssrc: u32) -> Result<()> {
+        // SAFETY: live RTP engine; plain u32.
+        status_to_result(unsafe { sys::switch_rtp_set_ssrc(self.as_ptr(), ssrc) })
+    }
+    pub fn set_remote_ssrc(&self, ssrc: u32) -> Result<()> {
+        // SAFETY: live RTP engine; plain u32.
+        status_to_result(unsafe { sys::switch_rtp_set_remote_ssrc(self.as_ptr(), ssrc) })
+    }
+    pub fn sync_stats(&self) -> Result<()> {
+        // SAFETY: live RTP engine.
+        status_to_result(unsafe { sys::switch_rtp_sync_stats(self.as_ptr()) })
+    }
+    pub fn test_flag(&self, flags: sys::switch_rtp_flag_t) -> bool {
+        // SAFETY: live RTP engine; valid flag bitmask.
+        unsafe { sys::switch_rtp_test_flag(self.as_ptr(), flags) != 0 }
+    }
+    pub fn set_flag(&self, flag: sys::switch_rtp_flag_t) {
+        // SAFETY: live RTP engine; valid flag.
+        unsafe { sys::switch_rtp_set_flag(self.as_ptr(), flag) };
+    }
+    pub fn clear_flag(&self, flag: sys::switch_rtp_flag_t) {
+        // SAFETY: live RTP engine; valid flag.
+        unsafe { sys::switch_rtp_clear_flag(self.as_ptr(), flag) };
+    }
 
-pub fn rtp_set_interval(rtp: &Rtp, ms_per_packet: u32, samples_per_interval: u32) -> Result<()> {
-    // SAFETY: live RTP engine; two plain u32s.
-    status_to_result(unsafe {
-        sys::switch_rtp_set_interval(rtp.as_ptr(), ms_per_packet, samples_per_interval)
-    })
-}
+    pub fn set_interval(&self, ms_per_packet: u32, samples_per_interval: u32) -> Result<()> {
+        // SAFETY: live RTP engine; two plain u32s.
+        status_to_result(unsafe {
+            sys::switch_rtp_set_interval(self.as_ptr(), ms_per_packet, samples_per_interval)
+        })
+    }
 
-pub fn rtp_change_interval(rtp: &Rtp, ms_per_packet: u32, samples_per_interval: u32) -> Result<()> {
-    // SAFETY: live RTP engine; two plain u32s.
-    status_to_result(unsafe {
-        sys::switch_rtp_change_interval(rtp.as_ptr(), ms_per_packet, samples_per_interval)
-    })
-}
+    pub fn change_interval(&self, ms_per_packet: u32, samples_per_interval: u32) -> Result<()> {
+        // SAFETY: live RTP engine; two plain u32s.
+        status_to_result(unsafe {
+            sys::switch_rtp_change_interval(self.as_ptr(), ms_per_packet, samples_per_interval)
+        })
+    }
 
-/// RTP stats (borrowed from the engine; do not free). Requires a `pool` for scratch.
-pub fn rtp_get_stats(rtp: &Rtp, pool: &Pool) -> *mut sys::switch_rtp_stats_t {
-    // SAFETY: live RTP engine; live pool.
-    unsafe { sys::switch_rtp_get_stats(rtp.as_ptr(), pool.as_ptr()) }
-}
+    /// RTP stats (borrowed from the engine; do not free). Requires a `pool` for scratch.
+    pub fn get_stats(&self, pool: &Pool) -> *mut sys::switch_rtp_stats_t {
+        // SAFETY: live RTP engine; live pool.
+        unsafe { sys::switch_rtp_get_stats(self.as_ptr(), pool.as_ptr()) }
+    }
 
-/// The media timer backing this RTP engine (borrowed; do not free).
-pub fn rtp_get_media_timer(rtp: &Rtp) -> *mut sys::switch_timer_t {
-    // SAFETY: live RTP engine.
-    unsafe { sys::switch_rtp_get_media_timer(rtp.as_ptr()) }
-}
+    /// The media timer backing this RTP engine (borrowed; do not free).
+    pub fn get_media_timer(&self) -> *mut sys::switch_timer_t {
+        // SAFETY: live RTP engine.
+        unsafe { sys::switch_rtp_get_media_timer(self.as_ptr()) }
+    }
 
-/// The session backing this RTP engine.
-pub fn rtp_get_core_session(rtp: &Rtp) -> Option<crate::Session> {
-    // SAFETY: live RTP engine; returns null or a live session handle.
-    let ptr = unsafe { sys::switch_rtp_get_core_session(rtp.as_ptr()) };
-    // SAFETY: null or a live session borrowed from the RTP engine.
-    unsafe { crate::Session::from_raw(ptr) }
-}
+    /// The session backing this RTP engine.
+    pub fn get_core_session(&self) -> Option<crate::Session> {
+        // SAFETY: live RTP engine; returns null or a live session handle.
+        let ptr = unsafe { sys::switch_rtp_get_core_session(self.as_ptr()) };
+        // SAFETY: null or a live session borrowed from the RTP engine.
+        unsafe { crate::Session::from_raw(ptr) }
+    }
 
-pub fn rtp_get_default_payload(rtp: &Rtp) -> u32 {
-    // SAFETY: live RTP engine.
-    unsafe { sys::switch_rtp_get_default_payload(rtp.as_ptr()) }
-}
+    pub fn get_default_payload(&self) -> u32 {
+        // SAFETY: live RTP engine.
+        unsafe { sys::switch_rtp_get_default_payload(self.as_ptr()) }
+    }
 
-pub fn rtp_set_default_payload(rtp: &Rtp, payload: sys::switch_payload_t) {
-    // SAFETY: live RTP engine; valid payload.
-    unsafe { sys::switch_rtp_set_default_payload(rtp.as_ptr(), payload) };
-}
+    pub fn set_default_payload(&self, payload: sys::switch_payload_t) {
+        // SAFETY: live RTP engine; valid payload.
+        unsafe { sys::switch_rtp_set_default_payload(self.as_ptr(), payload) };
+    }
 
-pub fn rtp_has_dtmf(rtp: &Rtp) -> u64 {
-    // SAFETY: live RTP engine.
-    unsafe { sys::switch_rtp_has_dtmf(rtp.as_ptr()) as u64 }
-}
+    pub fn has_dtmf(&self) -> u64 {
+        // SAFETY: live RTP engine.
+        unsafe { sys::switch_rtp_has_dtmf(self.as_ptr()) as u64 }
+    }
 
-pub fn rtp_dequeue_dtmf(rtp: &Rtp, dtmf: *mut sys::switch_dtmf_t) -> u64 {
-    // SAFETY: live RTP engine; `dtmf` valid out per caller.
-    unsafe { sys::switch_rtp_dequeue_dtmf(rtp.as_ptr(), dtmf) as u64 }
-}
+    pub fn dequeue_dtmf(&self, dtmf: *mut sys::switch_dtmf_t) -> u64 {
+        // SAFETY: live RTP engine; `dtmf` valid out per caller.
+        unsafe { sys::switch_rtp_dequeue_dtmf(self.as_ptr(), dtmf) as u64 }
+    }
 
-pub fn rtp_disable_vad(rtp: &Rtp) -> Result<()> {
-    // SAFETY: live RTP engine.
-    status_to_result(unsafe { sys::switch_rtp_disable_vad(rtp.as_ptr()) })
-}
+    pub fn disable_vad(&self) -> Result<()> {
+        // SAFETY: live RTP engine.
+        status_to_result(unsafe { sys::switch_rtp_disable_vad(self.as_ptr()) })
+    }
 
-pub fn rtp_set_media_timeout(rtp: &Rtp, ms: u32) {
-    // SAFETY: live RTP engine; plain u32.
-    unsafe { sys::switch_rtp_set_media_timeout(rtp.as_ptr(), ms) };
+    pub fn set_media_timeout(&self, ms: u32) {
+        // SAFETY: live RTP engine; plain u32.
+        unsafe { sys::switch_rtp_set_media_timeout(self.as_ptr(), ms) };
+    }
+
+    pub fn write_raw(
+        &self,
+        data: *const std::ffi::c_void,
+        bytes: &mut u64,
+        process_encryption: bool,
+    ) -> Result<()> {
+        let mut n: sys::switch_size_t = *bytes as _;
+        let enc = if process_encryption {
+            sys::switch_bool_t_SWITCH_TRUE
+        } else {
+            sys::switch_bool_t_SWITCH_FALSE
+        };
+        // SAFETY: live RTP engine; `data` valid for `*bytes`; `&mut n` valid in/out.
+        let s = unsafe { sys::switch_rtp_write_raw(self.as_ptr(), data.cast_mut(), &mut n, enc) };
+        *bytes = n as u64;
+        status_to_result(s)
+    }
 }
 
 /// Releases an RTP port back to the pool. `ip` is the bind address string.
@@ -708,22 +728,4 @@ pub fn rtp_release_port(ip: impl AsRef<str>, port: sys::switch_port_t) {
     };
     // SAFETY: valid C string; plain port.
     unsafe { sys::switch_rtp_release_port(ip.as_ptr(), port) };
-}
-
-pub fn rtp_write_raw(
-    rtp: &Rtp,
-    data: *const std::ffi::c_void,
-    bytes: &mut u64,
-    process_encryption: bool,
-) -> Result<()> {
-    let mut n: sys::switch_size_t = *bytes as _;
-    let enc = if process_encryption {
-        sys::switch_bool_t_SWITCH_TRUE
-    } else {
-        sys::switch_bool_t_SWITCH_FALSE
-    };
-    // SAFETY: live RTP engine; `data` valid for `*bytes`; `&mut n` valid in/out.
-    let s = unsafe { sys::switch_rtp_write_raw(rtp.as_ptr(), data.cast_mut(), &mut n, enc) };
-    *bytes = n as u64;
-    status_to_result(s)
 }
