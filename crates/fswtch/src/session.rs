@@ -74,6 +74,41 @@ impl Session {
         unsafe { (*imp).samples_per_packet }
     }
 
+    /// The write codec's actual sample rate (Hz). Returns `8000` when no codec is
+    /// set (e.g. before media is negotiated) so callers get a sane default.
+    pub fn write_sample_rate(self) -> u32 {
+        // SAFETY: `self.raw` is a live session. `get_write_codec` returns a
+        // pointer valid for the session's lifetime (or null).
+        let codec = unsafe { sys::switch_core_session_get_write_codec(self.raw.as_ptr()) };
+        if codec.is_null() {
+            return 8000;
+        }
+        // SAFETY: `codec` is non-null and live; `implementation` is a pointer
+        // populated by FreeSWITCH during codec init.
+        let imp = unsafe { (*codec).implementation };
+        if imp.is_null() {
+            return 8000;
+        }
+        // SAFETY: `imp` is non-null and owned by the codec.
+        unsafe { (*imp).actual_samples_per_second }
+    }
+
+    /// The write codec's samples-per-packet (e.g. 160 for 8 kHz / 20 ms L16).
+    /// Returns `160` as a default when no codec is set.
+    pub fn write_samples_per_packet(self) -> u32 {
+        // SAFETY: see `write_sample_rate`.
+        let codec = unsafe { sys::switch_core_session_get_write_codec(self.raw.as_ptr()) };
+        if codec.is_null() {
+            return 160;
+        }
+        let imp = unsafe { (*codec).implementation };
+        if imp.is_null() {
+            return 160;
+        }
+        // SAFETY: `imp` is non-null and owned by the codec.
+        unsafe { (*imp).samples_per_packet }
+    }
+
     /// Allocates a `switch_codec_t` on the session's pool and initializes it as
     /// the session's read codec.
     ///
