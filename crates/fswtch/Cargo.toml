@@ -29,6 +29,10 @@ bundled = ["fswtch-sys/bundled"]
 live_fs = []
 
 [[example]]
+name = "mod_fswtch_speexdsp"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "mod_api_suite"
 crate-type = ["cdylib"]
 
