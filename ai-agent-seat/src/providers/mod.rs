@@ -27,7 +27,9 @@ pub trait LlmProvider: Send + Sync {
         audio_b64: &str,
         tools: Option<&serde_json::Value>,
         uuid: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<(Vec<crate::orchestrator::ToolCall>, String)>> + Send + '_>>;
+    ) -> Pin<
+        Box<dyn Future<Output = Result<(Vec<crate::orchestrator::ToolCall>, String)>> + Send + '_>,
+    >;
 
     /// Downcast to `Any` for type-specific access (e.g. `DoubaoResponsesLlm::stream_with_tools`).
     fn as_any(&self) -> &dyn std::any::Any;

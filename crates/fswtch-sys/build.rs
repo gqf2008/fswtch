@@ -76,7 +76,11 @@ fn generate_bindings() -> Result<(), Box<dyn Error>> {
 
     // Add common system include paths so bindgen can find optional headers like speexdsp
     // (macOS homebrew: /opt/homebrew/include; Linux: /usr/include; older macOS: /usr/local/include).
-    for system_inc in ["/opt/homebrew/include", "/usr/local/include", "/usr/include"] {
+    for system_inc in [
+        "/opt/homebrew/include",
+        "/usr/local/include",
+        "/usr/include",
+    ] {
         let path = PathBuf::from(system_inc);
         if path.exists() {
             builder = builder.clang_arg(format!("-I{system_inc}"));

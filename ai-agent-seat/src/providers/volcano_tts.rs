@@ -128,13 +128,9 @@ impl TtsProvider for VolcanoTtsProvider {
             // (the previous turn's ActiveTask was completed by on_turn_end's
             // idle timeout). The Volcano session is call-lifetime, but each
             // task_request creates a fresh ActiveTask.
-            sess.synthesize_sentence(
-                &text,
-                tokio_util::sync::CancellationToken::new(),
-                false,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("Volcano TTS synthesize failed: {e}"))?;
+            sess.synthesize_sentence(&text, tokio_util::sync::CancellationToken::new(), false)
+                .await
+                .map_err(|e| anyhow::anyhow!("Volcano TTS synthesize failed: {e}"))?;
 
             // Audio is played by the driver loop via on_audio → ringbuf.
             // Return empty Vec — orchestrator's synthesize_and_play treats this

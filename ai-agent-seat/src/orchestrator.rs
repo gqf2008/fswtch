@@ -156,12 +156,19 @@ pub async fn turn_pipeline(
     // incrementally from the streaming JSON arguments. Tool calls are
     // collected for Stage 3 side-effects (hangup/dtmf/transfer).
     let t1 = std::time::Instant::now();
-    let (tool_calls, reply_from_llm, tts_already_fired): (Vec<ToolCall>, String, bool) = if llm.is_none() {
-        (Vec::new(), canned_response(&uuid, &conversation_snapshot).1, false)
+    let (tool_calls, reply_from_llm, tts_already_fired): (Vec<ToolCall>, String, bool) = if llm
+        .is_none()
+    {
+        (
+            Vec::new(),
+            canned_response(&uuid, &conversation_snapshot).1,
+            false,
+        )
     } else {
         let llm_provider = llm.as_ref().unwrap();
 
-        let system_prompt = config.as_ref()
+        let system_prompt = config
+            .as_ref()
             .and_then(|c| c.system_prompt.as_ref().map(|s| s.as_str()));
 
         // Sentence-boundary splitter + TTS dispatch closure.
@@ -179,7 +186,9 @@ pub async fn turn_pipeline(
             buffer.push_str(delta);
             while let Some(boundary) = find_sentence_boundary(&buffer) {
                 let sentence: String = buffer.drain(..boundary).collect();
-                if sentence.trim().is_empty() || cancel_ref.is_cancelled() { continue; }
+                if sentence.trim().is_empty() || cancel_ref.is_cancelled() {
+                    continue;
+                }
                 if let Some(ref tts_provider) = tts_ref {
                     if !turn_open.load(std::sync::atomic::Ordering::Relaxed) {
                         flags_ref.begin();
@@ -201,14 +210,16 @@ pub async fn turn_pipeline(
             }
         };
 
-        let result = llm_provider.stream_with_tools(
-            &conversation_snapshot,
-            system_prompt,
-            &b64,
-            transcribed_text.as_deref(),
-            &cancel,
-            &mut on_text_delta,
-        ).await;
+        let result = llm_provider
+            .stream_with_tools(
+                &conversation_snapshot,
+                system_prompt,
+                &b64,
+                transcribed_text.as_deref(),
+                &cancel,
+                &mut on_text_delta,
+            )
+            .await;
 
         match result {
             Ok((tc, reply)) => {
@@ -509,7 +520,9 @@ async fn stream_llm_and_synthesize(
 
     // Use DoubaoResponsesLlm's stream_with_tools which handles SSE parsing,
     // tool call delta reassembly, and incremental speak text extraction.
-    let doubao = provider.as_any().downcast_ref::<crate::doubao_responses::DoubaoResponsesLlm>();
+    let doubao = provider
+        .as_any()
+        .downcast_ref::<crate::doubao_responses::DoubaoResponsesLlm>();
     let Some(doubao) = doubao else {
         anyhow::bail!("streaming path requires DoubaoResponsesLlm provider");
     };
@@ -526,37 +539,43 @@ async fn stream_llm_and_synthesize(
 
     let sb = sentence_buffer.clone();
     let to = turn_open.clone();
-    let result = doubao.stream_with_tools(
-        messages,
-        system_prompt,
-        live_audio_b64,
-        transcribed_text,
-        cancel,
-        &mut move |delta: &str| {
-            let mut buf = sb.lock().unwrap();
-            buf.push_str(delta);
-            while let Some(boundary) = find_sentence_boundary(&buf) {
-                let sentence: String = buf.drain(..boundary).collect();
-                if sentence.trim().is_empty() || cancel_ref.is_cancelled() { continue; }
-                if let Some(ref tts_provider) = tts_ref {
-                    if !to.load(std::sync::atomic::Ordering::Relaxed) {
-                        flags_ref.begin();
-                        to.store(true, std::sync::atomic::Ordering::Relaxed);
+    let result = doubao
+        .stream_with_tools(
+            messages,
+            system_prompt,
+            live_audio_b64,
+            transcribed_text,
+            cancel,
+            &mut move |delta: &str| {
+                let mut buf = sb.lock().unwrap();
+                buf.push_str(delta);
+                while let Some(boundary) = find_sentence_boundary(&buf) {
+                    let sentence: String = buf.drain(..boundary).collect();
+                    if sentence.trim().is_empty() || cancel_ref.is_cancelled() {
+                        continue;
                     }
-                    let tts_clone = tts_provider.clone();
-                    let sentence_clone = sentence;
-                    let flags_clone = flags_ref.clone();
-                    let uuid_clone = uuid_ref.clone();
-                    crate::runtime::spawn(async move {
-                        if let Err(e) = tts_clone.synthesize(&sentence_clone).await {
-                            tracing::warn!("turn_pipeline {uuid_clone}: sentence TTS failed: {e}");
-                            flags_clone.end();
+                    if let Some(ref tts_provider) = tts_ref {
+                        if !to.load(std::sync::atomic::Ordering::Relaxed) {
+                            flags_ref.begin();
+                            to.store(true, std::sync::atomic::Ordering::Relaxed);
                         }
-                    });
+                        let tts_clone = tts_provider.clone();
+                        let sentence_clone = sentence;
+                        let flags_clone = flags_ref.clone();
+                        let uuid_clone = uuid_ref.clone();
+                        crate::runtime::spawn(async move {
+                            if let Err(e) = tts_clone.synthesize(&sentence_clone).await {
+                                tracing::warn!(
+                                    "turn_pipeline {uuid_clone}: sentence TTS failed: {e}"
+                                );
+                                flags_clone.end();
+                            }
+                        });
+                    }
                 }
-            }
-        },
-    ).await;
+            },
+        )
+        .await;
 
     match result {
         Ok((tool_calls, reply)) => {
@@ -672,7 +691,9 @@ async fn call_llm_with_tools(
         .iter()
         .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
         .collect();
-    let result = provider.completion(messages_json, live_audio_b64, None, uuid).await?;
+    let result = provider
+        .completion(messages_json, live_audio_b64, None, uuid)
+        .await?;
     Ok((result.0, result.1))
 }
 
@@ -721,7 +742,9 @@ fn extract_bool_arg(arguments_json: &str, field: &str) -> Option<bool> {
     let v: serde_json::Value = serde_json::from_str(arguments_json).ok()?;
     match v.get(field)? {
         serde_json::Value::Bool(b) => Some(*b),
-        serde_json::Value::String(s) => Some(matches!(s.to_lowercase().as_str(), "true" | "1" | "yes")),
+        serde_json::Value::String(s) => {
+            Some(matches!(s.to_lowercase().as_str(), "true" | "1" | "yes"))
+        }
         _ => None,
     }
 }
@@ -1082,10 +1105,7 @@ mod tests {
         assert_eq!(extract_partial_text_from_json("{\"text\":"), None);
         assert_eq!(extract_partial_text_from_json("{\"text\": "), None);
         // Opening quote not yet arrived.
-        assert_eq!(
-            extract_partial_text_from_json("{\"text\":"),
-            None
-        );
+        assert_eq!(extract_partial_text_from_json("{\"text\":"), None);
     }
 
     #[test]

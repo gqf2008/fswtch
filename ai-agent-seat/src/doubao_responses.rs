@@ -9,10 +9,10 @@
 //!  - `response.output_item.done` → complete tool call
 //!  - `response.completed` → stream end
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::pin::Pin;
-use std::future::Future;
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -53,7 +53,13 @@ impl DoubaoResponsesLlm {
         temperature: Option<f64>,
         max_tokens: Option<u64>,
     ) -> Self {
-        Self { base_url, api_key, model, temperature, max_tokens }
+        Self {
+            base_url,
+            api_key,
+            model,
+            temperature,
+            max_tokens,
+        }
     }
 
     /// Send a streaming request to the Responses API.
@@ -76,7 +82,9 @@ impl DoubaoResponsesLlm {
         // Build input items: prior conversation + current user turn.
         let mut input: Vec<serde_json::Value> = Vec::new();
         for msg in messages {
-            if msg.role == "system" { continue; } // system goes to `instructions`
+            if msg.role == "system" {
+                continue;
+            } // system goes to `instructions`
             input.push(serde_json::json!({
                 "type": "message",
                 "role": msg.role,
@@ -168,19 +176,27 @@ impl DoubaoResponsesLlm {
                 let mut data = String::new();
                 for raw in event_block.lines() {
                     let line = raw.trim();
-                    if line.is_empty() || line.starts_with(':') { continue; }
+                    if line.is_empty() || line.starts_with(':') {
+                        continue;
+                    }
                     if let Some(e) = line.strip_prefix("event: ") {
                         event_type = e.to_string();
                     } else if let Some(d) = line.strip_prefix("data: ") {
-                        if !data.is_empty() { data.push('\n'); }
+                        if !data.is_empty() {
+                            data.push('\n');
+                        }
                         data.push_str(d);
                     } else if line.starts_with("data:") {
                         // Some SSE streams don't have space after "data:"
-                        if !data.is_empty() { data.push('\n'); }
+                        if !data.is_empty() {
+                            data.push('\n');
+                        }
                         data.push_str(&line[5..]);
                     }
                 }
-                if data.is_empty() { continue; }
+                if data.is_empty() {
+                    continue;
+                }
                 let parsed: serde_json::Value = match serde_json::from_str(&data) {
                     Ok(v) => v,
                     Err(_) => continue,
@@ -204,7 +220,8 @@ impl DoubaoResponsesLlm {
                         // A new function call started — record its name.
                         if let Some(item) = parsed.get("item") {
                             if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
-                                pending_name = item.get("name")
+                                pending_name = item
+                                    .get("name")
                                     .and_then(|n| n.as_str())
                                     .map(|s| s.to_string());
                                 pending_args.clear();
@@ -231,7 +248,8 @@ impl DoubaoResponsesLlm {
                                     extract_partial_json_string(&pending_args, "text")
                                 {
                                     if text_so_far.len() > forwarded_text_len {
-                                        let new_text = text_so_far[forwarded_text_len..].to_string();
+                                        let new_text =
+                                            text_so_far[forwarded_text_len..].to_string();
                                         forwarded_text_len = text_so_far.len();
                                         if !first_token_seen {
                                             first_token_seen = true;
@@ -252,7 +270,9 @@ impl DoubaoResponsesLlm {
                         if let Some(item) = parsed.get("item") {
                             if item.get("type").and_then(|t| t.as_str()) == Some("function_call") {
                                 let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                                let args = item.get("arguments").and_then(|a| a.as_str())
+                                let args = item
+                                    .get("arguments")
+                                    .and_then(|a| a.as_str())
                                     .unwrap_or(&pending_args);
                                 tracing::info!("Doubao Responses tool call: {name} ({args})");
                                 tool_calls.push(crate::orchestrator::ToolCall {
@@ -348,7 +368,9 @@ impl crate::providers::LlmProvider for DoubaoResponsesLlm {
         audio_b64: &str,
         _tools: Option<&serde_json::Value>,
         uuid: &str,
-    ) -> Pin<Box<dyn Future<Output = Result<(Vec<crate::orchestrator::ToolCall>, String)>> + Send + '_>> {
+    ) -> Pin<
+        Box<dyn Future<Output = Result<(Vec<crate::orchestrator::ToolCall>, String)>> + Send + '_>,
+    > {
         let chat_messages: Vec<crate::orchestrator::ChatMessage> = messages
             .iter()
             .filter_map(|m| {
@@ -361,14 +383,16 @@ impl crate::providers::LlmProvider for DoubaoResponsesLlm {
         let uuid = uuid.to_string();
 
         Box::pin(async move {
-            let result = self.stream_with_tools(
-                &chat_messages,
-                None,
-                &audio_b64,
-                None,
-                &tokio_util::sync::CancellationToken::new(),
-                &mut |_| {},
-            ).await?;
+            let result = self
+                .stream_with_tools(
+                    &chat_messages,
+                    None,
+                    &audio_b64,
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                    &mut |_| {},
+                )
+                .await?;
             Ok(result)
         })
     }

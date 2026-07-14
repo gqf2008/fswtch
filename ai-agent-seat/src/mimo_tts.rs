@@ -134,9 +134,14 @@ impl MimoTtsHandle {
             "stream": true
         });
 
-        let url = format!("{}/chat/completions", self.inner.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/chat/completions",
+            self.inner.base_url.trim_end_matches('/')
+        );
 
-        let resp = self.inner.http_client
+        let resp = self
+            .inner
+            .http_client
             .post(&url)
             .header("api-key", &self.inner.api_key)
             .json(&body)
@@ -182,21 +187,31 @@ impl MimoTtsHandle {
                 let mut assembled = String::new();
                 for raw in event_block.lines() {
                     let line = raw.trim();
-                    if line.is_empty() || line.starts_with(':') { continue; }
+                    if line.is_empty() || line.starts_with(':') {
+                        continue;
+                    }
                     if let Some(d) = line.strip_prefix("data: ") {
-                        if !assembled.is_empty() { assembled.push('\n'); }
+                        if !assembled.is_empty() {
+                            assembled.push('\n');
+                        }
                         assembled.push_str(d);
                     }
                 }
-                if assembled.is_empty() { continue; }
-                if assembled == "[DONE]" { buffer.clear(); break; }
+                if assembled.is_empty() {
+                    continue;
+                }
+                if assembled == "[DONE]" {
+                    buffer.clear();
+                    break;
+                }
                 let parsed: serde_json::Value = match serde_json::from_str(&assembled) {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
                 // Extract delta.audio.data (base64 PCM16 24kHz).
                 if let Some(audio_b64) = parsed
-                    .get("choices").and_then(|c| c.get(0))
+                    .get("choices")
+                    .and_then(|c| c.get(0))
                     .and_then(|c| c.get("delta"))
                     .and_then(|d| d.get("audio"))
                     .and_then(|a| a.get("data"))
