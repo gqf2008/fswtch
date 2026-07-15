@@ -206,9 +206,15 @@ class VolcanoAsr:
             "X-Api-Sequence": "-1",
             "Content-Type": "application/json",
         })
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            status = resp.headers.get("X-Api-Status-Code", "")
-            payload = resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                status = resp.headers.get("X-Api-Status-Code", "")
+                payload = resp.read()
+        except urllib.error.HTTPError as e:
+            try: err_body = e.read()[:500]
+            except Exception: err_body = b""
+            log.error("ASR HTTP %d: %r", e.code, err_body)
+            raise RuntimeError(f"ASR HTTP {e.code}: {err_body!r}") from e
         if status == "20000000":
             text = json.loads(payload).get("result", {}).get("text", "").strip()
             log.info("ASR ok: %r", text)
@@ -216,7 +222,8 @@ class VolcanoAsr:
         if status in ("20000003", "45000002"):
             log.info("ASR empty audio (status=%s) → no speech", status)
             return ""
-        raise RuntimeError(f"ASR failed: status={status} body={payload[:200]!r}")
+        log.error("ASR error status=%s body=%r", status, payload[:500])
+        raise RuntimeError(f"ASR failed: status={status} body={payload[:500]!r}")
 
 
 # ── LLM: DeepSeek / OpenAI-compatible chat/completions (non-stream) ─────────
@@ -325,7 +332,10 @@ class VolcanoTts:
         self.resource_id = cfg.volcano_resource_id
         self.speaker = cfg.volcano_speaker
 
-    def synth(self, text: str) -> bytes:
+    def synth_stream(self, text: str):
+        """Stream TTS PCM chunks (S16LE @8kHz) as they arrive from Volcano — 流式上送。
+        Yields bytes chunks; caller sends each as a downlink_pcm immediately instead of
+        buffering the whole utterance (低首字延迟 + barge-in 可中途停发后续 chunk)。"""
         import websocket  # local import: websocket-client is a hard dep for real pipeline
 
         connect_id = str(uuid.uuid4())
@@ -359,18 +369,28 @@ class VolcanoTts:
                     "audio_params": {"format": "pcm", "sample_rate": TTS_SAMPLE_RATE},
                 },
             }))
-            pcm = self._drain_audio(ws, session_id)
-            log.info("TTS drain done: %d bytes", len(pcm))
+            total = 0
+            for chunk in self._iter_audio(ws, session_id):
+                total += len(chunk)
+                yield chunk
+            log.info("TTS synth_stream done: %d bytes PCM (%.1fs)",
+                     total, total / (2 * TTS_SAMPLE_RATE))
             try:
                 ws.send_binary(_marshal_control(E_FINISH_CONNECTION, session_id, {}))
             except Exception:
                 pass
-            log.info("TTS synth ok: %d bytes PCM (%.1fs)",
-                     len(pcm), len(pcm) / (2 * TTS_SAMPLE_RATE))
-            return pcm
         finally:
+            # 取消 Volcano 在途合成（brain 中途 close 生成器 = barge-in/挂断；正常结束也幂等）
+            try:
+                ws.send_binary(_marshal_control(E_CANCEL_SESSION, session_id, {}))
+            except Exception:
+                pass
             try: ws.close()
             except Exception: pass
+
+    def synth(self, text: str) -> bytes:
+        """One-shot: buffer the whole utterance (back-compat, 整句一次发)."""
+        return b"".join(self.synth_stream(text))
 
     def _wait_event(self, ws, want_event: int, label: str) -> None:
         import websocket as _ws_mod
@@ -385,9 +405,10 @@ class VolcanoTts:
             if ev == want_event:
                 return
 
-    def _drain_audio(self, ws, session_id: str) -> bytes:
+    def _iter_audio(self, ws, session_id: str):
+        """Yield TTS PCM chunks as they arrive (流式). Handles idle-detect + finish_session
+        to elicit the terminal TTSSentenceEnd(351)."""
         import websocket
-        chunks: list[bytes] = []
         saw_audio = False
         finished = False
         n = 0
@@ -409,7 +430,7 @@ class VolcanoTts:
                     finished = True
                     ws.settimeout(5.0)  # give the terminal event time to arrive
                     continue
-                break  # already finished and idle again → accept what we have
+                return  # already finished and idle again → accept what we have
             if isinstance(raw, str):
                 continue
             n += 1
@@ -419,21 +440,20 @@ class VolcanoTts:
             if n <= 8 or n % 50 == 0:
                 log.info("TTS frame#%d: mt=0x%X fl=0x%X event=%s plen=%d", n, mt, fl, ev, plen)
             # Audio frames: mt=AudioOnlyServer(0xB); the live server uses flag=WithEvent(0x4),
-            # event=TTSResponse(352), payload = raw S16LE PCM. Collect any 0xB payload.
+            # event=TTSResponse(352), payload = raw S16LE PCM. Yield each 0xB payload.
             if mt == MSG_AUDIO_ONLY_SERVER:
                 if plen >= 2:
-                    chunks.append(frame["payload"])
+                    yield frame["payload"]
                 saw_audio = True
             elif mt == MSG_FULL_SERVER and fl == FLAG_WITH_EVENT and ev == E_TTS_SENTENCE_END:
                 log.info("TTS TTSSentenceEnd(351) at frame#%d", n)
-                break
+                return
             elif mt == MSG_FULL_SERVER and fl == FLAG_WITH_EVENT and ev in (E_SESSION_FINISHED, E_SESSION_FAILED):
                 log.info("TTS session end event=%s at frame#%d", ev, n)
-                break
+                return
             elif mt == MSG_ERROR:
                 raise RuntimeError(f"TTS server error: code={frame.get('error')}")
-            # TTSSentenceStart(350) and other control events: ignore, keep draining.
-        return b"".join(chunks)
+            # TTSSentenceStart(350) and other control events: ignore, keep streaming.
 
 
 # ── orchestrating pipeline ──────────────────────────────────────────────────
@@ -449,16 +469,22 @@ class AsrLlmTtsPipeline(Pipeline):
         self.history: dict[str, list[dict]] = {}
 
     def process(self, call_id: str, pcm_i16: bytes, sample_rate: int, channels: int) -> bytes:
+        # One-shot (整句): buffer the streamed reply. brain uses process_stream directly.
+        return b"".join(self.process_stream(call_id, pcm_i16, sample_rate, channels))
+
+    def process_stream(self, call_id: str, pcm_i16: bytes, sample_rate: int, channels: int):
+        """ASR → DeepSeek LLM → Volcano TTS, yielding TTS PCM chunks as they arrive (流式上送)."""
         text = self.asr.transcribe(pcm_i16, sample_rate, channels)
         if not text:
-            return b""  # no speech recognized → no reply
+            return  # no speech recognized → no reply (empty generator)
         hist = self.history.setdefault(call_id, [])  # prior turns (excl. current)
         reply = self.llm.chat(self.cfg.system_prompt, list(hist), text)
         if not reply:
-            return b""
+            return
         hist.append({"role": "user", "content": text})
         hist.append({"role": "assistant", "content": reply})
-        return self.tts.synth(reply)
+        log.info("TTS streaming reply (%d chars) → downlink chunks", len(reply))
+        yield from self.tts.synth_stream(reply)
 
     def end_call(self, call_id: str) -> None:
         self.history.pop(call_id, None)

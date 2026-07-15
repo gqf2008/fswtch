@@ -28,6 +28,11 @@ class Pipeline(ABC):
     @abstractmethod
     def process(self, call_id: str, pcm_i16: bytes, sample_rate: int, channels: int) -> bytes: ...
 
+    def process_stream(self, call_id: str, pcm_i16: bytes, sample_rate: int, channels: int):
+        """Streaming version: yield TTS PCM chunks as ready (流式上送, 每段即发).
+        Default: process() once, yield its whole result. Override for true streaming."""
+        yield self.process(call_id, pcm_i16, sample_rate, channels)
+
     def end_call(self, call_id: str) -> None:
         """Per-call cleanup hook. Default no-op; stateful pipelines override."""
         return None

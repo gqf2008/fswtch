@@ -119,6 +119,10 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
     except Exception:
         log.exception("handler crashed")
     finally:
+        try:
+            cancel.set()  # stop any in-flight pipeline thread (call hung up mid-stream)
+        except UnboundLocalError:
+            pass  # try bailed before cancel was defined (bridge failed / early error)
         session.close()
         if a_uuid:
             pipeline.end_call(a_uuid)
@@ -208,22 +212,36 @@ def _run_pipeline(
     pipeline: Pipeline,
     cancel: threading.Event,
 ) -> None:
+    gen = pipeline.process_stream(uuid, pcm, rate, channels)
     try:
-        tts = pipeline.process(uuid, pcm, rate, channels)
-        if cancel.is_set():
-            log.info("pipeline cancelled (barge-in) before send on %s", uuid)
-            print(f"[DOWNLINK] (cancelled by barge-in) uuid={uuid[:8]} → not sent", flush=True)
-            return
-        session.send_pcm(DOWNLINK, uuid, tts, rate, channels)
-        print(
-            f"[DOWNLINK] reply uuid={uuid[:8]} {len(tts)} bytes TTS → caller "
-            f"({len(tts) // (2 * rate)}s)",
-            flush=True,
-        )
-        log.info("downlink_pcm  %s  → %d bytes TTS to caller", uuid, len(tts))
+        sent = 0
+        for chunk in gen:
+            if cancel.is_set():
+                # barge-in mid-stream: stop sending further chunks. FS already queued what
+                # arrived and will clear it on the caller's start-talking (mod_vad_detect).
+                log.info("pipeline cancelled mid-stream on %s (%d bytes sent)", uuid, sent)
+                print(f"[DOWNLINK] (cancelled mid-stream) uuid={uuid[:8]} sent={sent}b → stop",
+                      flush=True)
+                break
+            session.send_pcm(DOWNLINK, uuid, chunk, rate, channels)
+            sent += len(chunk)
+        else:
+            if sent:
+                print(f"[DOWNLINK] stream done uuid={uuid[:8]} {sent} bytes TTS → caller "
+                      f"({sent // (2 * rate)}s)", flush=True)
+                log.info("downlink_pcm stream %s → %d bytes TTS to caller", uuid, sent)
+    except (OSError, ESLError) as e:
+        # socket closed = call hung up mid-stream (normal, not a pipeline error)
+        log.info("pipeline interrupted on %s (call ended: %r)", uuid, e)
+        print(f"[DOWNLINK] (call ended mid-stream) uuid={uuid[:8]}: {e}", flush=True)
     except Exception:
         log.exception("pipeline failed on %s", uuid)
         print(f"[DOWNLINK] (pipeline failed) uuid={uuid[:8]}", flush=True)
+    finally:
+        try:
+            gen.close()  # barge-in/挂断/异常: 取消在途 TTS (→ synth_stream finally: cancel_session + ws.close)
+        except Exception:
+            pass
 
 
 def _int(s: str | None) -> int | None:
