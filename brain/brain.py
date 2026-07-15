@@ -30,11 +30,14 @@ from __future__ import annotations
 import argparse
 import base64
 import logging
+import os
+import struct
 import threading
 
 try:  # package mode (python3 -m brain.brain)
     from .esl import ESLServer, ESLSession, ESLError
     from .pipeline import Pipeline, StubPipeline
+    from .real_pipeline import AsrLlmTtsPipeline, load_config
 except ImportError:  # script mode (python3 brain/brain.py)
     import os
     import sys
@@ -42,6 +45,7 @@ except ImportError:  # script mode (python3 brain/brain.py)
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from brain.esl import ESLServer, ESLSession, ESLError  # type: ignore
     from brain.pipeline import Pipeline, StubPipeline  # type: ignore
+    from brain.real_pipeline import AsrLlmTtsPipeline, load_config  # type: ignore
 
 log = logging.getLogger("brain")
 
@@ -74,6 +78,7 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
     The bridge drives both ``write_frame`` (caller audio → VAD → fire events)
     and ``read_frame`` (drain TTS → caller). No media bug, no playback, no
     park CNG issue."""
+    a_uuid = ""
     try:
         ch = session.read_channel_data()
         a_uuid = ch.get("Unique-ID", "")
@@ -115,20 +120,27 @@ def handle_call(session: ESLSession, pipeline: Pipeline) -> None:
         log.exception("handler crashed")
     finally:
         session.close()
+        if a_uuid:
+            pipeline.end_call(a_uuid)
         log.info("call ended: A-leg %s", a_uuid or "?")
 
 
 def _on_vad(headers: dict[str, str], cancel: threading.Event) -> None:
     uuid = headers.get("Call-UUID", "")
     state = headers.get("Vad-State", "")
+    seq = headers.get("Seq", "")
     if not uuid or not state:
         return
+    tag = uuid[:8]
     if state == "start-talking":
         # Barge-in: cancel any in-flight TTS pipeline for this call.
         cancel.set()
-        log.info("start-talking  %s", uuid)
+        print(f"[VAD] start-talking (barge-in) uuid={tag} seq={seq}", flush=True)
     elif state == "stop-talking":
-        log.info("stop-talking   %s  (segment follows)", uuid)
+        print(f"[VAD] stop-talking (end)      uuid={tag} seq={seq} → segment", flush=True)
+    else:
+        print(f"[VAD] state={state} uuid={tag} seq={seq}", flush=True)
+    log.info("vad state=%s uuid=%s seq=%s", state, uuid, seq)
 
 
 def _on_uplink(
@@ -156,6 +168,25 @@ def _on_uplink(
         "uplink_pcm segment  %s  → %d bytes PCM (%d Hz) → pipeline",
         uuid, len(pcm), rate,
     )
+    # Audio-level diagnostic: peak/RMS tells empty-ASR segments (silent=VAD
+    # false-fire on noise) from real speech ASR missed. Also dump the segment
+    # to /tmp/uplink_segs/ for offline inspection.
+    n = len(pcm) // 2
+    samples = struct.unpack(f"<{n}h", pcm[: n * 2]) if n else ()
+    peak = max((abs(s) for s in samples), default=0)
+    rms = (sum(s * s for s in samples) / n) ** 0.5 if n else 0.0
+    seq = headers.get("Seq", "")
+    print(
+        f"[UPLINK] segment uuid={uuid[:8]} seq={seq} {len(pcm)}b {rate}Hz "
+        f"peak={peak} rms={rms:.0f} → pipeline",
+        flush=True,
+    )
+    try:
+        os.makedirs("/tmp/uplink_segs", exist_ok=True)
+        with open(f"/tmp/uplink_segs/seq{seq}_{len(pcm)}b_peak{peak}_rms{int(rms)}.pcm", "wb") as f:
+            f.write(pcm)
+    except Exception:
+        pass
     # Run the pipeline + send TTS in a background thread so the event loop
     # keeps draining (barge-in can cancel before the reply is sent).
     cancel.clear()
@@ -178,14 +209,21 @@ def _run_pipeline(
     cancel: threading.Event,
 ) -> None:
     try:
-        tts = pipeline.process(pcm, rate, channels)
+        tts = pipeline.process(uuid, pcm, rate, channels)
         if cancel.is_set():
             log.info("pipeline cancelled (barge-in) before send on %s", uuid)
+            print(f"[DOWNLINK] (cancelled by barge-in) uuid={uuid[:8]} → not sent", flush=True)
             return
         session.send_pcm(DOWNLINK, uuid, tts, rate, channels)
+        print(
+            f"[DOWNLINK] reply uuid={uuid[:8]} {len(tts)} bytes TTS → caller "
+            f"({len(tts) // (2 * rate)}s)",
+            flush=True,
+        )
         log.info("downlink_pcm  %s  → %d bytes TTS to caller", uuid, len(tts))
     except Exception:
         log.exception("pipeline failed on %s", uuid)
+        print(f"[DOWNLINK] (pipeline failed) uuid={uuid[:8]}", flush=True)
 
 
 def _int(s: str | None) -> int | None:
@@ -203,17 +241,19 @@ def main() -> None:
     p.add_argument("--port", type=int, default=8084)
     p.add_argument(
         "--pipeline",
-        choices=("stub",),
+        choices=("stub", "asr_llm_tts"),
         default="stub",
-        help="business pipeline (stub=beep back; real Doubao/Volcano TODO — see pipeline.py)",
+        help="business pipeline (stub=beep back; asr_llm_tts=Volcano ASR + DeepSeek LLM + Volcano TTS)",
     )
     args = p.parse_args()
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
-    # TODO: add a real pipeline (audio_llm: Doubao Responses + Volcano TTS) behind --pipeline.
-    pipeline: Pipeline = StubPipeline()
+    if args.pipeline == "asr_llm_tts":
+        pipeline: Pipeline = AsrLlmTtsPipeline(load_config())
+    else:
+        pipeline = StubPipeline()
     serve(args.host, args.port, pipeline)
 
 

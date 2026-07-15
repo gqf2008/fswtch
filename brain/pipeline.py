@@ -17,13 +17,20 @@ from abc import ABC, abstractmethod
 class Pipeline(ABC):
     """Turn one caller utterance into a TTS reply.
 
-    `pcm_i16` is the raw S16LE (little-endian signed 16-bit) PCM of the whole
-    utterance, at `sample_rate` Hz / `channels` channels. Return raw S16LE PCM at
-    the SAME rate/channels (the fswtch module plays it back on the call's write leg).
+    `call_id` identifies the call (the B-leg UUID) so stateful pipelines can keep
+    per-call conversation history. `pcm_i16` is the raw S16LE (little-endian signed
+    16-bit) PCM of the whole utterance, at `sample_rate` Hz / `channels` channels.
+    Return raw S16LE PCM at the SAME rate/channels (the fswtch module plays it back
+    on the call's write leg). `end_call` is called once when the call hangs up so
+    stateful pipelines can drop per-call state.
     """
 
     @abstractmethod
-    def process(self, pcm_i16: bytes, sample_rate: int, channels: int) -> bytes: ...
+    def process(self, call_id: str, pcm_i16: bytes, sample_rate: int, channels: int) -> bytes: ...
+
+    def end_call(self, call_id: str) -> None:
+        """Per-call cleanup hook. Default no-op; stateful pipelines override."""
+        return None
 
 
 class StubPipeline(Pipeline):
@@ -33,7 +40,7 @@ class StubPipeline(Pipeline):
     speech → lower beep. Swap for a real pipeline in production.
     """
 
-    def process(self, pcm_i16: bytes, sample_rate: int, channels: int) -> bytes:
+    def process(self, call_id: str, pcm_i16: bytes, sample_rate: int, channels: int) -> bytes:
         dur_s = len(pcm_i16) / (2 * channels * sample_rate)  # bytes→seconds (S16LE)
         # Longer utterance → lower pitch (440 Hz down to ~220 Hz over ~3 s of speech).
         freq = max(220.0, 440.0 - 70.0 * dur_s)
