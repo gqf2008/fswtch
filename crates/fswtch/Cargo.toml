@@ -29,10 +29,6 @@ bundled = ["fswtch-sys/bundled"]
 live_fs = []
 
 [[example]]
-name = "mod_fswtch_speexdsp"
-crate-type = ["cdylib"]
-
-[[example]]
 name = "mod_api_suite"
 crate-type = ["cdylib"]
 
@@ -77,10 +73,6 @@ name = "mod_lifecycle"
 crate-type = ["cdylib"]
 
 [[example]]
-name = "mod_local_ai_bridge"
-crate-type = ["cdylib"]
-
-[[example]]
 name = "mod_media_bug_meter"
 crate-type = ["cdylib"]
 
@@ -118,10 +110,6 @@ crate-type = ["cdylib"]
 
 [[example]]
 name = "mod_regex_match"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "mod_vad_detect"
 crate-type = ["cdylib"]
 
 [[example]]
