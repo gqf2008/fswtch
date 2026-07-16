@@ -215,6 +215,14 @@ impl Vad {
     /// `TALKING` / `STOP_TALKING`, or `NONE`). Both engines honor the same single-frame contract:
     /// feed small frames (as [`speech_segments`](Self::speech_segments) does) to avoid missing a
     /// mid-buffer transition.
+    ///
+    /// # Buffer mutation (asymmetric across engines)
+    ///
+    /// The `&mut [i16]` borrow covers the worst case, but in-place mutation is engine/rate
+    /// dependent: the FreeSwitch engine may write `pcm` (its C API takes `int16_t *`), and the
+    /// earshot engine *only* when the configured rate is not 16 kHz (because
+    /// [`Resample::process`](crate::Resample::process) takes a non-const source). At 16 kHz / mono
+    /// the earshot engine merely reads `pcm`. Callers should not rely on `pcm` being preserved.
     pub fn process(&mut self, pcm: &mut [i16]) -> VadState {
         match &mut self.backend {
             VadBackend::FreeSwitch(raw) => {
@@ -324,9 +332,17 @@ impl Vad {
     /// engine, the recognized keys are:
     /// - `"voice_ms"` — onset required before `START_TALKING` (ms; both engines).
     /// - `"silence_ms"` — trailing silence before `STOP_TALKING` (ms; both engines).
-    /// - `"threshold"` — earshot score threshold in thousandths (e.g. `500` → `0.5`).
+    /// - `"threshold"` — earshot score threshold in **thousandths** (e.g. `500` → `0.5`).
     ///
     /// Unknown keys are accepted (no-op) and return `Ok(())`.
+    ///
+    /// # `threshold` vs `set_mode` — two scales for one knob
+    ///
+    /// earshot's score threshold can be set two ways and they use **different units**:
+    /// [`set_mode`](Self::set_mode) sets it to an absolute float (0.50 / 0.55 / 0.60 / 0.65 by
+    /// aggressiveness), while `set_param("threshold", v)` interprets `v` as **thousandths**
+    /// (`500` → `0.5`). `set_mode` runs last-wins only if called after `set_param`. Mind the
+    /// scale: `set_param("threshold", 2)` means `0.002`, not `0.2`.
     pub fn set_param(&mut self, key: impl AsRef<str>, val: i32) -> Result<()> {
         match &mut self.backend {
             VadBackend::FreeSwitch(raw) => {
@@ -512,6 +528,16 @@ impl EarshotInner {
 
     /// One hysteresis step given a 256-sample frame's score. Mirrors FreeSWITCH's
     /// `START_TALKING` → `TALKING` → `STOP_TALKING` semantics.
+    ///
+    /// # Onset sensitivity (validate before barge-in/turn use)
+    ///
+    /// During onset a single frame scoring below `threshold` **hard-resets** `onset_accum` to
+    /// zero. Real neural VAD scores dip below threshold mid-utterance, so one 16 ms dip inside the
+    /// `voice_ms` window discards all accumulated onset — making `START_TALKING` more jittery /
+    /// later-firing than FreeSWITCH's gradual hangover. This is a deliberate, predictable
+    /// simplification. Before relying on it for barge-in or turn detection, **validate against real
+    /// speech clips** and tune `voice_ms` / `threshold` accordingly (or consider a decay-based
+    /// onset if sustained robustness is needed).
     fn step(&mut self, score: f32) -> VadState {
         let voice = score >= self.threshold;
         if !self.in_speech {
@@ -688,6 +714,49 @@ mod tests {
         pcm
     }
 
+    /// A more speech-like fixture than [`synthetic`]: a voiced source (sum of harmonics with 1/k
+    /// decay, ~120 Hz f₀) shaped by an onset/offset envelope plus low-level deterministic noise
+    /// for the broadband content real speech carries. earshot is trained on real speech, so a pure
+    /// 220 Hz tone may not score as voice — this raises the chance the neural VAD fires.
+    ///
+    /// Still synthetic; the `live_fs` earshot tests using it must be **confirmed on a real
+    /// FreeSWITCH build** (they cannot run in the headers-only default build).
+    #[cfg(feature = "live_fs")]
+    fn synthetic_speech(rate: u32, silence_ms: u32, speech_ms: u32, amp: i16) -> Vec<i16> {
+        let n = rate as usize * (silence_ms * 2 + speech_ms) as usize / 1000;
+        let mut pcm = vec![0i16; n];
+        let off = rate as usize * silence_ms as usize / 1000;
+        let len = rate as usize * speech_ms as usize / 1000;
+        let f0 = 120.0; // Hz — typical male voice
+        let ramp = (rate as usize / 20).min(len / 4); // ~50 ms onset/offset ramp
+        // Deterministic LCG noise so the fixture is reproducible.
+        let mut rng: u32 = 0x5EED;
+        for i in 0..len {
+            let t = i as f64 / rate as f64;
+            let mut s = 0.0;
+            for k in 1..=6_u32 {
+                let amp_k = amp as f64 / k as f64;
+                s += amp_k * (2.0 * std::f64::consts::PI * f0 * k as f64 * t).sin();
+            }
+            s /= 6.0; // normalize the harmonic sum
+            // onset/offset envelope.
+            let env = if i < ramp {
+                i as f64 / ramp as f64
+            } else if i > len.saturating_sub(ramp) {
+                ((len - i) as f64 / ramp as f64).max(0.0)
+            } else {
+                1.0
+            };
+            s *= env;
+            // ~5% broadband noise (breath/frication).
+            rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+            let noise = (rng as f64 / u32::MAX as f64 * 2.0 - 1.0) * (amp as f64 * 0.05);
+            s += noise;
+            pcm[off + i] = s.round().clamp(-32768.0, 32767.0) as i16;
+        }
+        pcm
+    }
+
     #[test]
     fn snap_recovers_onset_and_trims_tail() {
         let rate = 8000u32;
@@ -832,8 +901,9 @@ mod tests {
     #[cfg(feature = "live_fs")]
     #[test]
     fn earshot_vad_speech_segments() {
-        // 0.5 s silence + 1 s loud multi-harmonic "speech" + 0.5 s silence, 16 kHz.
-        let pcm = synthetic(EARSHOT_RATE, 500, 1000, 12_000);
+        // 0.5 s silence + 1 s multi-harmonic "speech" + 0.5 s silence, 16 kHz.
+        // NOTE: earshot is speech-trained; confirm this fixture fires on a real FreeSWITCH build.
+        let pcm = synthetic_speech(EARSHOT_RATE, 500, 1000, 12_000);
         let mut vad = Vad::with_engine(EARSHOT_RATE as i32, 1, VadEngine::Earshot)
             .expect("earshot vad at 16 kHz");
         let segs = vad.speech_segments(&pcm, 16);
@@ -847,7 +917,8 @@ mod tests {
     #[test]
     fn earshot_vad_resampled_8k() {
         // 8 kHz input exercises the earshot resampler path (pipeline 8k → model 16k).
-        let pcm = synthetic(8000, 500, 1000, 12_000);
+        // NOTE: confirm on a real FreeSWITCH build.
+        let pcm = synthetic_speech(8000, 500, 1000, 12_000);
         let mut vad = Vad::with_engine(8000, 1, VadEngine::Earshot).expect("earshot vad at 8 kHz");
         // Feed in 20 ms frames; we simply assert it processes without panicking and the VAD
         // reports some transition over a speechy buffer.

@@ -7,6 +7,9 @@ license.workspace = true
 description.workspace = true
 readme.workspace = true
 repository.workspace = true
+# Declared MSRV: `earshot` (a dependency) and the pre-existing `usize::is_multiple_of` in
+# `snap_segments` both require Rust 1.87. Not workspace-inherited since other crates may differ.
+rust-version = "1.87"
 
 [dependencies]
 fswtch-sys = { version = "0.1.8", path = "../fswtch-sys" }
