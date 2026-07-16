@@ -13,6 +13,21 @@
 //!
 //! Both engines share an identical API surface — [`Vad::process`] returns [`VadState`] transitions
 //! for either — so callers can switch engines by changing one constructor argument.
+//!
+//! # Feature gating & inherent FS coupling
+//!
+//! The earshot engine (the `earshot` dependency, [`VadEngine::Earshot`], [`Vad`]'s earshot backend)
+//! is gated behind the **`earshot`** feature (on by default). Disable it (`default-features = false`)
+//! to ship only the FreeSwitch engine without compiling earshot.
+//!
+//! The FreeSwitch engine is always compiled, so `Vad` always references `switch_vad_*` symbols
+//! (`with_engine`/`process`/`Drop` each carry the FreeSwitch arm in one function body). This means
+//! the `Vad`-level earshot path is *not* FreeSWITCH-link-free: even an earshot-only `Vad` drags in
+//! `switch_vad_init`/`switch_vad_process`/`switch_vad_destroy` via those shared method bodies. This
+//! is inherent to unifying both engines behind one `Vad` + enum API (a deliberate tradeoff against a
+//! per-engine-type or trait-object design with vtable indirection on the hot path). For a truly
+//! FreeSWITCH-free neural VAD, use the [`earshot`](https://crates.io/crates/earshot) crate directly;
+//! the `live_fs`-gated earshot integration tests document this constraint.
 
 use std::ffi::CString;
 use std::fmt;
@@ -30,6 +45,9 @@ pub enum VadEngine {
     #[default]
     FreeSwitch,
     /// earshot — pure-Rust neural VAD. 16 kHz model; non-16 kHz input is resampled to 16 kHz.
+    ///
+    /// Only available with the `earshot` feature (on by default).
+    #[cfg(feature = "earshot")]
     Earshot,
 }
 
@@ -128,6 +146,7 @@ enum VadBackend {
     /// earshot neural VAD. `inner` is pure-Rust (16 kHz); boxed because `earshot::Detector`
     /// (~8 KiB) would otherwise inflate this enum variant (clippy::large_enum_variant).
     /// `resampler` upsamples input → 16 kHz when `sample_rate != 16000` (FreeSWITCH's resampler).
+    #[cfg(feature = "earshot")]
     Earshot {
         inner: Box<EarshotInner>,
         resampler: Option<crate::Resample>,
@@ -168,6 +187,7 @@ impl Vad {
                     .map(VadBackend::FreeSwitch)
                     .ok_or(SwitchError(crate::GENERR))?
             }
+            #[cfg(feature = "earshot")]
             VadEngine::Earshot => {
                 // 16 kHz → no resampling; any other rate → upsample to the 16 kHz the model needs.
                 let resampler = if rate == EARSHOT_RATE {
@@ -201,6 +221,7 @@ impl Vad {
     pub fn as_ptr(&self) -> *mut sys::switch_vad_t {
         match &self.backend {
             VadBackend::FreeSwitch(raw) => raw.as_ptr(),
+            #[cfg(feature = "earshot")]
             VadBackend::Earshot { .. } => std::ptr::null_mut(),
         }
     }
@@ -237,6 +258,7 @@ impl Vad {
                 };
                 VadState::from_raw(state)
             }
+            #[cfg(feature = "earshot")]
             VadBackend::Earshot {
                 inner,
                 resampler,
@@ -271,6 +293,7 @@ impl Vad {
                 // SAFETY: `raw` is a live VAD.
                 unsafe { sys::switch_vad_reset(raw.as_ptr()) };
             }
+            #[cfg(feature = "earshot")]
             VadBackend::Earshot { inner, .. } => inner.reset(),
         }
     }
@@ -283,6 +306,7 @@ impl Vad {
                 let state = unsafe { sys::switch_vad_get_state(raw.as_ptr()) };
                 VadState::from_raw(state)
             }
+            #[cfg(feature = "earshot")]
             VadBackend::Earshot { inner, .. } => inner.state(),
         }
     }
@@ -312,6 +336,7 @@ impl Vad {
                     Err(SwitchError(crate::GENERR))
                 }
             }
+            #[cfg(feature = "earshot")]
             VadBackend::Earshot { inner, .. } => {
                 let threshold = match mode {
                     -1 | 0 => 0.50,
@@ -353,6 +378,7 @@ impl Vad {
                 // `switch_vad_set_param` returns void, so there is no status to map.
                 Ok(())
             }
+            #[cfg(feature = "earshot")]
             VadBackend::Earshot { inner, .. } => {
                 match key.as_ref() {
                     "voice_ms" => inner.set_voice_ms(val.max(0) as u32),
@@ -444,13 +470,18 @@ impl Vad {
 impl Drop for Vad {
     fn drop(&mut self) {
         // Only the FreeSwitch engine owns a C handle that must be destroyed; the earshot variant's
-        // fields (detector / `Option<Resample>` / `Vec`) drop themselves.
-        if let VadBackend::FreeSwitch(raw) = &mut self.backend {
-            // SAFETY: `raw` owns exactly one `switch_vad_t`, and `switch_vad_destroy` takes the
-            // pointer by reference (`*mut *mut`) so it can NULL it out; the box is not otherwise
-            // touched after this point.
-            let mut ptr = raw.as_ptr();
-            unsafe { sys::switch_vad_destroy(&mut ptr) };
+        // fields (detector / `Option<Resample>` / `Vec`) drop themselves (the Earshot arm is a
+        // no-op, present only for exhaustiveness when the `earshot` feature is on).
+        match &mut self.backend {
+            VadBackend::FreeSwitch(raw) => {
+                // SAFETY: `raw` owns exactly one `switch_vad_t`, and `switch_vad_destroy` takes the
+                // pointer by reference (`*mut *mut`) so it can NULL it out; the box is not otherwise
+                // touched after this point.
+                let mut ptr = raw.as_ptr();
+                unsafe { sys::switch_vad_destroy(&mut ptr) };
+            }
+            #[cfg(feature = "earshot")]
+            VadBackend::Earshot { .. } => {}
         }
     }
 }
@@ -459,6 +490,7 @@ impl fmt::Debug for Vad {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let engine = match &self.backend {
             VadBackend::FreeSwitch(_) => "freeswitch",
+            #[cfg(feature = "earshot")]
             VadBackend::Earshot { .. } => "earshot",
         };
         f.debug_struct("Vad")
@@ -471,7 +503,9 @@ impl fmt::Debug for Vad {
 }
 
 /// earshot's model: 16 kHz, 256-sample (16 ms) frames.
+#[cfg(feature = "earshot")]
 const EARSHOT_RATE: u32 = 16_000;
+#[cfg(feature = "earshot")]
 const EARSHOT_FRAME: usize = 256;
 
 /// Pure-Rust earshot VAD core: scores 16 kHz mono PCM in 256-sample frames and emits
@@ -480,6 +514,7 @@ const EARSHOT_FRAME: usize = 256;
 /// This type deliberately holds **no** FreeSWITCH handle (the resampler lives in
 /// [`VadBackend::Earshot`], not here), so it carries no FFI symbols and is fully testable without
 /// a linked FreeSWITCH.
+#[cfg(feature = "earshot")]
 struct EarshotInner {
     detector: earshot::Detector,
     /// 16 kHz mono staging buffer, drained in `EARSHOT_FRAME`-sample chunks.
@@ -495,6 +530,7 @@ struct EarshotInner {
     silence_samples: u32,
 }
 
+#[cfg(feature = "earshot")]
 impl EarshotInner {
     /// New core with FreeSWITCH-mirroring defaults: threshold 0.5, voice_ms 200, silence_ms 500.
     fn new() -> Self {
@@ -600,6 +636,7 @@ impl EarshotInner {
 
 /// Downmixes interleaved multi-channel `pcm` to mono by averaging each frame into `out`
 /// (cleared and refilled). A trailing partial frame (`pcm.len() % channels != 0`) is dropped.
+#[cfg(feature = "earshot")]
 fn downmix(pcm: &[i16], channels: usize, out: &mut Vec<i16>) {
     if channels == 0 {
         return;
@@ -721,7 +758,7 @@ mod tests {
     ///
     /// Still synthetic; the `live_fs` earshot tests using it must be **confirmed on a real
     /// FreeSWITCH build** (they cannot run in the headers-only default build).
-    #[cfg(feature = "live_fs")]
+    #[cfg(all(feature = "earshot", feature = "live_fs"))]
     fn synthetic_speech(rate: u32, silence_ms: u32, speech_ms: u32, amp: i16) -> Vec<i16> {
         let n = rate as usize * (silence_ms * 2 + speech_ms) as usize / 1000;
         let mut pcm = vec![0i16; n];
@@ -814,6 +851,7 @@ mod tests {
     /// Drives the hysteresis directly (no `predict_i16`) so it is deterministic and FreeSWITCH-
     /// link-free. Verifies the `NONE* → START_TALKING → TALKING* → STOP_TALKING → NONE*` shape
     /// and that each transition fires at exactly its configured threshold.
+    #[cfg(feature = "earshot")]
     #[test]
     fn earshot_hysteresis_start_and_stop() {
         let mut inner = EarshotInner::new();
@@ -884,6 +922,7 @@ mod tests {
     }
 
     /// Feeding 16 kHz silence must never spuriously report speech. Pure-Rust, no FreeSWITCH link.
+    #[cfg(feature = "earshot")]
     #[test]
     fn earshot_silence_is_none() {
         let mut inner = EarshotInner::new();
@@ -898,7 +937,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "live_fs")]
+    #[cfg(all(feature = "earshot", feature = "live_fs"))]
     #[test]
     fn earshot_vad_speech_segments() {
         // 0.5 s silence + 1 s multi-harmonic "speech" + 0.5 s silence, 16 kHz.
@@ -913,7 +952,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "live_fs")]
+    #[cfg(all(feature = "earshot", feature = "live_fs"))]
     #[test]
     fn earshot_vad_resampled_8k() {
         // 8 kHz input exercises the earshot resampler path (pipeline 8k → model 16k).

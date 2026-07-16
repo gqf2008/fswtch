@@ -13,9 +13,9 @@ rust-version = "1.87"
 
 [dependencies]
 fswtch-sys = { version = "0.1.8", path = "../fswtch-sys" }
-# Pure-Rust neural VAD engine used by `VadEngine::Earshot`. No C/link deps, so it does not
-# affect the `bundled` (headers-only) build.
-earshot = "1"
+# Pure-Rust neural VAD engine used by `VadEngine::Earshot`. Optional + gated behind the `earshot`
+# feature (on by default). No C/link deps, so it does not affect the `bundled` (headers-only) build.
+earshot = { version = "1", optional = true }
 
 [dev-dependencies]
 futures-util = "0.3"
@@ -27,8 +27,13 @@ base64 = "0.22"
 fswtch-apm = { path = "../fswtch-apm" }
 
 [features]
-default = ["bundled"]
+default = ["bundled", "earshot"]
 bundled = ["fswtch-sys/bundled"]
+# Enables the earshot neural VAD engine (`VadEngine::Earshot`) and the `earshot` dependency. On by
+# default; disable (`default-features = false`) to ship only the FreeSwitch engine without compiling
+# earshot. Note: the FreeSwitch engine is always compiled, so `Vad` always references `switch_vad_*`
+# symbols — the `Vad`-level earshot path is not FreeSWITCH-link-free (see vad.rs module docs).
+earshot = ["dep:earshot"]
 # Enables unit tests that call into the live FreeSWITCH C API. These tests cannot link in the
 # headers-only `bundled` build (no freeswitch library is linked); enable `live_fs` only when a
 # real FreeSWITCH build is available via `FREESWITCH_LIB_DIR` or pkg-config.
