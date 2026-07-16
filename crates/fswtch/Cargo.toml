@@ -10,6 +10,9 @@ repository.workspace = true
 
 [dependencies]
 fswtch-sys = { version = "0.1.8", path = "../fswtch-sys" }
+rubato = "3"
+wide = "0.7"
+nnnoiseless = { version = "0.5", default-features = false, optional = true }
 
 [dev-dependencies]
 futures-util = "0.3"
@@ -21,8 +24,11 @@ base64 = "0.22"
 fswtch-apm = { path = "../fswtch-apm" }
 
 [features]
-default = ["bundled"]
+default = ["bundled", "denoise"]
 bundled = ["fswtch-sys/bundled"]
+# AI denoising via nnnoiseless (RNNoise). Default-on to match the upstream
+# audio-dsp crate; disable with --no-default-features to drop nnnoiseless.
+denoise = ["dep:nnnoiseless"]
 # Enables unit tests that call into the live FreeSWITCH C API. These tests cannot link in the
 # headers-only `bundled` build (no freeswitch library is linked); enable `live_fs` only when a
 # real FreeSWITCH build is available via `FREESWITCH_LIB_DIR` or pkg-config.

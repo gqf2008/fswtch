@@ -175,7 +175,7 @@ fswtch::app_callback! {
                 return;
             }
         };
-        match fswtch::attach_media_bug(session, config, Aec3BugState::new()) {
+        match session.attach_media_bug(config, Aec3BugState::new()) {
             Ok(_) => fswtch::log_info("mod_aec3", "AEC3 media bug attached"),
             Err(error) => fswtch::log_error("mod_aec3", format!("failed to attach media bug: {error}")),
         }

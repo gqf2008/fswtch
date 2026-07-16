@@ -198,7 +198,7 @@ fswtch::app_callback! {
                 return;
             }
         };
-        match fswtch::attach_media_bug(session, config, ApmState::new()) {
+        match session.attach_media_bug(config, ApmState::new()) {
             Ok(_) => fswtch::log_info("mod_apm", "APM media bug attached"),
             Err(error) => fswtch::log_error("mod_apm", format!("failed to attach media bug: {error}")),
         }

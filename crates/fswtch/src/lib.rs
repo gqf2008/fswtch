@@ -38,6 +38,8 @@ mod vad;
 mod video;
 mod xml;
 
+pub mod dsp;
+
 pub use fswtch_sys as sys;
 
 pub use buffer::*;
