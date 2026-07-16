@@ -7,12 +7,18 @@ license.workspace = true
 description.workspace = true
 readme.workspace = true
 repository.workspace = true
+# Declared MSRV: `earshot` (a dependency) and the pre-existing `usize::is_multiple_of` in
+# `snap_segments` both require Rust 1.87. Not workspace-inherited since other crates may differ.
+rust-version = "1.87"
 
 [dependencies]
 fswtch-sys = { version = "0.1.8", path = "../fswtch-sys" }
 rubato = "3"
 wide = "0.7"
 nnnoiseless = { version = "0.5", default-features = false, optional = true }
+# Pure-Rust neural VAD engine used by `VadEngine::Earshot`. Optional + gated behind the `earshot`
+# feature (on by default). No C/link deps, so it does not affect the `bundled` (headers-only) build.
+earshot = { version = "1", optional = true }
 
 [dev-dependencies]
 futures-util = "0.3"
@@ -24,11 +30,16 @@ base64 = "0.22"
 fswtch-apm = { path = "../fswtch-apm" }
 
 [features]
-default = ["bundled", "denoise"]
+default = ["bundled", "denoise", "earshot"]
 bundled = ["fswtch-sys/bundled"]
 # AI denoising via nnnoiseless (RNNoise). Default-on to match the upstream
 # audio-dsp crate; disable with --no-default-features to drop nnnoiseless.
 denoise = ["dep:nnnoiseless"]
+# Enables the earshot neural VAD engine (`VadEngine::Earshot`) and the `earshot` dependency. On by
+# default; disable (`default-features = false`) to ship only the FreeSwitch engine without compiling
+# earshot. Note: the FreeSwitch engine is always compiled, so `Vad` always references `switch_vad_*`
+# symbols — the `Vad`-level earshot path is not FreeSWITCH-link-free (see vad.rs module docs).
+earshot = ["dep:earshot"]
 # Enables unit tests that call into the live FreeSWITCH C API. These tests cannot link in the
 # headers-only `bundled` build (no freeswitch library is linked); enable `live_fs` only when a
 # real FreeSWITCH build is available via `FREESWITCH_LIB_DIR` or pkg-config.
