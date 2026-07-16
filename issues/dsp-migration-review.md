@@ -82,3 +82,64 @@ error[E0425]: cannot find function `attach_media_bug` in crate `fswtch`
 2. `rms_benchmark` 改 `#[ignore]` 或删阈值。
 3. 重新评估 dsp 里那处 `crate::log_error`——要么改非 FFI 通道让 dsp 测试真能在 bundled 下独立跑，要么文档如实标注「需 live_fs」。
 4. （独立提交）修 `fswtch-apm` 两个 example 的 `attach_media_bug` 调用点，让 `cargo clippy --workspace --all-targets` 转绿。
+
+---
+
+## 再审（2026-07-16，分支已前进至 `c69c85f`）
+
+初审报告后，作者落了两个提交：`94aa46c fix(dsp): 审查反馈修复` 与 `c69c85f fix(fswtch-apm): 修复 example attach_media_bug 调用点`。本次复审验证修复正确性，并把上轮当 nit 处理、实测为真实 bug 的两条提级。
+
+### 初审 4 条修复 — 全部正确落地
+
+| # | 修复 | 验证 |
+|---|---|---|
+| 1 | dsp FFI 解耦：`crate::log_error` → `eprintln!` | ✅ grep 确认 dsp 源码零 `crate::`/`sys::` 代码引用（仅余 markdown 链接文本与注释）。链接报错里 `_switch_log_printf` 已消失，dsp 模块文档「no FreeSWITCH FFI coupling」名副其实。 |
+| 2 | `agc.rs:10` 文档句补全 | ✅ 补为「…via a one-pole-smoothed gain coefficient — slow attack …; fast release …」。 |
+| 3 | `rms_benchmark` 加 `#[ignore]` | ✅ 带说明字符串，`cargo test` 显示 `ignored`，CI 不再因定时不达标挂。 |
+| 4 | fswtch-apm 两个 example 的 `attach_media_bug` 调用点 | ✅ `fswtch::attach_media_bug(session, …)` → `session.attach_media_bug(…)`，与 `mod_media_bug_meter.rs:113` 对齐。 |
+
+附带 nit 注释（i16↔f32 不对称、`FixedAsync::Input` chunk 假设、AGC 用 f64 内联 RMS）也都补了。
+
+### 门禁复跑
+
+- `cargo fmt --all --check` ✅
+- `cargo clippy --workspace --all-targets` ✅ **现在 Finished（examples 编译通过，修复 #4 见效）**；仅余 `ai-agent-seat` 既有 warning。
+- 把 dsp 四文件抽到独立 crate（dsp 现已 FFI-free，可独立链接），**16 个内联测试 15 跑 1 ignored 全过**——实证 commit message「16 测试通过」属实（前提是脱离整条 crate 的 FFI 链接）。
+- `cargo test -p fswtch --lib` 在 bundled 模式仍链接失败，但残留 undefined symbol 已从「`_switch_log_printf` + `_switch_channel_cause2str`」收敛到只剩 `_switch_channel_cause2str`（来自 `status::Cause::as_str`，由 channel 等其他模块测试拉入）。dsp 自身不再是链接拖累，此为**既有平台限制**（`live_fs` 文档已说明），非本分支回归。
+
+### 上轮当 nit、复审实测为真实 bug 的两条（探针测试实证 confirmed）
+
+探针测试置于 `/tmp/dsp-probe/tests/review_probes.rs`，两条均通过——即确认问题真实存在。
+
+#### A. `dsp::Agc` 静默期增益爬升 → 语音起始爆裂
+
+`agc_gain_creeps_to_max_during_silence_then_saturates_speech` 通过：100 帧静默（≈1s）后 `agc.gain() > 5.0`（向 max_gain=10 爬）；紧接一帧 RMS 5000 的正常语音，`5000 × ~8.8 = 44000` 被 clamp 到 `i16::MAX`，**160 个采样里 >100 个饱和到 32767**——语音起始处削顶失真。
+
+根因：静默时 `rms=0` → `desired = target_rms/EPS → max_gain`，慢 attack 让增益一路爬到天花板；语音一来被顶格放大。原 `unity_on_silence` 测试只跑 1 帧、只验「输出仍为 0」（瞬时确实为 0），**抓不到稳态爬升**——测试盲区。
+
+> 设计语境：`dsp/mod.rs` 写明原 pipeline 在 AGC 上游有「far-field gate」，静默/噪声在到 AGC 前就被门控。但「该 pipeline is now dead」——`dsp::Agc` 作为独立库 API 暴露时上游没有 gate，静默爬升是未文档化的坑，与 speex AGC 被否的同款「gain pumping」同族。
+>
+> 建议（任一）：① 文档显式标注「需上游 noise gate / hold」；② 给 `Agc` 加 silence-hold（rms < 阈值时冻结增益）；③ 补「长静默→语音」回归测试。
+
+#### B. `DenoiseStage::process` 的 `out` 清空契约文档与代码不符
+
+`denoise_out_is_not_cleared_at_start_of_next_call` 通过：同一个 `out: Vec` 跨调用复用、不 drain，喂两帧 480 → `out.len() = 960`（累加），而非文档声称的 480。
+
+`denoise.rs:56-57` 文档写「The caller should drain `out` after each call — **it is cleared at the start of the next call**」，但代码只 `out.append(&mut self.out_buf)` / `out.extend_from_slice(input)`，**从不 clear 调用方的 `out`**。依赖该契约的调用方会无限增长。
+
+> 建议：要么删掉文档「it is cleared at the start of the next call」、改成「caller must clear/drain `out`」；要么在 `process` 开头 `out.clear()`（契约自洽，但需确认无调用方依赖累加语义）。
+
+### 观察（重申，非阻塞）
+
+- **dsp 全模块在 workspace 内零消费者**：`ai-agent-seat` 用的是它自己的 `crate::audio_dsp`（且 `PIPELINE_SAMPLE_RATE = 8000`）+ FSW C 句柄 `fswtch::Resample`，不是 `fswtch::dsp::*`。对 library crate 可接受，但 commit message「自研 AGC 替代 speex AGC」目前是**愿景不是事实**——线上跑的还是 speex。把 A 修了再接线才稳。
+
+### 再审结论
+
+**Approve。** 四条修复全部正确，门禁转绿，dsp 实证 FFI-free、16 测试在隔离环境全过。
+
+但复审把上轮两条 nit **提级为真实 bug 并已实证**：
+
+1. **AGC 静默爬升 → 语音起始削顶**（算法 + 测试盲区，speex-同款 pumping）；
+2. **DenoiseStage `out` 清空契约文档/代码不符**。
+
+二者都小、都好修，建议合入前一并处理——尤其若近期要把 `dsp::Agc`/`DenoiseStage` 接进实活 pipeline（其上游 far-field gate 已被删，A 会直接咬人）。
