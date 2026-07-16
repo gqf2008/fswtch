@@ -65,11 +65,15 @@ impl SampleRateConverter {
             return Vec::new();
         }
 
-        // Convert i16 → f32 and prepend residual
+        // Convert i16 → f32 (÷32768 normalizes to [-1, 1)) and prepend residual.
+        // Output uses ×32767 + clamp (see below) — standard asymmetry avoids
+        // overflow at the -1.0 → i16::MIN edge.
         let mut buf: Vec<f32> = Vec::with_capacity(self.residual.len() + input.len());
         buf.extend_from_slice(&self.residual);
         buf.extend(input.iter().map(|&s| s as f32 / 32768.0));
 
+        // FixedAsync::Input guarantees a fixed input chunk size, so we sample
+        // it once here and reuse for every loop iteration below.
         let chunk_size = self.inner.input_frames_next();
         let est_out = ((buf.len() as f64) * self.ratio).ceil() as usize + chunk_size;
         let mut output: Vec<i16> = Vec::with_capacity(est_out);
@@ -92,12 +96,10 @@ impl SampleRateConverter {
                     }));
                 }
                 Err(e) => {
-                    // Log at error level — dropped samples cause audible gaps.
+                    // Log to stderr — dropped samples cause audible gaps.
                     // Continue processing rather than aborting the stream.
-                    crate::log_error(
-                        "dsp",
-                        format!("rubato process error (samples dropped): {e}"),
-                    );
+                    // Uses eprintln! (not crate::log_error) to keep dsp FFI-free.
+                    eprintln!("[dsp] rubato process error (samples dropped): {e}");
                 }
             }
         }
@@ -244,6 +246,7 @@ mod rms_tests {
     }
 
     #[test]
+    #[ignore = "microbenchmark — run with: cargo test -p fswtch --lib -- rms_benchmark --ignored"]
     fn rms_benchmark() {
         use std::time::Instant;
 

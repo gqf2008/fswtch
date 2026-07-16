@@ -8,6 +8,8 @@
 //! signal to zero. So AGC is self-developed here instead.
 //!
 //! Design: drive each frame's RMS toward `target_rms` via a one-pole-smoothed
+//! gain coefficient — slow attack (rising) prevents pumping on residual noise;
+//! fast release (falling) pulls gain down promptly on loud frames.
 
 /// One-pole smoothing coefficient for gain INCREASE (attack). Small = slow.
 /// ~0.02 → time-constant ≈ 50 frames (≈0.5–1 s @ 10–20 ms frames) — slow
@@ -44,7 +46,8 @@ impl Agc {
         if pcm.is_empty() {
             return;
         }
-        // Frame RMS (i16 scale).
+        // Frame RMS in f64 (i64 products avoid overflow on large i16 values).
+        // Not reusing dsp::rms (f32) — gain accuracy needs the extra headroom.
         let sum_sq: f64 = pcm.iter().map(|&s| (s as i64 * s as i64) as f64).sum();
         let rms = (sum_sq / pcm.len() as f64).sqrt() as f32;
         // Desired gain to reach target. Clamp floor at 0 (never invert); ceiling at max_gain
