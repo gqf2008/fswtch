@@ -26,6 +26,13 @@ const EPS: f32 = 1e-6;
 /// gate upstream of the AGC; as a standalone library API that gate is gone, so
 /// this hold replaces its function — without it, ~1 s of silence drives gain
 /// to the ceiling and the next speech frame saturates.
+///
+/// Trade-off: 30 ≈ −60 dBFS — low enough to avoid freezing quiet speech
+/// (rms 100+), high enough to catch digital silence. Signals in the 30–300
+/// range (low-level background noise) will still creep gain toward the ceiling;
+/// the fast release (0.25/frame) pulls it back within 1 frame, and the clamp
+/// bounds any onset clipping. Raising the threshold to ~300 would freeze
+/// legitimately quiet speech, defeating the AGC's purpose.
 const SILENCE_HOLD_RMS: f32 = 30.0;
 
 #[derive(Debug, Clone)]
@@ -174,7 +181,10 @@ mod tests {
         // A speech-level frame should not saturate.
         let mut speech = vec![5000i16; 160];
         agc.process(&mut speech);
-        let saturated = speech.iter().filter(|&&s| s.abs() >= 32767).count();
+        let saturated = speech
+            .iter()
+            .filter(|&&s| s.unsigned_abs() >= 32767)
+            .count();
         assert_eq!(
             saturated, 0,
             "{} samples saturated — speech onset clipped",
