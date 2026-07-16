@@ -499,6 +499,7 @@ name = "fswtch"
 version = "0.1.8"
 dependencies = [
  "base64",
+ "earshot",
  "fswtch-apm",
  "fswtch-sys",
  "futures-util",

@@ -513,6 +513,9 @@ mod tests {
         assert!(!Cause::NONE.is_success());
     }
 
+    /// Calls `switch_channel_cause2str` (FreeSWITCH FFI), so it only links/runs against a real
+    /// FreeSWITCH build — gated behind `live_fs`, like the other FFI-touching unit tests.
+    #[cfg(feature = "live_fs")]
     #[test]
     fn cause_as_str_known() {
         // `switch_channel_cause2str` is a static table; these must resolve.

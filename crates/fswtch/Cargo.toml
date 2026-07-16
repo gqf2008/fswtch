@@ -10,6 +10,9 @@ repository.workspace = true
 
 [dependencies]
 fswtch-sys = { version = "0.1.8", path = "../fswtch-sys" }
+# Pure-Rust neural VAD engine used by `VadEngine::Earshot`. No C/link deps, so it does not
+# affect the `bundled` (headers-only) build.
+earshot = "1"
 
 [dev-dependencies]
 futures-util = "0.3"
