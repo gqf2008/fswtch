@@ -136,7 +136,7 @@ impl Rtp {
                 host.as_ptr(),
                 port,
                 remote_rtcp_port,
-                crate::switch_bool(change_adv_addr),
+                crate::status::switch_bool(change_adv_addr),
                 &mut err,
             )
         };
@@ -488,7 +488,7 @@ impl<'a> RtpPacket<'a> {
 #[cfg(all(test, feature = "live_fs"))]
 mod tests {
     use super::*;
-    use crate::switch_bool;
+    use crate::status::switch_bool;
 
     #[test]
     fn config_builder_is_chainable() {

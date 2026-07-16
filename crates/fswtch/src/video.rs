@@ -23,7 +23,7 @@ use crate::{Result, SwitchError, cstring, status_to_result, strdup_to_string, sy
 /// `from_raw` covers any other `vpx_img_fmt_*` value.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct ImageFormat(pub sys::switch_img_fmt_t);
+pub struct ImageFormat(pub(crate) sys::switch_img_fmt_t);
 
 impl ImageFormat {
     /// No format (sentinel for an uninitialised image).
@@ -35,13 +35,13 @@ impl ImageFormat {
 
     /// The raw `switch_img_fmt_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_img_fmt_t {
+    pub(crate) const fn raw(self) -> sys::switch_img_fmt_t {
         self.0
     }
 
     /// Wraps a raw format value (e.g. any `sys::vpx_img_fmt_*` constant).
     #[inline]
-    pub const fn from_raw(v: sys::switch_img_fmt_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_img_fmt_t) -> Self {
         Self(v)
     }
 }
@@ -109,7 +109,7 @@ impl Color {
 /// Controls how an image is rescaled to a target width/height: scale to fill, scale preserving
 /// aspect ratio, scale only if the target is smaller, or leave the image untouched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ImageFit(pub sys::switch_img_fit_t);
+pub struct ImageFit(pub(crate) sys::switch_img_fit_t);
 
 impl ImageFit {
     /// Scale to the exact target dimensions (aspect ratio may change).
@@ -130,7 +130,8 @@ impl ImageFit {
 
     /// Wraps a raw `switch_img_fit_t` returned from FFI.
     #[inline]
-    pub const fn from_raw(fit: sys::switch_img_fit_t) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn from_raw(fit: sys::switch_img_fit_t) -> Self {
         Self(fit)
     }
 
@@ -146,7 +147,7 @@ impl ImageFit {
 /// Identifies one of nine anchor points within a larger surface (left/center/right ×
 /// top/mid/bottom), or "no position".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ImagePosition(pub sys::switch_img_position_t);
+pub struct ImagePosition(pub(crate) sys::switch_img_position_t);
 
 impl ImagePosition {
     /// Top-left corner (`POS_LEFT_TOP`).
@@ -181,7 +182,8 @@ impl ImagePosition {
 
     /// Wraps a raw `switch_img_position_t` returned from FFI.
     #[inline]
-    pub const fn from_raw(pos: sys::switch_img_position_t) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn from_raw(pos: sys::switch_img_position_t) -> Self {
         Self(pos)
     }
 
@@ -197,7 +199,7 @@ impl ImagePosition {
 /// Selects which channel (red/green/blue) the chromakey should treat as the "dominant" color
 /// when auto-detecting a mask, or `Auto` to let FreeSWITCH pick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Shade(pub sys::switch_shade_t);
+pub struct Shade(pub(crate) sys::switch_shade_t);
 
 impl Shade {
     /// No explicit shade — disable autocolor (`SWITCH_SHADE_NONE`).
@@ -217,7 +219,8 @@ impl Shade {
 
     /// Wraps a raw `switch_shade_t` returned from FFI.
     #[inline]
-    pub const fn from_raw(shade: sys::switch_shade_t) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn from_raw(shade: sys::switch_shade_t) -> Self {
         Self(shade)
     }
 

@@ -56,7 +56,7 @@ pub enum VadEngine {
 /// Wraps FreeSWITCH's `switch_vad_state_t`. The values mirror the `SWITCH_VAD_STATE_*`
 /// constants exposed by `fswtch-sys`.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct VadState(pub sys::switch_vad_state_t);
+pub struct VadState(pub(crate) sys::switch_vad_state_t);
 
 impl VadState {
     /// The VAD has no transition to report yet (idle / between events).
@@ -78,7 +78,7 @@ impl VadState {
 
     /// Wraps a raw `switch_vad_state_t` returned from FFI.
     #[inline]
-    pub const fn from_raw(state: sys::switch_vad_state_t) -> Self {
+    pub(crate) const fn from_raw(state: sys::switch_vad_state_t) -> Self {
         Self(state)
     }
 

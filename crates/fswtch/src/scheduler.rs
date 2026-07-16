@@ -133,7 +133,7 @@ pub trait TaskHandler: 'static {
 
 /// Behavioural flags passed to [`spawn`].
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct TaskFlags(pub sys::switch_scheduler_flag_t);
+pub struct TaskFlags(pub(crate) sys::switch_scheduler_flag_t);
 
 impl TaskFlags {
     /// No special behaviour: the task runs on the scheduler thread, `cmd_arg` is owned by the
@@ -152,7 +152,7 @@ impl TaskFlags {
 
     /// `SSHF_FREE_ARG` is intentionally not exposed: it tells FreeSWITCH to `free()` the `cmd_arg`
     /// pointer, which would corrupt the Rust `Box` this crate stores there.
-    pub const fn bits(self) -> sys::switch_scheduler_flag_t {
+    pub(crate) const fn bits(self) -> sys::switch_scheduler_flag_t {
         self.0
     }
 }

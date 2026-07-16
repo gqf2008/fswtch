@@ -148,7 +148,7 @@ impl Dtmf {
 
 /// The origin of a DTMF event (`switch_dtmf_source_t`).
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct DtmfSource(pub sys::switch_dtmf_source_t);
+pub struct DtmfSource(pub(crate) sys::switch_dtmf_source_t);
 
 impl DtmfSource {
     pub const UNKNOWN: Self = Self(sys::switch_dtmf_source_t_SWITCH_DTMF_UNKNOWN);
@@ -161,7 +161,7 @@ impl DtmfSource {
 /// Flags passed to `read_frame` / `write_frame` and the video/text variants
 /// (`switch_io_flag_t`). This is a bitset; combine variants with `|`.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub struct IoFlags(pub sys::switch_io_flag_t);
+pub struct IoFlags(pub(crate) sys::switch_io_flag_t);
 
 impl IoFlags {
     pub const NONE: Self = Self(sys::switch_io_flag_enum_t_SWITCH_IO_FLAG_NONE);
@@ -172,7 +172,8 @@ impl IoFlags {
 
     /// The raw bitset value.
     #[inline]
-    pub const fn bits(self) -> sys::switch_io_flag_t {
+    #[allow(dead_code)]
+    pub(crate) const fn bits(self) -> sys::switch_io_flag_t {
         self.0
     }
 
@@ -220,7 +221,7 @@ impl std::ops::BitOrAssign for IoFlags {
 /// rather than as enum variants. This newtype hides that asymmetry behind a uniform API.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct MessageType(pub sys::switch_core_session_message_types_t);
+pub struct MessageType(pub(crate) sys::switch_core_session_message_types_t);
 
 impl MessageType {
     pub const REDIRECT_AUDIO: Self =
@@ -352,13 +353,14 @@ impl MessageType {
 
     /// The raw `switch_core_session_message_types_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_core_session_message_types_t {
+    #[allow(dead_code)]
+    pub(crate) const fn raw(self) -> sys::switch_core_session_message_types_t {
         self.0
     }
 
     /// Wraps a raw message type returned by FreeSWITCH.
     #[inline]
-    pub const fn from_raw(v: sys::switch_core_session_message_types_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_core_session_message_types_t) -> Self {
         Self(v)
     }
 
@@ -739,6 +741,15 @@ pub trait EndpointIoRoutines: Send + Sync + 'static {
         let _ = (session, sig);
         SUCCESS
     }
+
+    /// Channel state-change hook (`switch_io_routines::state_change`). FreeSWITCH calls it on
+    /// channel state transitions; the current state is readable from the session's channel.
+    /// Default: `SUCCESS` (no-op).
+    #[allow(unused_variables)]
+    fn state_change(session: &Session) -> Status {
+        let _ = session;
+        SUCCESS
+    }
 }
 
 /// Builds a `switch_io_routines` table whose function pointers dispatch to
@@ -756,6 +767,7 @@ impl EndpointIoBuilder {
             read_frame: Some(read_frame_trampoline::<T>),
             write_frame: Some(write_frame_trampoline::<T>),
             kill_channel: Some(kill_channel_trampoline::<T>),
+            state_change: Some(state_change_trampoline::<T>),
             ..Default::default()
         };
         // SAFETY: `Box::into_raw` produces a valid, well-aligned, owned
@@ -906,6 +918,20 @@ unsafe extern "C" fn kill_channel_trampoline<T: EndpointIoRoutines>(
             return crate::FALSE;
         };
         T::kill_channel(&session, sig)
+    }));
+    res.unwrap_or_else(|_| trampoline_panic_status()).raw()
+}
+
+unsafe extern "C" fn state_change_trampoline<T: EndpointIoRoutines>(
+    session: *mut sys::switch_core_session_t,
+) -> sys::switch_status_t {
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: FreeSWITCH guarantees `session` is a live session pointer during a state
+        // transition.
+        let Some(session) = (unsafe { Session::from_raw(session) }) else {
+            return crate::FALSE;
+        };
+        T::state_change(&session)
     }));
     res.unwrap_or_else(|_| trampoline_panic_status()).raw()
 }

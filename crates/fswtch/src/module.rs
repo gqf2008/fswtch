@@ -236,6 +236,7 @@ impl Module {
     }
 
     /// Registers a FreeSWITCH API command on this module.
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn add_api(
         self,
         name: impl StaticCStr,
@@ -243,9 +244,9 @@ impl Module {
         syntax: impl StaticCStr,
         function: unsafe extern "C" fn(
             *const c_char,
-            *mut sys::switch_core_session_t,
-            *mut sys::switch_stream_handle_t,
-        ) -> sys::switch_status_t,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> crate::Status,
     ) -> Result<ApiInterface> {
         let name = name.into_static_cstr()?;
         let description = description.into_static_cstr()?;
@@ -261,17 +262,21 @@ impl Module {
             let api_ref = api.as_ptr();
             (*api_ref).interface_name = name.as_ptr();
             (*api_ref).desc = description.as_ptr();
-            (*api_ref).function = Some(function);
+            // SAFETY: `function` is ABI-identical to the field's `switch_api_function_t`:
+            // pointer params differ only in pointee type, and `Status` is `#[repr(transparent)]`
+            // over `switch_status_t`. The transmute is a sound bitcast.
+            (*api_ref).function = std::mem::transmute(Some(function));
             (*api_ref).syntax = syntax.as_ptr();
         }
 
         Ok(ApiInterface { raw: api })
     }
 
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn add_application(
         self,
         info: ApplicationInfo,
-        function: unsafe extern "C" fn(*mut sys::switch_core_session_t, *const c_char),
+        function: unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char),
     ) -> Result<ApplicationInterface> {
         let strings = info.into_cstrings()?;
         let application = create_interface::<sys::switch_application_interface_t>(
@@ -284,7 +289,9 @@ impl Module {
         unsafe {
             let application_ref = application.as_ptr();
             (*application_ref).interface_name = strings.name.as_ptr();
-            (*application_ref).application_function = Some(function);
+            // SAFETY: `function` is ABI-identical to `switch_application_function_t` — the
+            // pointer param differs only in pointee type. Sound bitcast.
+            (*application_ref).application_function = std::mem::transmute(Some(function));
             (*application_ref).long_desc = strings.long_description.as_ptr();
             (*application_ref).short_desc = strings.short_description.as_ptr();
             (*application_ref).syntax = strings.syntax.as_ptr();
@@ -293,13 +300,11 @@ impl Module {
         Ok(ApplicationInterface { raw: application })
     }
 
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn add_chat_application(
         self,
         info: ApplicationInfo,
-        function: unsafe extern "C" fn(
-            *mut sys::switch_event_t,
-            *const c_char,
-        ) -> sys::switch_status_t,
+        function: unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char) -> crate::Status,
     ) -> Result<ChatApplicationInterface> {
         let strings = info.into_cstrings()?;
         let application = create_interface::<sys::switch_chat_application_interface_t>(
@@ -312,7 +317,10 @@ impl Module {
         unsafe {
             let application_ref = application.as_ptr();
             (*application_ref).interface_name = strings.name.as_ptr();
-            (*application_ref).chat_application_function = Some(function);
+            // SAFETY: `function` is ABI-identical to `switch_chat_application_function_t` —
+            // pointer param differs only in pointee type, and `Status` is `#[repr(transparent)]`
+            // over `switch_status_t`. Sound bitcast.
+            (*application_ref).chat_application_function = std::mem::transmute(Some(function));
             (*application_ref).long_desc = strings.long_description.as_ptr();
             (*application_ref).short_desc = strings.short_description.as_ptr();
             (*application_ref).syntax = strings.syntax.as_ptr();
@@ -698,18 +706,23 @@ pub struct ModuleBuilder {
 impl ModuleBuilder {
     /// Creates a module registration builder from FreeSWITCH load callback pointers.
     ///
+    /// `slot`/`pool` are the raw `*mut c_void` pointers the `module_load!` trampoline receives
+    /// (pointee-erased so the macro never names a `sys` type); they are cast back to the real
+    /// FreeSWITCH pointer types here before reaching `Module::create`.
+    ///
     /// # Safety
     ///
     /// `slot` and `pool` must be the live loader-owned pointers passed by FreeSWITCH to this
     /// module's load callback. `slot` must be writable for one module interface pointer.
     pub unsafe fn new(
-        slot: *mut *mut sys::switch_loadable_module_interface_t,
-        pool: *mut sys::switch_memory_pool_t,
+        slot: *mut *mut std::ffi::c_void,
+        pool: *mut std::ffi::c_void,
         name: impl StaticCStr,
     ) -> Result<Self> {
         Ok(Self {
-            // SAFETY: Forwarded from `ModuleBuilder::new`'s caller.
-            module: unsafe { Module::create(slot, pool, name)? },
+            // SAFETY: Forwarded from `ModuleBuilder::new`'s caller; the `c_void` pointers are
+            // the real FreeSWITCH loader pointers, just pointee-erased.
+            module: unsafe { Module::create(slot.cast(), pool.cast(), name)? },
         })
     }
 
@@ -720,9 +733,9 @@ impl ModuleBuilder {
         syntax: impl StaticCStr,
         function: unsafe extern "C" fn(
             *const c_char,
-            *mut sys::switch_core_session_t,
-            *mut sys::switch_stream_handle_t,
-        ) -> sys::switch_status_t,
+            *mut std::ffi::c_void,
+            *mut std::ffi::c_void,
+        ) -> crate::Status,
     ) -> Result<Self> {
         self.module.add_api(name, description, syntax, function)?;
         Ok(self)
@@ -731,7 +744,7 @@ impl ModuleBuilder {
     pub fn application(
         self,
         info: ApplicationInfo,
-        function: unsafe extern "C" fn(*mut sys::switch_core_session_t, *const c_char),
+        function: unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char),
     ) -> Result<Self> {
         self.module.add_application(info, function)?;
         Ok(self)
@@ -740,10 +753,7 @@ impl ModuleBuilder {
     pub fn chat_application(
         self,
         info: ApplicationInfo,
-        function: unsafe extern "C" fn(
-            *mut sys::switch_event_t,
-            *const c_char,
-        ) -> sys::switch_status_t,
+        function: unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char) -> crate::Status,
     ) -> Result<Self> {
         self.module.add_chat_application(info, function)?;
         Ok(self)
@@ -761,6 +771,57 @@ impl ModuleBuilder {
 
     pub fn finish(self) -> Module {
         self.module
+    }
+}
+
+/// `#[doc(hidden)]` transparent wrapper over FreeSWITCH's
+/// `switch_loadable_module_function_table_t`.
+///
+/// Exists so the [`macro@module_exports`] macro can declare a module-interface table in a
+/// downstream crate using a `fswtch`-owned type name instead of a raw `*-sys` type. Construct it
+/// only through [`__ModuleFunctionTable::__new`]; it is an internal FFI detail, not part of the
+/// public API.
+#[repr(transparent)]
+#[doc(hidden)]
+pub struct __ModuleFunctionTable(pub(crate) sys::switch_loadable_module_function_table_t);
+
+impl __ModuleFunctionTable {
+    /// Builds a module-interface table from `Status`-returning / `c_void`-typed callbacks.
+    ///
+    /// `Status` is `#[repr(transparent)]` over `switch_status_t`, and pointer params differ from
+    /// the C function-pointer field types only in pointee type (which does not affect the C
+    /// calling convention). Each callback is therefore bit-for-bit ABI-compatible with the
+    /// corresponding FreeSWITCH `switch_status_t`-returning C function-pointer field, and the
+    /// conversion is a `transmute` (a no-op bitcast).
+    ///
+    /// # Safety
+    ///
+    /// `load`/`shutdown`/`runtime` must be `extern "C" fn` / `unsafe extern "C" fn` pointers
+    /// whose ABI matches the FreeSWITCH function-pointer field types. The [`macro@module_exports`]
+    /// macro supplies exactly these (the `module_load!` trampoline for `load`, and user
+    /// `-> fswtch::Status` fns for `shutdown`/`runtime`); do not call `__new` directly.
+    #[doc(hidden)]
+    #[allow(clippy::missing_safety_doc, clippy::missing_transmute_annotations)]
+    pub const unsafe fn __new(
+        load: Option<
+            unsafe extern "C" fn(
+                *mut *mut std::ffi::c_void,
+                *mut std::ffi::c_void,
+            ) -> crate::Status,
+        >,
+        shutdown: Option<extern "C" fn() -> crate::Status>,
+        runtime: Option<extern "C" fn() -> crate::Status>,
+    ) -> Self {
+        // SAFETY: `Status` is `#[repr(transparent)]` over `switch_status_t`; `c_void` pointees
+        // are ABI-identical to the real FreeSWITCH pointer types. All three fn-pointer options
+        // are the same size as their `sys` field counterparts, so this is a sound bitcast.
+        Self(sys::switch_loadable_module_function_table_t {
+            switch_api_version: sys::SWITCH_API_VERSION as _,
+            load: unsafe { std::mem::transmute(load) },
+            shutdown: unsafe { std::mem::transmute(shutdown) },
+            runtime: unsafe { std::mem::transmute(runtime) },
+            flags: 0,
+        })
     }
 }
 

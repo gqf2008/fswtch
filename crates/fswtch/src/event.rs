@@ -19,7 +19,7 @@ macro_rules! call_ffi {
 /// [`Event::new`]/[`EventBinder::bind`] by value and read back with [`raw`](Self::raw).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct EventType(pub sys::switch_event_types_t);
+pub struct EventType(pub(crate) sys::switch_event_types_t);
 
 impl EventType {
     pub const CUSTOM: Self = Self(sys::switch_event_types_t::SWITCH_EVENT_CUSTOM);
@@ -136,13 +136,13 @@ impl EventType {
 
     /// The raw `switch_event_types_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_event_types_t {
+    pub(crate) const fn raw(self) -> sys::switch_event_types_t {
         self.0
     }
 
     /// Wraps a raw event type returned by FreeSWITCH.
     #[inline]
-    pub const fn from_raw(v: sys::switch_event_types_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_event_types_t) -> Self {
         Self(v)
     }
 
@@ -195,7 +195,7 @@ impl From<sys::switch_event_types_t> for EventType {
 /// [`Event::set_priority`] by value.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Priority(pub sys::switch_priority_t);
+pub struct Priority(pub(crate) sys::switch_priority_t);
 
 impl Priority {
     pub const NORMAL: Self = Self(sys::switch_priority_t_SWITCH_PRIORITY_NORMAL);
@@ -204,13 +204,14 @@ impl Priority {
 
     /// The raw `switch_priority_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_priority_t {
+    pub(crate) const fn raw(self) -> sys::switch_priority_t {
         self.0
     }
 
     /// Wraps a raw priority.
     #[inline]
-    pub const fn from_raw(v: sys::switch_priority_t) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn from_raw(v: sys::switch_priority_t) -> Self {
         Self(v)
     }
 
@@ -609,7 +610,7 @@ impl Event {
         // SAFETY: `raw` is a live event; `out` is writable output storage receiving a malloc'd
         // string. `encode` selects URL-encoding of values.
         let status = unsafe {
-            sys::switch_event_serialize(raw.as_ptr(), &mut out, crate::switch_bool(encode))
+            sys::switch_event_serialize(raw.as_ptr(), &mut out, crate::status::switch_bool(encode))
         };
         if status != crate::SUCCESS.raw() {
             // FreeSWITCH may have allocated `out` before failing — free it to avoid a leak.
@@ -748,7 +749,7 @@ impl Event {
                 escape as std::ffi::c_char,
                 &mut event,
                 &mut new_data,
-                crate::switch_bool(dup),
+                crate::status::switch_bool(dup),
             )
         };
         status_to_result(status)?;
@@ -856,12 +857,16 @@ pub struct EventRef {
 impl EventRef {
     /// Wraps a FreeSWITCH event pointer for the duration of a callback.
     ///
+    /// Generic over the pointee so the `chat_callback!`/`event_callback!` trampolines can pass a
+    /// pointee-erased `*mut c_void` (never naming a `sys` type) while the real event pointer type
+    /// is stored internally.
+    ///
     /// # Safety
     ///
     /// `raw` must point to a live FreeSWITCH event and remain valid while this wrapper is used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_event_t) -> Self {
+    pub unsafe fn from_raw<T>(raw: *mut T) -> Self {
         Self {
-            raw: NonNull::new(raw),
+            raw: NonNull::new(raw as *mut sys::switch_event_t),
         }
     }
 
@@ -935,8 +940,9 @@ impl EventRef {
         let mut out: *mut std::ffi::c_char = std::ptr::null_mut();
         // SAFETY: `raw` is a live event; `out` is writable output storage receiving a malloc'd
         // string.
-        let status =
-            unsafe { sys::switch_event_serialize(raw, &mut out, crate::switch_bool(encode)) };
+        let status = unsafe {
+            sys::switch_event_serialize(raw, &mut out, crate::status::switch_bool(encode))
+        };
         status_to_result(status)?;
         // SAFETY: On success `out` is a malloc'd null-terminated string owned by this call.
         Ok(unsafe { crate::strdup_to_string(out) }.unwrap_or_default())
@@ -1030,11 +1036,12 @@ impl EventBinder {
     /// `callback` is the C trampoline FreeSWITCH will invoke; `user_data` is stored on the node but
     /// is not passed back to the callback (see the type docs). Returns a guard whose `Drop`
     /// unregisters the subscription.
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn bind(
         id: impl AsRef<str>,
         event: EventType,
         subclass: Option<&str>,
-        callback: sys::switch_event_callback_t,
+        callback: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
         user_data: *mut std::ffi::c_void,
     ) -> Result<Self> {
         let id = cstring(id)?;
@@ -1044,6 +1051,8 @@ impl EventBinder {
         };
         let mut node: *mut sys::switch_event_node_t = std::ptr::null_mut();
         // SAFETY: `id` and `subclass` are valid C strings; `node` is writable output storage.
+        // `callback`'s signature is ABI-identical to `switch_event_callback_t` (pointer param
+        // differs only in pointee type), so the transmute is a sound bitcast.
         let status = unsafe {
             sys::switch_event_bind_removable(
                 id.as_ptr(),
@@ -1051,7 +1060,7 @@ impl EventBinder {
                 subclass
                     .as_ref()
                     .map_or(std::ptr::null(), |subclass| subclass.as_ptr()),
-                callback,
+                std::mem::transmute(callback),
                 user_data,
                 &mut node,
             )
@@ -1077,11 +1086,12 @@ impl EventBinder {
     /// `callback` is the C trampoline FreeSWITCH will invoke (typically generated with the
     /// `event_callback!` macro); `user_data` is stored on the node but is not passed back to the
     /// callback (see [`EventBinder`] docs).
+    #[allow(clippy::missing_transmute_annotations)]
     pub fn bind_permanent(
         id: impl AsRef<str>,
         event: EventType,
         subclass: Option<&str>,
-        callback: sys::switch_event_callback_t,
+        callback: Option<unsafe extern "C" fn(*mut std::ffi::c_void)>,
         user_data: *mut std::ffi::c_void,
     ) -> Result<()> {
         let id = cstring(id)?;
@@ -1089,7 +1099,9 @@ impl EventBinder {
             Some(text) => Some(cstring(text)?),
             None => None,
         };
-        // SAFETY: `id` and `subclass` are valid C strings; the callback matches the expected ABI.
+        // SAFETY: `id` and `subclass` are valid C strings; `callback`'s signature is ABI-identical
+        // to `switch_event_callback_t` (pointer param differs only in pointee type), so the
+        // transmute is a sound bitcast.
         let status = unsafe {
             sys::switch_event_bind(
                 id.as_ptr(),
@@ -1097,7 +1109,7 @@ impl EventBinder {
                 subclass
                     .as_ref()
                     .map_or(std::ptr::null(), |subclass| subclass.as_ptr()),
-                callback,
+                std::mem::transmute(callback),
                 user_data,
             )
         };

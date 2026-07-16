@@ -9,12 +9,15 @@ pub struct Stream {
 impl Stream {
     /// Wraps a FreeSWITCH stream pointer for the duration of an API callback.
     ///
+    /// Generic over the pointee so trampolines can pass a pointee-erased `*mut c_void` (never
+    /// naming a `sys` type) while internal call sites pass the real stream pointer type.
+    ///
     /// # Safety
     ///
     /// `raw` must point to a live FreeSWITCH stream handle and remain valid while this wrapper is
     /// used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw })
+    pub unsafe fn from_raw<T>(raw: *mut T) -> Option<Self> {
+        NonNull::new(raw as *mut sys::switch_stream_handle_t).map(|raw| Self { raw })
     }
 
     pub fn as_ptr(&self) -> *mut sys::switch_stream_handle_t {
@@ -71,15 +74,20 @@ impl ApiStream {
     /// so the `api_callback!` macro's `$stream: Option<ApiStream>` parameter
     /// type-checks at every call site.
     ///
+    /// Generic over the pointee so trampolines can pass a pointee-erased `*mut c_void` (never
+    /// naming a `sys` type) while the real stream pointer type is stored internally.
+    ///
     /// # Safety
     ///
     /// A non-null `raw` must point to a live FreeSWITCH stream handle and remain
     /// valid while this wrapper is used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_stream_handle_t) -> Option<Self> {
+    pub unsafe fn from_raw<T>(raw: *mut T) -> Option<Self> {
         if raw.is_null() {
             return None;
         }
-        Some(Self { raw })
+        Some(Self {
+            raw: raw as *mut sys::switch_stream_handle_t,
+        })
     }
 
     pub fn as_ptr(self) -> *mut sys::switch_stream_handle_t {

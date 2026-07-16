@@ -34,7 +34,7 @@ impl MediaBugAction {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct MediaBugFlags(pub sys::switch_media_bug_flag_t);
+pub struct MediaBugFlags(pub(crate) sys::switch_media_bug_flag_t);
 
 impl MediaBugFlags {
     pub const BOTH: Self = Self(sys::switch_media_bug_flag_enum_t_SMBF_BOTH);
@@ -58,7 +58,7 @@ impl MediaBugFlags {
     pub const READ_TEXT_STREAM: Self =
         Self(sys::switch_media_bug_flag_enum_t_SMBF_READ_TEXT_STREAM);
 
-    pub const fn bits(self) -> sys::switch_media_bug_flag_t {
+    pub(crate) const fn bits(self) -> sys::switch_media_bug_flag_t {
         self.0
     }
 }

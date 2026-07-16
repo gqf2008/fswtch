@@ -43,17 +43,17 @@ fswtch::module_load! {
     }
 }
 
-// FreeSWITCH invokes runtime callbacks using the module function-table ABI. Unlike `shutdown`,
-// the `runtime` field has no newtype trampoline in `module_exports!`, so it returns the raw
-// `switch_status_t` directly.
-unsafe extern "C" fn switch_module_runtime() -> fswtch::sys::switch_status_t {
+// FreeSWITCH invokes runtime callbacks using the module function-table ABI. `module_exports!`
+// bridges this safe `extern "C" fn` (returning `fswtch::Status`) into the raw C function-table
+// layout internally, so module authors write `-> fswtch::Status` and never touch `sys`.
+extern "C" fn switch_module_runtime() -> Status {
     RUNTIME_TICKS.fetch_add(1, Ordering::Relaxed);
     fswtch::log_info("mod_lifecycle", "runtime tick");
-    SUCCESS.raw()
+    SUCCESS
 }
 
-// FreeSWITCH invokes shutdown callbacks using the module function-table ABI; the `module_exports!`
-// macro bridges this safe `extern "C" fn` (returning `fswtch::Status`) to the raw status return.
+// FreeSWITCH invokes shutdown callbacks using the module function-table ABI; `module_exports!`
+// bridges this safe `extern "C" fn` (returning `fswtch::Status`) to the raw status return.
 extern "C" fn switch_module_shutdown() -> Status {
     SHUTDOWNS.fetch_add(1, Ordering::Relaxed);
     fswtch::log_info("mod_lifecycle", "shutdown callback invoked");

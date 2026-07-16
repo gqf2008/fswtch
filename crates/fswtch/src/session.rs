@@ -11,11 +11,16 @@ pub struct Session {
 impl Session {
     /// Wraps a FreeSWITCH session pointer for the duration of a callback.
     ///
+    /// Generic over the pointee so the `api_callback!`/`app_callback!` trampolines can pass a
+    /// pointee-erased `*mut c_void` (never naming a `sys` type) while internal call sites pass the
+    /// real session pointer type; the pointee is erased to the session type by an `as` cast.
+    ///
     /// # Safety
     ///
     /// `raw` must point to a live FreeSWITCH session and remain valid while this wrapper is used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_core_session_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self { raw })
+    pub unsafe fn from_raw<T>(raw: *mut T) -> Option<Self> {
+        // SAFETY: pointer validity is the caller's contract (see `# Safety`); null → None.
+        NonNull::new(raw as *mut sys::switch_core_session_t).map(|raw| Self { raw })
     }
 
     #[inline]

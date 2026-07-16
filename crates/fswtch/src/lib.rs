@@ -40,7 +40,13 @@ mod xml;
 
 pub mod dsp;
 
-pub use fswtch_sys as sys;
+// The raw `fswtch_sys` crate is an internal implementation detail. It is `pub(crate)` so the
+// safe wrappers can name C types internally, but it is deliberately NOT part of `fswtch`'s
+// public API: no `*-sys` type appears in any documented signature. The `#[macro_export]`
+// macros below never reference `$crate::sys`; the only FFI struct the macros materialize in a
+// downstream crate (`module_exports!`'s module-interface table) is constructed through the
+// `#[doc(hidden)]` `__ModuleFunctionTable` wrapper, so even that path is sys-free at the call site.
+pub(crate) use fswtch_sys as sys;
 
 pub use buffer::*;
 pub use caller::*;
@@ -91,11 +97,15 @@ pub use module::{
     TimerInterface, TimerNextFn, TimerStepFn, TimerSyncFn,
 };
 pub use nat::{
-    NatIpProto, add_mapping as nat_add_mapping, del_mapping as nat_del_mapping, init as nat_init,
+    add_mapping as nat_add_mapping, del_mapping as nat_del_mapping, init as nat_init,
     is_initialized as nat_is_initialized, late_init as nat_late_init, reinit as nat_reinit,
     republish as nat_republish, set_mapping as nat_set_mapping, shutdown as nat_shutdown,
     type_str as nat_type_str,
 };
+// `#[doc(hidden)]` FFI glue used only by the `module_exports!` macro to build a module-interface
+// table without naming a `*-sys` type at the call site. Not part of the public API.
+#[doc(hidden)]
+pub use module::__ModuleFunctionTable;
 pub use network_list::{AclVerdict, NetworkList};
 pub use packetizer::{BitstreamType, Packetizer};
 pub use plc::Plc;
@@ -115,7 +125,7 @@ pub use speex::*;
 pub use status::{
     CAUSE_REQUESTED_CHAN_UNAVAIL, CAUSE_SUCCESS, CallDirection, Cause, ChannelState, FALSE, GENERR,
     HupType, OriginateFlag, Result, SUCCESS, Status, SwitchError, false_on_success,
-    status_to_result, switch_bool,
+    status_to_result,
 };
 pub use stream::*;
 pub use timer::Timer;
@@ -129,20 +139,23 @@ pub use xml::*;
 #[macro_export]
 macro_rules! api_callback {
     (fn $name:ident($cmd:ident, $session:ident, $stream:ident) $body:block) => {
-        // FFI boundary: returns `sys::switch_status_t` (raw). The user's `$body` runs in an
-        // inner closure that returns `fswtch::Status`; early `return Status::X` inside the
-        // body returns from the closure, and `.raw()` translates it here.
-        // The whole body — including the `from_raw` conversions and the user's `$body` — is
-        // wrapped in `catch_unwind` so a panic cannot unwind across the `unsafe extern "C"`
-        // boundary into FreeSWITCH (which is UB / aborts the whole FS process). On panic we
-        // log via `fswtch::log_error` and return `Status::GENERR`. This relies on the
+        // FFI boundary: returns `$crate::Status` directly. `Status` is `#[repr(transparent)]`
+        // over `switch_status_t`, so `extern "C" fn() -> Status` has the identical ABI to
+        // `-> switch_status_t` that FreeSWITCH expects — no `.raw()` conversion needed.
+        // Pointer parameters are `*mut std::ffi::c_void` (pointee-erased; ABI-identical to the
+        // real FreeSWITCH pointer types), so the macro never names a `sys` type. The user's
+        // `$body` runs in an inner closure returning `fswtch::Status`; early `return` inside
+        // the body returns from the closure.
+        // The whole body is wrapped in `catch_unwind` so a panic cannot unwind across the
+        // `unsafe extern "C"` boundary into FreeSWITCH (UB / aborts the whole FS process). On
+        // panic we log via `fswtch::log_error` and return `Status::GENERR`. This relies on the
         // downstream crate being built with `panic = "unwind"` (the default; the mod_* crates
         // set it explicitly).
         unsafe extern "C" fn $name(
             cmd_raw: *const ::std::ffi::c_char,
-            session_raw: *mut $crate::sys::switch_core_session_t,
-            stream_raw: *mut $crate::sys::switch_stream_handle_t,
-        ) -> $crate::sys::switch_status_t {
+            session_raw: *mut ::std::ffi::c_void,
+            stream_raw: *mut ::std::ffi::c_void,
+        ) -> $crate::Status {
             let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
                 let body = |$cmd: Option<String>,
                             $session: Option<$crate::Session>,
@@ -154,13 +167,13 @@ macro_rules! api_callback {
                 body($cmd, $session, $stream)
             }));
             match result {
-                ::std::result::Result::Ok(status) => status.raw(),
+                ::std::result::Result::Ok(status) => status,
                 ::std::result::Result::Err(panic) => {
                     $crate::log_error(
                         "fswtch",
                         ::std::format!("panic in api callback {}: {:?}", stringify!($name), panic),
                     );
-                    $crate::Status::GENERR.raw()
+                    $crate::Status::GENERR
                 }
             }
         }
@@ -172,9 +185,10 @@ macro_rules! app_callback {
     (fn $name:ident($session:ident, $data:ident) $body:block) => {
         // See `api_callback!` — the body is wrapped in `catch_unwind` so a panic cannot
         // unwind across the `unsafe extern "C"` boundary into FreeSWITCH. app callbacks
-        // return unit, so on panic we just log and return.
+        // return unit, so on panic we just log and return. The session pointer is passed as
+        // `*mut c_void` (pointee-erased); no `sys` type is named by the macro.
         unsafe extern "C" fn $name(
-            $session: *mut $crate::sys::switch_core_session_t,
+            $session: *mut ::std::ffi::c_void,
             $data: *const ::std::ffi::c_char,
         ) {
             let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
@@ -195,12 +209,14 @@ macro_rules! app_callback {
 #[macro_export]
 macro_rules! chat_callback {
     (fn $name:ident($event:ident, $data:ident) $body:block) => {
-        // See `api_callback!` — returning `fswtch::Status`, wrapped in `catch_unwind` so a panic cannot unwind
-        // across the `unsafe extern "C"` boundary into FreeSWITCH.
+        // See `api_callback!` — returning `$crate::Status` (repr-transparent over
+        // `switch_status_t`, ABI-identical), wrapped in `catch_unwind` so a panic cannot
+        // unwind across the `unsafe extern "C"` boundary into FreeSWITCH. Pointer params are
+        // pointee-erased `*mut c_void`; the macro names no `sys` type.
         unsafe extern "C" fn $name(
-            event_raw: *mut $crate::sys::switch_event_t,
+            event_raw: *mut ::std::ffi::c_void,
             data_raw: *const ::std::ffi::c_char,
-        ) -> $crate::sys::switch_status_t {
+        ) -> $crate::Status {
             let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
                 let body =
                     |$event: $crate::EventRef, $data: Option<String>| -> $crate::Status { $body };
@@ -209,13 +225,13 @@ macro_rules! chat_callback {
                 body($event, $data)
             }));
             match result {
-                ::std::result::Result::Ok(status) => status.raw(),
+                ::std::result::Result::Ok(status) => status,
                 ::std::result::Result::Err(panic) => {
                     $crate::log_error(
                         "fswtch",
                         ::std::format!("panic in chat callback {}: {:?}", stringify!($name), panic),
                     );
-                    $crate::Status::GENERR.raw()
+                    $crate::Status::GENERR
                 }
             }
         }
@@ -230,8 +246,9 @@ macro_rules! event_callback {
     (fn $name:ident($event:ident) $body:block) => {
         // See `api_callback!` — the body is wrapped in `catch_unwind` so a panic cannot
         // unwind across the `unsafe extern "C"` boundary into FreeSWITCH. Event callbacks
-        // return unit, so on panic we just log and return.
-        unsafe extern "C" fn $name($event: *mut $crate::sys::switch_event_t) {
+        // return unit, so on panic we just log and return. The event pointer is passed as
+        // `*mut c_void` (pointee-erased); no `sys` type is named by the macro.
+        unsafe extern "C" fn $name($event: *mut ::std::ffi::c_void) {
             let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
                 let $event = unsafe { $crate::EventRef::from_raw($event) };
                 $body
@@ -249,22 +266,23 @@ macro_rules! event_callback {
 #[macro_export]
 macro_rules! module_load {
     (fn $name:ident($module:ident) for $module_name:literal $body:block) => {
-        // Returns `sys::switch_status_t` (raw) at the FFI boundary; the user's `$body`
-        // produces `fswtch::Result<ModuleBuilder>`, mapped to a `Status` and unwrapped to
-        // its raw value here.
+        // Returns `$crate::Status` directly at the FFI boundary (repr-transparent over
+        // `switch_status_t`, ABI-identical); the user's `$body` produces `fswtch::Result`,
+        // mapped to a `Status` here. Pointer params are pointee-erased `*mut c_void`; the
+        // macro names no `sys` type.
         unsafe extern "C" fn $name(
-            module_interface: *mut *mut $crate::sys::switch_loadable_module_interface_t,
-            pool: *mut $crate::sys::switch_memory_pool_t,
-        ) -> $crate::sys::switch_status_t {
+            module_interface: *mut *mut ::std::ffi::c_void,
+            pool: *mut ::std::ffi::c_void,
+        ) -> $crate::Status {
             let $module =
                 match unsafe { $crate::ModuleBuilder::new(module_interface, pool, $module_name) } {
                     Ok(module) => module,
-                    Err(error) => return error.0.raw(),
+                    Err(error) => return error.status(),
                 };
             let result: $crate::Result<$crate::ModuleBuilder> = $body;
             match result {
-                Ok(_) => $crate::Status::SUCCESS.raw(),
-                Err(error) => error.0.raw(),
+                Ok(_) => $crate::Status::SUCCESS,
+                Err(error) => error.status(),
             }
         }
     };

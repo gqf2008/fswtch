@@ -1,7 +1,7 @@
 //! FreeSWITCH enum wrappers: `Status`, `Cause`, `ChannelState`, `CallDirection`,
 //! `OriginateFlag`.
 //!
-//! Each is a `#[derive(Copy, Clone, …)] pub struct T(pub sys::RawT)` newtype wrapping the
+//! Each is a `#[derive(Copy, Clone, …)] pub struct T(pub(crate) sys::RawT)` newtype wrapping the
 //! bindgen-generated C enum/underlying int. This gives:
 //!
 //! - **Type safety** — `Status` and `Cause` are distinct newtypes; they cannot be mixed even
@@ -26,7 +26,7 @@ use crate::sys;
 /// FreeSWITCH function return status (`switch_status_t`).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Status(pub sys::switch_status_t);
+pub struct Status(pub(crate) sys::switch_status_t);
 
 impl Status {
     pub const SUCCESS: Self = Self(sys::switch_status_t::SWITCH_STATUS_SUCCESS);
@@ -58,13 +58,13 @@ impl Status {
 
     /// The raw `switch_status_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_status_t {
+    pub(crate) const fn raw(self) -> sys::switch_status_t {
         self.0
     }
 
     /// Wraps a raw `switch_status_t` returned by FreeSWITCH.
     #[inline]
-    pub const fn from_raw(v: sys::switch_status_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_status_t) -> Self {
         Self(v)
     }
 
@@ -90,7 +90,7 @@ impl From<sys::switch_status_t> for Status {
 /// therefore never fails; use `as_str()` / `is_success()` for inspection.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Cause(pub sys::switch_call_cause_t);
+pub struct Cause(pub(crate) sys::switch_call_cause_t);
 
 impl Cause {
     pub const NONE: Self = Self(sys::switch_call_cause_t_SWITCH_CAUSE_NONE);
@@ -221,13 +221,13 @@ impl Cause {
 
     /// The raw `switch_call_cause_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_call_cause_t {
+    pub(crate) const fn raw(self) -> sys::switch_call_cause_t {
         self.0
     }
 
     /// Wraps a raw cause returned by FreeSWITCH. Never fails (open value space).
     #[inline]
-    pub const fn from_raw(v: sys::switch_call_cause_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_call_cause_t) -> Self {
         Self(v)
     }
 
@@ -259,7 +259,7 @@ impl From<sys::switch_call_cause_t> for Cause {
 /// FreeSWITCH channel state-machine state (`switch_channel_state_t`).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct ChannelState(pub sys::switch_channel_state_t);
+pub struct ChannelState(pub(crate) sys::switch_channel_state_t);
 
 impl ChannelState {
     pub const NONE: Self = Self(sys::switch_channel_state_t_CS_NONE);
@@ -279,13 +279,13 @@ impl ChannelState {
 
     /// The raw `switch_channel_state_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_channel_state_t {
+    pub(crate) const fn raw(self) -> sys::switch_channel_state_t {
         self.0
     }
 
     /// Wraps a raw state returned by FreeSWITCH.
     #[inline]
-    pub const fn from_raw(v: sys::switch_channel_state_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_channel_state_t) -> Self {
         Self(v)
     }
 
@@ -307,7 +307,7 @@ impl From<sys::switch_channel_state_t> for ChannelState {
 /// FreeSWITCH call direction (`switch_call_direction_t`).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct CallDirection(pub sys::switch_call_direction_t);
+pub struct CallDirection(pub(crate) sys::switch_call_direction_t);
 
 impl CallDirection {
     pub const INBOUND: Self = Self(sys::switch_call_direction_t_SWITCH_CALL_DIRECTION_INBOUND);
@@ -315,13 +315,13 @@ impl CallDirection {
 
     /// The raw `switch_call_direction_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_call_direction_t {
+    pub(crate) const fn raw(self) -> sys::switch_call_direction_t {
         self.0
     }
 
     /// Wraps a raw direction.
     #[inline]
-    pub const fn from_raw(v: sys::switch_call_direction_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_call_direction_t) -> Self {
         Self(v)
     }
 
@@ -344,7 +344,7 @@ impl From<sys::switch_call_direction_t> for CallDirection {
 /// test with [`contains`](Self::contains).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct OriginateFlag(pub sys::switch_originate_flag_t);
+pub struct OriginateFlag(pub(crate) sys::switch_originate_flag_t);
 
 impl OriginateFlag {
     pub const NONE: Self = Self(sys::switch_originate_flag_enum_t_SOF_NONE as _);
@@ -362,13 +362,13 @@ impl OriginateFlag {
 
     /// The raw bitset value, for FFI.
     #[inline]
-    pub const fn bits(self) -> sys::switch_originate_flag_t {
+    pub(crate) const fn bits(self) -> sys::switch_originate_flag_t {
         self.0
     }
 
     /// Wraps a raw bitset.
     #[inline]
-    pub const fn from_raw(v: sys::switch_originate_flag_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_originate_flag_t) -> Self {
         Self(v)
     }
 
@@ -414,7 +414,28 @@ impl std::ops::Not for OriginateFlag {
 // ── Status → Result bridge ───────────────────────────────────────────────
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct SwitchError(pub Status);
+pub struct SwitchError(pub(crate) Status);
+
+impl SwitchError {
+    /// Constructs an error carrying `status` (the non-idiomatic-looking constructor for the
+    /// private `Status` field; prefer `.into()` from a `Status`).
+    #[inline]
+    pub const fn new(status: Status) -> Self {
+        Self(status)
+    }
+
+    /// The FreeSWITCH `Status` carried by this error.
+    #[inline]
+    pub const fn status(self) -> Status {
+        self.0
+    }
+}
+
+impl From<Status> for SwitchError {
+    fn from(status: Status) -> Self {
+        Self(status)
+    }
+}
 
 impl fmt::Display for SwitchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -470,7 +491,7 @@ pub const CAUSE_SUCCESS: Cause = Cause::SUCCESS;
 pub const CAUSE_REQUESTED_CHAN_UNAVAIL: Cause = Cause::REQUESTED_CHAN_UNAVAIL;
 
 /// Maps a Rust `bool` to FreeSWITCH's `switch_bool_t` (`SWITCH_TRUE`/`SWITCH_FALSE`).
-pub fn switch_bool(value: bool) -> sys::switch_bool_t {
+pub(crate) fn switch_bool(value: bool) -> sys::switch_bool_t {
     if value {
         sys::switch_bool_t_SWITCH_TRUE
     } else {
@@ -569,7 +590,7 @@ mod tests {
 /// the `#define`).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct HupType(pub sys::switch_hup_type_t);
+pub struct HupType(pub(crate) sys::switch_hup_type_t);
 
 impl HupType {
     pub const NONE: Self = Self(sys::switch_hup_type_t_SHT_NONE);
@@ -578,13 +599,14 @@ impl HupType {
 
     /// The raw bitset value, for FFI.
     #[inline]
-    pub const fn bits(self) -> sys::switch_hup_type_t {
+    pub(crate) const fn bits(self) -> sys::switch_hup_type_t {
         self.0
     }
 
     /// Wraps a raw bitset.
     #[inline]
-    pub const fn from_raw(v: sys::switch_hup_type_t) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn from_raw(v: sys::switch_hup_type_t) -> Self {
         Self(v)
     }
 

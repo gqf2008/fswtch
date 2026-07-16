@@ -16,7 +16,7 @@ use crate::{CallDirection, Cause, ChannelState, Event, Result, cstring, status_t
 /// `OriginateFlag` pattern.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct ChannelFlag(pub sys::switch_channel_flag_t);
+pub struct ChannelFlag(pub(crate) sys::switch_channel_flag_t);
 
 impl ChannelFlag {
     pub const ANSWERED: Self = Self(sys::switch_channel_flag_t_CF_ANSWERED);
@@ -48,13 +48,14 @@ impl ChannelFlag {
 
     /// The raw bitset value, for FFI.
     #[inline]
-    pub const fn bits(self) -> sys::switch_channel_flag_t {
+    pub(crate) const fn bits(self) -> sys::switch_channel_flag_t {
         self.0
     }
 
     /// Wraps a raw `switch_channel_flag_t` (e.g. a `CF_*` constant not exposed above).
     #[inline]
-    pub const fn from_raw(v: sys::switch_channel_flag_t) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn from_raw(v: sys::switch_channel_flag_t) -> Self {
         Self(v)
     }
 
@@ -90,7 +91,7 @@ impl std::ops::BitOrAssign for ChannelFlag {
 /// wrap returned values with [`from_raw`](Self::from_raw).
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct CallState(pub sys::switch_channel_callstate_t);
+pub struct CallState(pub(crate) sys::switch_channel_callstate_t);
 
 impl CallState {
     pub const DOWN: Self = Self(sys::switch_channel_callstate_t_CCS_DOWN);
@@ -105,13 +106,13 @@ impl CallState {
 
     /// The raw `switch_channel_callstate_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_channel_callstate_t {
+    pub(crate) const fn raw(self) -> sys::switch_channel_callstate_t {
         self.0
     }
 
     /// Wraps a raw call-state returned by FreeSWITCH.
     #[inline]
-    pub const fn from_raw(v: sys::switch_channel_callstate_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_channel_callstate_t) -> Self {
         Self(v)
     }
 

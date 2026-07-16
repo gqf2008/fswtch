@@ -15,7 +15,7 @@ use std::ptr::NonNull;
 /// [`contains`](Self::contains), matching the [`crate::ChannelFlag`] / [`crate::IoFlags`] pattern.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct MediaFlag(pub sys::switch_media_flag_t);
+pub struct MediaFlag(pub(crate) sys::switch_media_flag_t);
 
 impl MediaFlag {
     pub const NONE: Self = Self(sys::switch_media_flag_enum_t_SMF_NONE);
@@ -33,13 +33,14 @@ impl MediaFlag {
 
     /// The raw bitset value, for FFI.
     #[inline]
-    pub const fn bits(self) -> sys::switch_media_flag_t {
+    pub(crate) const fn bits(self) -> sys::switch_media_flag_t {
         self.0
     }
 
     /// Wraps a raw `switch_media_flag_t` (e.g. an `SMF_*` constant or an OR-ed combination).
     #[inline]
-    pub const fn from_raw(v: sys::switch_media_flag_t) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn from_raw(v: sys::switch_media_flag_t) -> Self {
         Self(v)
     }
 
@@ -78,7 +79,7 @@ impl std::ops::BitOrAssign for MediaFlag {
 /// partner; `BOTH` to both legs.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct DigitActionTarget(pub sys::switch_digit_action_target_t);
+pub struct DigitActionTarget(pub(crate) sys::switch_digit_action_target_t);
 
 impl DigitActionTarget {
     /// Apply matched actions to the owning session's own leg.
@@ -90,13 +91,13 @@ impl DigitActionTarget {
 
     /// The raw `switch_digit_action_target_t` value, for FFI.
     #[inline]
-    pub const fn raw(self) -> sys::switch_digit_action_target_t {
+    pub(crate) const fn raw(self) -> sys::switch_digit_action_target_t {
         self.0
     }
 
     /// Wraps a raw target returned by FreeSWITCH.
     #[inline]
-    pub const fn from_raw(v: sys::switch_digit_action_target_t) -> Self {
+    pub(crate) const fn from_raw(v: sys::switch_digit_action_target_t) -> Self {
         Self(v)
     }
 

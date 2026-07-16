@@ -38,7 +38,7 @@ fswtch::api_callback! {
 
         let enriched = enrich_cdr(&value);
         if let Err(error) = fire_cdr_event(&enriched) {
-            return error.0;
+            return error.status();
         }
         fswtch::log_info(
             "mod_cdr_enricher",

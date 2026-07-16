@@ -25,7 +25,7 @@ fswtch::chat_callback! {
 
         let mut out = match fswtch::Event::custom("fswtch::chatbot_bridge") {
             Ok(event) => event,
-            Err(error) => return error.0,
+            Err(error) => return error.status(),
         };
 
         for result in [
@@ -35,12 +35,12 @@ fswtch::chat_callback! {
             out.add_header("Chatbot-Provider", "example-llm"),
         ] {
             if let Err(error) = result {
-                return error.0;
+                return error.status();
             }
         }
 
         if let Err(error) = out.fire() {
-            return error.0;
+            return error.status();
         }
         MESSAGES_BRIDGED.fetch_add(1, Ordering::Relaxed);
         fswtch::log_info(

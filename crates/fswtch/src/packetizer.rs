@@ -49,7 +49,7 @@ use crate::{FALSE, GENERR, Result, SUCCESS, SwitchError, status_to_result, sys};
 /// bitstream. `INVALID` is the sentinel FreeSWITCH uses to mark an unknown stream and is
 /// exposed for round-tripping raw values; constructing a [`Packetizer`] with it will fail.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct BitstreamType(pub sys::switch_packetizer_bitstream_t);
+pub struct BitstreamType(pub(crate) sys::switch_packetizer_bitstream_t);
 
 impl BitstreamType {
     /// H.264 Annex-B bitstream using the `00 00 00 01` or `00 00 01` start-code separator.
@@ -79,7 +79,8 @@ impl BitstreamType {
 
     /// Wraps a raw `switch_packetizer_bitstream_t` returned from FFI.
     #[inline]
-    pub const fn from_raw(raw: sys::switch_packetizer_bitstream_t) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn from_raw(raw: sys::switch_packetizer_bitstream_t) -> Self {
         Self(raw)
     }
 

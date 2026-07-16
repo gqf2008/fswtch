@@ -53,7 +53,7 @@ pub fn start() -> fswtch::Result<()> {
             MODULE,
             format!("tokio Runtime creation failed: {e} — module load aborted"),
         );
-        SwitchError(GENERR)
+        SwitchError::new(GENERR)
     })?;
 
     log_info(MODULE, "tokio Runtime started (multi-thread worker pool)");

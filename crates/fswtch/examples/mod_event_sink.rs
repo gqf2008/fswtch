@@ -30,7 +30,7 @@ fswtch::api_callback! {
                 );
                 stream.write(&format!("event fired count={count}\n"))
             }
-            Err(error) => error.0,
+            Err(error) => error.status(),
         }
     }
 }
