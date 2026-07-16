@@ -288,7 +288,7 @@ impl SpeexResampler {
     }
 
     /// Resamples interleaved i16 audio: `input` → `output`. Returns `(status, in_used,
-    /// out_generated)` — the speexdsp status code (0 = success, negative = error), the number of
+    /// out_generated)` — the speexdsp status code (0 = success, non-zero = error), the number of
     /// input samples consumed, and output samples produced.
     pub fn process_int(&self, channel: u32, input: &[i16], output: &mut [i16]) -> (i32, u32, u32) {
         let mut in_len = input.len() as u32;
