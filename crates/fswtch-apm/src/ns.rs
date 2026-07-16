@@ -81,7 +81,7 @@ impl NoiseSuppressor {
 
     /// The raw `fswtch_ns_t` pointer for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::fswtch_ns_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::fswtch_ns_t {
         self.raw.as_ptr()
     }
 
@@ -92,12 +92,12 @@ impl NoiseSuppressor {
     /// `raw` must point to a live `fswtch_ns_t` that the caller is willing to hand over for
     /// destruction via `fswtch_ns_destroy` when this [`NoiseSuppressor`] is dropped. The rate /
     /// channel count must match those the handle was created with.
-    pub unsafe fn from_raw(
-        raw: *mut sys::fswtch_ns_t,
+    pub unsafe fn from_raw<T>(
+        raw: *mut T,
         sample_rate_hz: i32,
         num_channels: usize,
     ) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self {
+        NonNull::new(raw as *mut sys::fswtch_ns_t).map(|raw| Self {
             raw,
             sample_rate_hz,
             num_channels,

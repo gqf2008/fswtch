@@ -20,7 +20,7 @@ impl Stream {
         NonNull::new(raw as *mut sys::switch_stream_handle_t).map(|raw| Self { raw })
     }
 
-    pub fn as_ptr(&self) -> *mut sys::switch_stream_handle_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_stream_handle_t {
         self.raw.as_ptr()
     }
 
@@ -49,7 +49,10 @@ impl Stream {
 /// `raw` must point to a live FreeSWITCH stream handle and remain valid for the duration of this
 /// call.
 // SAFETY: The caller must provide a live FreeSWITCH stream handle for the full call duration.
-pub unsafe fn write_stream_response(raw: *mut sys::switch_stream_handle_t, text: &str) -> Status {
+pub(crate) unsafe fn write_stream_response(
+    raw: *mut sys::switch_stream_handle_t,
+    text: &str,
+) -> Status {
     // SAFETY: Forwarded from `write_stream_response`'s caller.
     let Some(mut stream) = (unsafe { Stream::from_raw(raw) }) else {
         return FALSE;
@@ -90,7 +93,7 @@ impl ApiStream {
         })
     }
 
-    pub fn as_ptr(self) -> *mut sys::switch_stream_handle_t {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_stream_handle_t {
         self.raw
     }
 
@@ -102,7 +105,10 @@ impl ApiStream {
 
 // ── stream system/file helpers ─────────────────────────────────────────────
 
-pub fn stream_system(cmd: impl AsRef<str>, stream: *mut crate::sys::switch_stream_handle_t) -> i32 {
+pub(crate) fn stream_system(
+    cmd: impl AsRef<str>,
+    stream: *mut crate::sys::switch_stream_handle_t,
+) -> i32 {
     let cmd = match crate::cstring(cmd) {
         Ok(s) => s,
         Err(_) => return -1,
@@ -111,7 +117,7 @@ pub fn stream_system(cmd: impl AsRef<str>, stream: *mut crate::sys::switch_strea
     unsafe { crate::sys::switch_stream_system(cmd.as_ptr(), stream) }
 }
 
-pub fn stream_system_fork(
+pub(crate) fn stream_system_fork(
     cmd: impl AsRef<str>,
     stream: *mut crate::sys::switch_stream_handle_t,
 ) -> i32 {
@@ -123,7 +129,7 @@ pub fn stream_system_fork(
     unsafe { crate::sys::switch_stream_system_fork(cmd.as_ptr(), stream) }
 }
 
-pub fn stream_write_file_contents(
+pub(crate) fn stream_write_file_contents(
     stream: *mut crate::sys::switch_stream_handle_t,
     path: impl AsRef<str>,
 ) -> crate::Result<()> {

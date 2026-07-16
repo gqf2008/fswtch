@@ -99,7 +99,7 @@ impl MediaBugConfig {
         })
     }
 
-    pub const fn stop_time(mut self, stop_time: sys::time_t) -> Self {
+    pub(crate) const fn stop_time(mut self, stop_time: sys::time_t) -> Self {
         self.stop_time = stop_time;
         self
     }
@@ -111,7 +111,7 @@ pub struct MediaBug {
 }
 
 impl MediaBug {
-    pub fn as_ptr(self) -> *mut sys::switch_media_bug_t {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_media_bug_t {
         self.raw.as_ptr()
     }
 
@@ -162,7 +162,7 @@ impl MediaBug {
     }
 
     /// The video ping frame pointer (escape hatch; borrows bug storage).
-    pub fn video_ping_frame(self) -> *mut sys::switch_frame_t {
+    pub(crate) fn video_ping_frame(self) -> *mut sys::switch_frame_t {
         // SAFETY: `self.raw` is a live bug.
         call_ffi!(sys::switch_core_media_bug_get_video_ping_frame(
             self.raw.as_ptr()
@@ -178,7 +178,7 @@ impl MediaBug {
     }
 
     /// Copies the bug's media params into `mm` (a `switch_mm_t*` you provide). Internal/advanced.
-    pub fn media_params(self, mm: *mut sys::switch_mm_t) {
+    pub(crate) fn media_params(self, mm: *mut sys::switch_mm_t) {
         // SAFETY: `self.raw` is a live bug; `mm` is a valid `switch_mm_t*` per caller.
         call_ffi!(sys::switch_core_media_bug_get_media_params(
             self.raw.as_ptr(),
@@ -187,7 +187,7 @@ impl MediaBug {
     }
 
     /// Applies `mm` (a `switch_mm_t*`) to the bug. Internal/advanced.
-    pub fn set_media_params(self, mm: *mut sys::switch_mm_t) {
+    pub(crate) fn set_media_params(self, mm: *mut sys::switch_mm_t) {
         // SAFETY: `self.raw` is a live bug; `mm` is a valid `switch_mm_t*` per caller.
         call_ffi!(sys::switch_core_media_bug_set_media_params(
             self.raw.as_ptr(),
@@ -196,7 +196,7 @@ impl MediaBug {
     }
 
     /// Pushes a spy frame into the bug (video spy). `rw` selects read/write.
-    pub fn push_spy_frame(
+    pub(crate) fn push_spy_frame(
         self,
         frame: *mut sys::switch_frame_t,
         rw: sys::switch_rw_t,
@@ -210,7 +210,7 @@ impl MediaBug {
     }
 
     /// Patches a spy image into the bug (video spy). `rw` selects read/write.
-    pub fn patch_spy_frame(
+    pub(crate) fn patch_spy_frame(
         self,
         img: *mut sys::switch_image_t,
         rw: sys::switch_rw_t,
@@ -243,7 +243,7 @@ impl MediaBug {
 
 impl MediaBug {
     /// Sets the spy format on this bug (video spy). Advanced.
-    pub fn set_spy_fmt(self, spy_fmt: sys::switch_vid_spy_fmt_t) {
+    pub(crate) fn set_spy_fmt(self, spy_fmt: sys::switch_vid_spy_fmt_t) {
         // SAFETY: `self.as_ptr()` is a live bug.
         call_ffi!(sys::switch_media_bug_set_spy_fmt(self.as_ptr(), spy_fmt));
     }
@@ -327,14 +327,14 @@ impl<'a> MediaBugContext<'a> {
     /// # Safety
     ///
     /// `raw` must point to a live media bug and must remain valid for `'a`.
-    pub unsafe fn from_raw(raw: *mut sys::switch_media_bug_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_media_bug_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _lifetime: PhantomData,
         })
     }
 
-    pub fn as_ptr(&self) -> *mut sys::switch_media_bug_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_media_bug_t {
         self.raw.as_ptr()
     }
 
@@ -407,7 +407,7 @@ impl<'a> MediaBugContext<'a> {
         call_ffi!(sys::switch_core_media_bug_flush(self.raw.as_ptr()));
     }
 
-    pub fn read_into(&mut self, frame: &mut sys::switch_frame_t, fill: bool) -> Result<()> {
+    pub(crate) fn read_into(&mut self, frame: &mut sys::switch_frame_t, fill: bool) -> Result<()> {
         let fill = if fill {
             sys::switch_bool_t_SWITCH_TRUE
         } else {
@@ -435,14 +435,14 @@ impl<'a> MediaFrame<'a> {
     /// # Safety
     ///
     /// `raw` must point to a live FreeSWITCH frame and must remain valid for `'a`.
-    pub unsafe fn from_raw(raw: *mut sys::switch_frame_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_frame_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _lifetime: PhantomData,
         })
     }
 
-    pub fn as_ptr(self) -> *mut sys::switch_frame_t {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_frame_t {
         self.raw.as_ptr()
     }
 
@@ -506,14 +506,14 @@ impl<'a> MediaFrameMut<'a> {
     /// # Safety
     ///
     /// `raw` must point to a live FreeSWITCH frame that is safe to mutate for `'a`.
-    pub unsafe fn from_raw(raw: *mut sys::switch_frame_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_frame_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _lifetime: PhantomData,
         })
     }
 
-    pub fn as_ptr(&mut self) -> *mut sys::switch_frame_t {
+    pub(crate) fn as_ptr(&mut self) -> *mut sys::switch_frame_t {
         self.raw.as_ptr()
     }
 
@@ -862,7 +862,7 @@ impl Session {
     }
 
     /// Runs `cb` against every bug on this session registered under `function`. Advanced.
-    pub fn exec_all_media_bugs(
+    pub(crate) fn exec_all_media_bugs(
         self,
         function: impl AsRef<str>,
         cb: sys::switch_media_bug_exec_cb_t,
@@ -879,7 +879,7 @@ impl Session {
     }
 
     /// Removes every bug on this session whose callback matches `callback`.
-    pub fn remove_media_bugs_by_callback(
+    pub(crate) fn remove_media_bugs_by_callback(
         self,
         callback: sys::switch_media_bug_callback_t,
     ) -> Result<()> {
@@ -892,7 +892,7 @@ impl Session {
 
     /// Transfers bugs matching `callback` from this session to `new_session`, optionally
     /// duplicating `user_data` via `dup`. Advanced.
-    pub fn transfer_media_bug_callback(
+    pub(crate) fn transfer_media_bug_callback(
         self,
         new_session: Session,
         callback: sys::switch_media_bug_callback_t,
@@ -911,7 +911,10 @@ impl Session {
 
     /// Enumerates the bugs on this session into a stream handle (debug dump). `stream` is a
     /// `switch_stream_handle_t*` (e.g. from an api callback's stream).
-    pub fn enumerate_media_bugs(self, stream: *mut sys::switch_stream_handle_t) -> Result<()> {
+    pub(crate) fn enumerate_media_bugs(
+        self,
+        stream: *mut sys::switch_stream_handle_t,
+    ) -> Result<()> {
         // SAFETY: live session; `stream` is a valid stream handle per caller.
         status_to_result(call_ffi!(sys::switch_core_media_bug_enumerate(
             self.as_ptr(),
@@ -921,14 +924,14 @@ impl Session {
 
     /// Patches video bugs on this session against `frame` (video pipeline). Returns a
     /// switch_bool_t.
-    pub fn patch_video_media_bugs(self, frame: *mut sys::switch_frame_t) -> u32 {
+    pub(crate) fn patch_video_media_bugs(self, frame: *mut sys::switch_frame_t) -> u32 {
         // SAFETY: live session; `frame` is a valid frame pointer for the call.
         call_ffi!(sys::switch_core_media_bug_patch_video(self.as_ptr(), frame))
     }
 }
 
 /// Parses a spy-format name (e.g. `"split"`) into a `switch_vid_spy_fmt_t`.
-pub fn parse_spy_fmt(name: impl AsRef<str>) -> Result<sys::switch_vid_spy_fmt_t> {
+pub(crate) fn parse_spy_fmt(name: impl AsRef<str>) -> Result<sys::switch_vid_spy_fmt_t> {
     let name = cstring(name)?;
     // SAFETY: `name` is a valid C string.
     Ok(call_ffi!(sys::switch_media_bug_parse_spy_fmt(
@@ -938,17 +941,17 @@ pub fn parse_spy_fmt(name: impl AsRef<str>) -> Result<sys::switch_vid_spy_fmt_t>
 
 // ── raw frame alloc/free/dup ───────────────────────────────────────────────
 
-pub fn frame_alloc(frame: &mut *mut sys::switch_frame_t, size: u64) -> Result<()> {
+pub(crate) fn frame_alloc(frame: &mut *mut sys::switch_frame_t, size: u64) -> Result<()> {
     // SAFETY: `&mut frame` valid out; `size` is a plain value (by-value in the C API).
     status_to_result(unsafe { sys::switch_frame_alloc(frame, size as sys::switch_size_t) })
 }
 
-pub fn frame_free(frame: &mut *mut sys::switch_frame_t) -> Result<()> {
+pub(crate) fn frame_free(frame: &mut *mut sys::switch_frame_t) -> Result<()> {
     // SAFETY: `&mut frame` valid; frees + NULLs.
     status_to_result(unsafe { sys::switch_frame_free(frame) })
 }
 
-pub fn frame_dup(
+pub(crate) fn frame_dup(
     orig: *mut sys::switch_frame_t,
     clone: &mut *mut sys::switch_frame_t,
 ) -> Result<()> {

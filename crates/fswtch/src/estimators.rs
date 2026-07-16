@@ -90,7 +90,7 @@ impl KalmanEstimator {
 
     /// The raw `kalman_estimator_t` pointer, for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::kalman_estimator_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::kalman_estimator_t {
         std::ptr::addr_of!(*self.raw) as *mut sys::kalman_estimator_t
     }
 
@@ -219,7 +219,7 @@ impl CusumDetector {
 
     /// The raw `cusum_kalman_detector_t` pointer, for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::cusum_kalman_detector_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::cusum_kalman_detector_t {
         std::ptr::addr_of!(*self.raw) as *mut sys::cusum_kalman_detector_t
     }
 

@@ -320,7 +320,7 @@ impl EchoCanceller3 {
 
     /// The raw `fswtch_aec3_t` pointer for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::fswtch_aec3_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::fswtch_aec3_t {
         self.raw.as_ptr()
     }
 
@@ -333,13 +333,13 @@ impl EchoCanceller3 {
     /// `sample_rate_hz` / channel counts must match those the handle was created with, since
     /// they drive frame-length validation. Wrapping a handle already owned by another
     /// `EchoCanceller3` (or any RAII guard) is unsound — it would be freed twice.
-    pub unsafe fn from_raw(
-        raw: *mut sys::fswtch_aec3_t,
+    pub unsafe fn from_raw<T>(
+        raw: *mut T,
         sample_rate_hz: i32,
         num_render_channels: usize,
         num_capture_channels: usize,
     ) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self {
+        NonNull::new(raw as *mut sys::fswtch_aec3_t).map(|raw| Self {
             raw,
             sample_rate_hz,
             num_render_channels,

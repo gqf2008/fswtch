@@ -62,7 +62,7 @@ impl Rtp {
 
     /// The underlying `switch_rtp_t *`. Escape hatch for unwrapped RTP features.
     #[inline]
-    pub fn as_ptr(&self) -> *mut switch_rtp_t {
+    pub(crate) fn as_ptr(&self) -> *mut switch_rtp_t {
         self.raw.as_ptr()
     }
 
@@ -410,7 +410,7 @@ impl<'a> RtpPacket<'a> {
 
     /// The underlying `switch_rtp_packet_t *`. Escape hatch for unwrapped packet features.
     #[inline]
-    pub fn as_ptr(self) -> *mut switch_rtp_packet_t {
+    pub(crate) fn as_ptr(self) -> *mut switch_rtp_packet_t {
         self.raw.as_ptr()
     }
 
@@ -624,15 +624,15 @@ impl Rtp {
         // SAFETY: live RTP engine.
         status_to_result(unsafe { sys::switch_rtp_sync_stats(self.as_ptr()) })
     }
-    pub fn test_flag(&self, flags: sys::switch_rtp_flag_t) -> bool {
+    pub(crate) fn test_flag(&self, flags: sys::switch_rtp_flag_t) -> bool {
         // SAFETY: live RTP engine; valid flag bitmask.
         unsafe { sys::switch_rtp_test_flag(self.as_ptr(), flags) != 0 }
     }
-    pub fn set_flag(&self, flag: sys::switch_rtp_flag_t) {
+    pub(crate) fn set_flag(&self, flag: sys::switch_rtp_flag_t) {
         // SAFETY: live RTP engine; valid flag.
         unsafe { sys::switch_rtp_set_flag(self.as_ptr(), flag) };
     }
-    pub fn clear_flag(&self, flag: sys::switch_rtp_flag_t) {
+    pub(crate) fn clear_flag(&self, flag: sys::switch_rtp_flag_t) {
         // SAFETY: live RTP engine; valid flag.
         unsafe { sys::switch_rtp_clear_flag(self.as_ptr(), flag) };
     }
@@ -652,13 +652,13 @@ impl Rtp {
     }
 
     /// RTP stats (borrowed from the engine; do not free). Requires a `pool` for scratch.
-    pub fn get_stats(&self, pool: &Pool) -> *mut sys::switch_rtp_stats_t {
+    pub(crate) fn get_stats(&self, pool: &Pool) -> *mut sys::switch_rtp_stats_t {
         // SAFETY: live RTP engine; live pool.
         unsafe { sys::switch_rtp_get_stats(self.as_ptr(), pool.as_ptr()) }
     }
 
     /// The media timer backing this RTP engine (borrowed; do not free).
-    pub fn get_media_timer(&self) -> *mut sys::switch_timer_t {
+    pub(crate) fn get_media_timer(&self) -> *mut sys::switch_timer_t {
         // SAFETY: live RTP engine.
         unsafe { sys::switch_rtp_get_media_timer(self.as_ptr()) }
     }
@@ -676,7 +676,7 @@ impl Rtp {
         unsafe { sys::switch_rtp_get_default_payload(self.as_ptr()) }
     }
 
-    pub fn set_default_payload(&self, payload: sys::switch_payload_t) {
+    pub(crate) fn set_default_payload(&self, payload: sys::switch_payload_t) {
         // SAFETY: live RTP engine; valid payload.
         unsafe { sys::switch_rtp_set_default_payload(self.as_ptr(), payload) };
     }
@@ -686,7 +686,7 @@ impl Rtp {
         unsafe { sys::switch_rtp_has_dtmf(self.as_ptr()) as u64 }
     }
 
-    pub fn dequeue_dtmf(&self, dtmf: *mut sys::switch_dtmf_t) -> u64 {
+    pub(crate) fn dequeue_dtmf(&self, dtmf: *mut sys::switch_dtmf_t) -> u64 {
         // SAFETY: live RTP engine; `dtmf` valid out per caller.
         unsafe { sys::switch_rtp_dequeue_dtmf(self.as_ptr(), dtmf) as u64 }
     }
@@ -721,7 +721,7 @@ impl Rtp {
 }
 
 /// Releases an RTP port back to the pool. `ip` is the bind address string.
-pub fn rtp_release_port(ip: impl AsRef<str>, port: sys::switch_port_t) {
+pub(crate) fn rtp_release_port(ip: impl AsRef<str>, port: sys::switch_port_t) {
     let ip = match cstring(ip) {
         Ok(s) => s,
         Err(_) => return,

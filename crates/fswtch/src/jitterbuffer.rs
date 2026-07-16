@@ -192,7 +192,7 @@ impl JitterBuffer {
     ///
     /// The pointer is valid for the lifetime of this [`JitterBuffer`].
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_jb_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_jb_t {
         self.raw.as_ptr()
     }
 
@@ -218,7 +218,7 @@ impl JitterBuffer {
     /// had nothing ready.
     ///
     /// Wraps `switch_jb_get_packet`.
-    pub fn get_packet(
+    pub(crate) fn get_packet(
         &self,
         packet: &mut sys::switch_rtp_packet_t,
         len: &mut usize,
@@ -245,7 +245,7 @@ impl JitterBuffer {
     /// hit, `Ok(false)` when no packet with that sequence number is queued.
     ///
     /// Wraps `switch_jb_get_packet_by_seq`.
-    pub fn get_packet_by_seq(
+    pub(crate) fn get_packet_by_seq(
         &self,
         seq: u16,
         packet: &mut sys::switch_rtp_packet_t,
@@ -273,7 +273,7 @@ impl JitterBuffer {
     /// frames ahead to look. On success `frame` is filled with a view of the queued frame.
     ///
     /// Wraps `switch_jb_peek_frame`.
-    pub fn peek_frame(
+    pub(crate) fn peek_frame(
         &self,
         ts: u32,
         seq: u16,
@@ -417,7 +417,7 @@ impl JitterBuffer {
     ///
     /// `session` must be a live `switch_core_session_t` pointer (or null to detach) that
     /// remains valid for as long as the buffer references it.
-    pub unsafe fn set_session(&self, session: *mut sys::switch_core_session_t) {
+    pub(crate) unsafe fn set_session(&self, session: *mut sys::switch_core_session_t) {
         // SAFETY: forwarded to the caller's `# Safety` contract.
         unsafe { sys::switch_jb_set_session(self.raw.as_ptr(), session) };
     }

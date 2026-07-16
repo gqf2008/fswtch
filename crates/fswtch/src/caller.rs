@@ -18,12 +18,12 @@ impl CallerProfile {
     /// # Safety
     ///
     /// `raw` must point to a live caller profile and remain valid while this wrapper is used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_caller_profile_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_caller_profile_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 
     #[inline]
-    pub fn as_ptr(self) -> *mut sys::switch_caller_profile_t {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_caller_profile_t {
         self.raw.as_ptr()
     }
 
@@ -55,12 +55,12 @@ impl CallerExtension {
     ///
     /// `raw` must be null or point to a live caller extension; the extension must remain valid
     /// while this wrapper is used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_caller_extension_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_caller_extension_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 
     #[inline]
-    pub fn as_ptr(self) -> *mut sys::switch_caller_extension_t {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_caller_extension_t {
         self.raw.as_ptr()
     }
 
@@ -176,7 +176,7 @@ mod caller_extension_tests {
 
 // ── caller extension/profile helpers ──────────────────────────────────────
 
-pub fn caller_extension_clone(
+pub(crate) fn caller_extension_clone(
     new_ext: &mut *mut crate::sys::switch_caller_extension_t,
     orig: *mut crate::sys::switch_caller_extension_t,
     pool: &crate::pool::Pool,
@@ -188,7 +188,7 @@ pub fn caller_extension_clone(
 }
 
 impl crate::Session {
-    pub fn caller_extension_add_application(
+    pub(crate) fn caller_extension_add_application(
         self,
         ext: *mut crate::sys::switch_caller_extension_t,
         application_name: impl AsRef<str>,
@@ -208,7 +208,7 @@ impl crate::Session {
         Ok(())
     }
 
-    pub fn caller_profile_clone(
+    pub(crate) fn caller_profile_clone(
         self,
         tocopy: *mut crate::sys::switch_caller_profile_t,
     ) -> *mut crate::sys::switch_caller_profile_t {
@@ -217,7 +217,7 @@ impl crate::Session {
     }
 }
 
-pub fn caller_profile_dup(
+pub(crate) fn caller_profile_dup(
     pool: &crate::pool::Pool,
     tocopy: *mut crate::sys::switch_caller_profile_t,
 ) -> *mut crate::sys::switch_caller_profile_t {
@@ -225,7 +225,7 @@ pub fn caller_profile_dup(
     unsafe { crate::sys::switch_caller_profile_dup(pool.as_ptr(), tocopy) }
 }
 
-pub fn caller_profile_event_set_data(
+pub(crate) fn caller_profile_event_set_data(
     profile: *mut crate::sys::switch_caller_profile_t,
     prefix: impl AsRef<str>,
     event: *mut crate::sys::switch_event_t,

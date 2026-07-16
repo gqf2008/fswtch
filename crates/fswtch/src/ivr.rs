@@ -116,12 +116,6 @@ impl DigitActionTarget {
     }
 }
 
-impl From<sys::switch_digit_action_target_t> for DigitActionTarget {
-    fn from(v: sys::switch_digit_action_target_t) -> Self {
-        Self(v)
-    }
-}
-
 /// Broadcasts `path` (a media path or app/arg string) to the channel identified by `uuid`, applying
 /// `flags` (a FreeSWITCH `switch_media_flag_t` bitset; pass `0` for the default).
 ///
@@ -373,14 +367,14 @@ impl IvrMenu {
 
     /// The underlying `switch_ivr_menu_t *`. Valid for as long as this `IvrMenu` is alive.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_ivr_menu_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_ivr_menu_t {
         self.raw.as_ptr()
     }
 
     /// Binds `digits` (a DTMF pattern) to a built-in `SWITCH_IVR_ACTION_*` action with an `arg`
     /// string (e.g. a sound path for `SWITCH_IVR_ACTION_PLAYSOUND` or an app string for
     /// `SWITCH_IVR_ACTION_EXECAPP`).
-    pub fn bind_action(
+    pub(crate) fn bind_action(
         &self,
         ivr_action: sys::switch_ivr_action_t,
         arg: impl AsRef<str>,
@@ -402,7 +396,7 @@ impl IvrMenu {
 
     /// Binds `digits` to a custom `function` (an `unsafe extern "C"` menu-action callback), passing
     /// `arg` as its bound argument. The callback must remain valid for the menu's lifetime.
-    pub fn bind_function(
+    pub(crate) fn bind_function(
         &self,
         function: sys::switch_ivr_menu_action_function_t,
         arg: impl AsRef<str>,
@@ -490,7 +484,7 @@ impl<'a> DmachineMatch<'a> {
     }
 
     /// Whether this was a positive (`DM_MATCH_POSITIVE`) or negative (`DM_MATCH_NEGATIVE`) match.
-    pub fn match_type(&self) -> sys::dm_match_type_t {
+    pub(crate) fn match_type(&self) -> sys::dm_match_type_t {
         // SAFETY: `self.raw` is a live match struct.
         unsafe { (*self.raw).type_ }
     }
@@ -500,7 +494,7 @@ impl DigitMachine {
     /// Creates a new digit machine named `name`, allocating against `pool`, with the given
     /// `digit_timeout` and `input_timeout` (ms). The match/non-match callbacks may be `None`.
     /// `user_data` is opaque to FreeSWITCH and must remain valid for the machine's lifetime.
-    pub fn new(
+    pub(crate) fn new(
         name: impl AsRef<str>,
         pool: &Pool,
         digit_timeout: u32,
@@ -534,13 +528,13 @@ impl DigitMachine {
 
     /// The underlying `switch_ivr_dmachine_t *`. Valid for as long as this `DigitMachine` is alive.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_ivr_dmachine_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_ivr_dmachine_t {
         self.raw.as_ptr()
     }
 
     /// Binds `digits` (a pattern, may contain `.`/`|`/`*`/`#`) in `realm` to `key`, optionally
     /// marking it priority (`is_priority`) and attaching a per-match `callback` and `user_data`.
-    pub fn bind(
+    pub(crate) fn bind(
         &self,
         realm: impl AsRef<str>,
         digits: impl AsRef<str>,
@@ -865,7 +859,7 @@ pub fn kill_uuid(uuid: impl AsRef<str>, cause: Cause) -> Result<()> {
 // ── originate / eavesdrop / intercept / schedule / detect ──────────────────
 
 /// Schedules a broadcast of `path` onto `uuid` at `runtime` (epoch seconds). Returns the task id.
-pub fn schedule_broadcast(
+pub(crate) fn schedule_broadcast(
     runtime: i64,
     uuid: impl AsRef<str>,
     path: impl AsRef<str>,
@@ -943,7 +937,7 @@ pub unsafe fn schedule_transfer(
 /// Opens a TTS speech handle: `module_name` is the TTS engine (e.g. `"flite"`, `"cepstral"`),
 /// `voice_name` the voice, `rate`/`interval`/`channels` the audio format, `flags` an in/out
 /// `switch_speech_flag_t`, `pool` the APR pool for the handle's allocations.
-pub fn speech_open(
+pub(crate) fn speech_open(
     sh: *mut sys::switch_speech_handle_t,
     module_name: impl AsRef<str>,
     voice_name: impl AsRef<str>,
@@ -971,7 +965,7 @@ pub fn speech_open(
 }
 
 /// Feeds `text` to the TTS engine for synthesis. `flags` is an in/out `switch_speech_flag_t`.
-pub fn speech_feed_tts(
+pub(crate) fn speech_feed_tts(
     sh: *mut sys::switch_speech_handle_t,
     text: impl AsRef<str>,
     flags: *mut sys::switch_speech_flag_t,
@@ -983,7 +977,7 @@ pub fn speech_feed_tts(
 
 /// Reads synthesized audio from the TTS engine into `data`. `datalen` is in/out (max on input,
 /// actual on output). `flags` in/out.
-pub fn speech_read_tts(
+pub(crate) fn speech_read_tts(
     sh: *mut sys::switch_speech_handle_t,
     data: *mut std::ffi::c_void,
     datalen: &mut u64,
@@ -997,13 +991,13 @@ pub fn speech_read_tts(
 }
 
 /// Flushes the TTS engine's buffer (discards pending synthesis).
-pub fn speech_flush_tts(sh: *mut sys::switch_speech_handle_t) {
+pub(crate) fn speech_flush_tts(sh: *mut sys::switch_speech_handle_t) {
     // SAFETY: `sh` live.
     unsafe { sys::switch_core_speech_flush_tts(sh) };
 }
 
 /// Sets a text parameter on the TTS engine (e.g. `"voice"` → `"alice"`).
-pub fn speech_text_param_tts(
+pub(crate) fn speech_text_param_tts(
     sh: *mut sys::switch_speech_handle_t,
     param: impl AsRef<str>,
     val: impl AsRef<str>,
@@ -1019,7 +1013,7 @@ pub fn speech_text_param_tts(
 }
 
 /// Sets a numeric parameter on the TTS engine.
-pub fn speech_numeric_param_tts(
+pub(crate) fn speech_numeric_param_tts(
     sh: *mut sys::switch_speech_handle_t,
     param: impl AsRef<str>,
     val: i32,
@@ -1033,7 +1027,7 @@ pub fn speech_numeric_param_tts(
 }
 
 /// Sets a float parameter on the TTS engine.
-pub fn speech_float_param_tts(
+pub(crate) fn speech_float_param_tts(
     sh: *mut sys::switch_speech_handle_t,
     param: impl AsRef<str>,
     val: f64,
@@ -1047,7 +1041,7 @@ pub fn speech_float_param_tts(
 }
 
 /// Closes the TTS speech handle (releases engine resources). `flags` in/out.
-pub fn speech_close(
+pub(crate) fn speech_close(
     sh: *mut sys::switch_speech_handle_t,
     flags: *mut sys::switch_speech_flag_t,
 ) -> Result<()> {
@@ -1444,7 +1438,7 @@ impl Session {
     ///
     /// See [`originate`](Self::originate) for the meaning of the returned `OriginateOutcome`.
     #[allow(clippy::too_many_arguments)]
-    pub fn originate_raw(
+    pub(crate) fn originate_raw(
         self,
         bridge_to: *const c_char,
         timelimit_sec: u32,
@@ -1500,7 +1494,7 @@ impl Session {
     /// Full-featured [`multi_threaded_bridge`](Self::multi_threaded_bridge) escape hatch, accepting
     /// an optional input callback and opaque per-session user data pointers. The callback and user
     /// data must remain valid for the duration of the bridge.
-    pub fn multi_threaded_bridge_raw(
+    pub(crate) fn multi_threaded_bridge_raw(
         self,
         peer: Session,
         dtmf_callback: sys::switch_input_callback_function_t,
@@ -1600,7 +1594,7 @@ impl Session {
 
     /// Spells `to_say` on `session` using the given `switch_say_args_t` (built by the caller). A null
     /// input-args pointer selects the default behavior.
-    pub fn say_spell(
+    pub(crate) fn say_spell(
         self,
         to_say: impl AsRef<str>,
         say_args: *mut sys::switch_say_args_t,
@@ -1622,7 +1616,7 @@ impl Session {
     /// Pronounces an IP address on `session`, using the provided `number_func` (a say callback) to
     /// vocalize each octet, plus the given `switch_say_args_t`. A null input-args pointer selects the
     /// default behavior.
-    pub fn say_ip(
+    pub(crate) fn say_ip(
         self,
         to_say: impl AsRef<str>,
         number_func: sys::switch_say_callback_t,
@@ -1647,7 +1641,7 @@ impl Session {
     /// Parses a single queued event for `session` (DTMF, custom events, etc.). Pass the event via its
     /// `*mut switch_event_t` pointer (the [`crate::EventRef`] / [`crate::Event`] escape hatch). A null
     /// event pointer selects the default behavior.
-    pub fn parse_event(self, event: *mut sys::switch_event_t) -> Result<()> {
+    pub(crate) fn parse_event(self, event: *mut sys::switch_event_t) -> Result<()> {
         // SAFETY: `self.as_ptr()` is live; `event` is null or a valid event pointer per the caller's
         // contract.
         let status = unsafe { sys::switch_ivr_parse_event(self.as_ptr(), event) };
@@ -1671,7 +1665,7 @@ impl Session {
     /// Generates a JSON CDR document for `session`. `urlencode` controls whether the body is URL-encoded.
     /// The returned `*mut cJSON` is owned by the caller and must be freed with `cJSON_Delete` (the
     /// underlying `cJSON` type is opaque to this wrapper).
-    pub fn generate_json_cdr(self, urlencode: bool) -> Result<*mut sys::cJSON> {
+    pub(crate) fn generate_json_cdr(self, urlencode: bool) -> Result<*mut sys::cJSON> {
         let mut json: *mut sys::cJSON = std::ptr::null_mut();
         // SAFETY: `self.as_ptr()` is live; `json` is a valid out-pointer.
         let status = unsafe {
@@ -1692,7 +1686,7 @@ impl Session {
     /// Generates an XML CDR document for `session`. The returned `switch_xml_t` is owned by the caller
     /// and must be freed with `switch_xml_free` (the underlying `switch_xml` type is opaque to this
     /// wrapper); a null out-slot selects a freshly allocated document.
-    pub fn generate_xml_cdr(self) -> Result<sys::switch_xml_t> {
+    pub(crate) fn generate_xml_cdr(self) -> Result<sys::switch_xml_t> {
         let mut xml: sys::switch_xml_t = std::ptr::null_mut();
         // SAFETY: `self.as_ptr()` is live; `xml` is a valid out-pointer (null slot => fresh doc).
         let status = unsafe { sys::switch_ivr_generate_xml_cdr(self.as_ptr(), &mut xml) };
@@ -1703,7 +1697,7 @@ impl Session {
     /// Initializes ASR speech detection on `session` using the named module (`mod_name`, e.g.
     /// `"pocketsphinx"`) and `dest` (the recognition destination/path). The `switch_asr_handle_t` slot
     /// (`ah`) is filled by FreeSWITCH; pass a pointer to a `switch_asr_handle_t`.
-    pub fn detect_speech_init(
+    pub(crate) fn detect_speech_init(
         self,
         mod_name: impl AsRef<str>,
         dest: impl AsRef<str>,
@@ -1721,7 +1715,7 @@ impl Session {
 
     /// Starts ASR speech detection on `session` using `mod_name`, loading `grammar` under the name
     /// `name`, with recognition `dest`. The `switch_asr_handle_t` slot (`ah`) is filled by FreeSWITCH.
-    pub fn detect_speech(
+    pub(crate) fn detect_speech(
         self,
         mod_name: impl AsRef<str>,
         grammar: impl AsRef<str>,
@@ -1832,7 +1826,7 @@ impl Session {
     /// Synthesizes and plays `text` on `session` via TTS (`switch_ivr_speak_text`). `tts_name` is
     /// the TTS engine (e.g. `"flite"`, `"cepstral"`), `voice_name` the voice, `args` an optional
     /// `switch_input_args_t*` (pass `null_mut()` for none). Interior NUL rejected.
-    pub fn speak_text(
+    pub(crate) fn speak_text(
         self,
         tts_name: impl AsRef<str>,
         voice_name: impl AsRef<str>,
@@ -1891,7 +1885,7 @@ impl Session {
 
     /// Generates/plays tones from `script` on `session`, `loops` times. `args` is an optional
     /// `switch_input_args_t*` (`null_mut()` for none).
-    pub fn gentones(
+    pub(crate) fn gentones(
         self,
         script: impl AsRef<str>,
         loops: i32,
@@ -1928,7 +1922,7 @@ impl Session {
     /// optional overrides. The b-leg session and cause are returned via out-params (`null_mut()`
     /// to ignore). Advanced; prefer [`originate`](Self::originate) for simple cases.
     #[allow(clippy::too_many_arguments)]
-    pub fn enterprise_originate(
+    pub(crate) fn enterprise_originate(
         self,
         bleg: *mut *mut sys::switch_core_session_t,
         cause: *mut sys::switch_call_cause_t,
@@ -1966,7 +1960,7 @@ impl Session {
 
     /// Enterprise-originates and bridges in one call. `data` is the dial string; `hl` a dial-handle
     /// list (may be null); `cause` out-param.
-    pub fn enterprise_orig_and_bridge(
+    pub(crate) fn enterprise_orig_and_bridge(
         self,
         data: impl AsRef<str>,
         hl: *mut sys::switch_dial_handle_list_t,
@@ -1981,7 +1975,7 @@ impl Session {
 
     /// Originates and bridges in one call. `data` is the dial string; `dh` a dial handle (may be
     /// null); `cause` out-param.
-    pub fn orig_and_bridge(
+    pub(crate) fn orig_and_bridge(
         self,
         data: impl AsRef<str>,
         dh: *mut sys::switch_dial_handle_t,
@@ -1996,7 +1990,7 @@ impl Session {
 
     /// Eavesdrops on the session `uuid` from `session`. `require_group` restricts to a spy group
     /// (may be empty); `flags` is a `switch_eavesdrop_flag_t` bitmask.
-    pub fn eavesdrop_session(
+    pub(crate) fn eavesdrop_session(
         self,
         uuid: impl AsRef<str>,
         require_group: impl AsRef<str>,

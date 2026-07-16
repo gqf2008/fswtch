@@ -1,4 +1,11 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
+// Many `pub(crate)` FFI-bridge methods (raw `as_ptr`/`from_raw`/`*Fn` aliases, and the
+// sys-typed wrappers like `queue_dtmf`/`dequeue_event`/`set_cap_value`) are deliberately kept as
+// the complete internal escape surface for FreeSWITCH calls, even where this crate's own examples
+// and tests do not exercise every one. They are `pub(crate)` precisely so no `*-sys` type leaks
+// into the public API; downstream code uses the safe newtype-taking methods instead. Suppress
+// dead-code so the binding surface stays complete without per-item `#[allow]` noise.
+#![allow(dead_code)]
 
 mod buffer;
 mod caller;
@@ -57,7 +64,7 @@ pub use command::{
     strdup_to_string,
 };
 pub use console::{
-    CompletionFunc, CompletionMatches, complete, execute, execute_api, expand_alias, free_matches,
+    CompletionFunc, CompletionMatches, complete, execute, execute_api, expand_alias,
 };
 pub use core::{
     get_domain, get_hostname, get_switchname, get_uuid, get_variable, hupall, hupall_endpoint,
@@ -67,34 +74,25 @@ pub use core::{
 pub use core_db::{CacheDbType, CoreDb, Stmt, StmtRows, TableRows, cache_db_type};
 pub use endpoint::{
     Dtmf, DtmfSource, EndpointInterfaceRef, EndpointIoBuilder, EndpointIoRoutines, Frame, FrameMut,
-    IoFlags, IoRoutinesBuilder, MessageType, OutgoingResult, SessionMessage, StateHandlerTable,
+    IoFlags, IoRoutines, MessageType, OutgoingResult, SessionMessage, StateHandlerTable,
     request_session,
 };
 pub use estimators::{CusumDetector, KalmanEstimator, is_slow_link};
 pub use event::{
-    Event, EventBinder, EventRef, EventType, EventXml, HeaderIter, Priority, channel_bind,
-    channel_broadcast, channel_deliver, channel_permission_clear, channel_permission_modify,
-    channel_permission_verify, channel_unbind, event_running,
+    Event, EventBinder, EventRef, EventType, EventXml, HeaderIter, Priority,
+    channel_permission_clear, channel_permission_modify, channel_permission_verify, event_running,
 };
 pub use file::*;
 pub use ivr::*;
 pub use jitterbuffer::{JbFlag, JbFrames, JbKind, JitterBuffer, JitterBufferConfig};
-pub use limit::{
-    Usage, backend, fire_event, incr, init, interval_reset, release, reset, status, usage,
-};
+pub use limit::{Usage, backend, fire_event, incr, interval_reset, release, reset, status, usage};
 pub use logging::*;
 pub use media::*;
 pub use module::{
-    ApiInterface, ApplicationInfo, ApplicationInterface, AsrCloseFn, AsrFeedFn, AsrInterface,
-    AsrLoadGrammarFn, AsrOpenFn, AsrUnloadGrammarFn, ChatApplicationInterface, ChatInterface,
-    ChatSendFn, DatabaseInterface, DbExecDetailedFn, DbHandleDestroyFn, DbHandleNewFn,
-    DialplanInterface, DirectoryCloseFn, DirectoryInterface, DirectoryNextFn, DirectoryNextPairFn,
-    DirectoryOpenFn, DirectoryQueryFn, EndpointInterface, FileCloseFn, FileInterface, FileOpenFn,
-    FileReadFn, FileTruncateFn, FileWriteFn, JsonApiInterface, LimitIncrFn, LimitInterface,
-    LimitIntervalResetFn, LimitReleaseFn, LimitResetFn, LimitStatusFn, LimitUsageFn, ManagementFn,
-    ManagementInterface, Module, ModuleBuilder, SayInterface, SpeechCloseFn, SpeechFeedTtsFn,
-    SpeechInterface, SpeechOpenFn, SpeechReadTtsFn, TimerCheckFn, TimerDestroyFn, TimerInitFn,
-    TimerInterface, TimerNextFn, TimerStepFn, TimerSyncFn,
+    ApiInterface, ApplicationInfo, ApplicationInterface, AsrInterface, ChatApplicationInterface,
+    ChatInterface, DatabaseInterface, DialplanInterface, DirectoryInterface, EndpointInterface,
+    FileInterface, JsonApiInterface, LimitInterface, ManagementInterface, Module, ModuleBuilder,
+    SayInterface, SpeechInterface, TimerInterface,
 };
 pub use nat::{
     add_mapping as nat_add_mapping, del_mapping as nat_del_mapping, init as nat_init,

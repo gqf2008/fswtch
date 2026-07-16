@@ -84,9 +84,9 @@ Logging, status, stream, and XML helpers (shared across subsystems):
 - `XmlConfig` and `XmlNode` wrap FreeSWITCH XML config loading and traversal.
 - Module registration, media bug config, session playback, XML helpers, and event helpers convert Rust strings to C strings inside `fswtch`.
 
-cJSON is intentionally not wrapped. Use Rust `serde_json` for JSON in modules; the raw bindings remain available through `fswtch::sys` for anything not yet wrapped.
+cJSON is intentionally not wrapped. Use Rust `serde_json` for JSON in modules; anything not yet wrapped is an internal `fswtch::sys` detail and is NOT part of the public API.
 
-The wrapper does not try to hide the full ABI yet. Examples use `fswtch::sys` directly where FreeSWITCH exposes interfaces that still need raw pointer setup, such as endpoint I/O routine tables and lifecycle callbacks. Keep those raw calls narrow, document the callback and ownership assumptions, and prefer adding focused helpers to `fswtch` when the same unsafe pattern appears in more than one module.
+The raw `fswtch-sys` crate is deliberately hidden: `fswtch::sys` is `pub(crate)`, no `*-sys` type appears in any documented signature, all `#[macro_export]` macros expand to `sys`-free code, and the module-interface table is built through the `#[doc(hidden)]` `__ModuleFunctionTable` wrapper. Examples use only the safe wrappers + macros — endpoint I/O routine tables (`EndpointIoBuilder::build::<T>()`), lifecycle callbacks (`module_exports!` with `-> fswtch::Status`), and state-change hooks (`EndpointIoRoutines::state_change`) all stay in safe Rust. Prefer adding focused safe helpers to `fswtch` over reaching for raw types.
 
 Media bug handlers are owned by FreeSWITCH until the close callback. A module can implement `MediaBugHandler` to observe read and write frames, mutate replacement frames, or pull frames explicitly through `MediaBugContext`:
 
@@ -151,7 +151,7 @@ fswtch::attach_media_bug(session, config, Meter)?;
 | Stream | `Stream`, `ApiStream`, `write_stream_response` | [`mod_stream_tools.rs`](crates/fswtch/examples/mod_stream_tools.rs) |
 | XML config | `XmlConfig`, `XmlNode` | [`mod_config_xml.rs`](crates/fswtch/examples/mod_config_xml.rs) |
 
-cJSON is intentionally not wrapped; use `serde_json` from modules. Anything not yet wrapped stays reachable through `fswtch::sys`.
+cJSON is intentionally not wrapped; use `serde_json` from modules. The raw `fswtch-sys` types are an internal (`pub(crate)`) implementation detail and are not part of the public API.
 
 ## Build
 

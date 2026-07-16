@@ -75,7 +75,14 @@ impl Status {
     }
 }
 
+// Bridge from raw FreeSWITCH status values into the safe `Status` newtype. This is the single
+// point every internal FFI call site uses to funnel a `sys::switch_status_t` return through
+// `status_to_result(impl Into<Status>)`. It is `pub(crate)`-reachable only (the `sys` alias is
+// crate-private), so it cannot be invoked from outside `fswtch`; it surfaces in rustdoc purely as
+// the canonical raw→safe conversion. Removing it would require wrapping ~250 call sites in
+// `Status::from_raw(..)` for no safety benefit.
 impl From<sys::switch_status_t> for Status {
+    #[inline]
     fn from(v: sys::switch_status_t) -> Self {
         Self(v)
     }
@@ -248,12 +255,6 @@ impl Cause {
     }
 }
 
-impl From<sys::switch_call_cause_t> for Cause {
-    fn from(v: sys::switch_call_cause_t) -> Self {
-        Self(v)
-    }
-}
-
 // ── ChannelState ─────────────────────────────────────────────────────────
 
 /// FreeSWITCH channel state-machine state (`switch_channel_state_t`).
@@ -296,12 +297,6 @@ impl ChannelState {
     }
 }
 
-impl From<sys::switch_channel_state_t> for ChannelState {
-    fn from(v: sys::switch_channel_state_t) -> Self {
-        Self(v)
-    }
-}
-
 // ── CallDirection ────────────────────────────────────────────────────────
 
 /// FreeSWITCH call direction (`switch_call_direction_t`).
@@ -329,12 +324,6 @@ impl CallDirection {
     #[inline]
     pub const fn is_outbound(self) -> bool {
         self.0 == sys::switch_call_direction_t_SWITCH_CALL_DIRECTION_OUTBOUND
-    }
-}
-
-impl From<sys::switch_call_direction_t> for CallDirection {
-    fn from(v: sys::switch_call_direction_t) -> Self {
-        Self(v)
     }
 }
 

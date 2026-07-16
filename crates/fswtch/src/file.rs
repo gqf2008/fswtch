@@ -13,7 +13,7 @@ use crate::{Pool, Result, cstring, status_to_result, sys};
 
 /// Reads up to `len` samples into `data` from the open file handle. Returns the actual count in
 /// `len`. `data`/`fh` must be valid for the call; `len` is in/out.
-pub fn core_file_read(
+pub(crate) fn core_file_read(
     fh: *mut sys::switch_file_handle_t,
     data: *mut c_void,
     len: &mut u64,
@@ -26,7 +26,7 @@ pub fn core_file_read(
 }
 
 /// Writes `len` samples from `data` to the open file handle. Returns the actual count in `len`.
-pub fn core_file_write(
+pub(crate) fn core_file_write(
     fh: *mut sys::switch_file_handle_t,
     data: *mut c_void,
     len: &mut u64,
@@ -39,7 +39,7 @@ pub fn core_file_write(
 }
 
 /// Writes a video frame to the file handle.
-pub fn core_file_write_video(
+pub(crate) fn core_file_write_video(
     fh: *mut sys::switch_file_handle_t,
     frame: *mut sys::switch_frame_t,
 ) -> Result<()> {
@@ -48,7 +48,7 @@ pub fn core_file_write_video(
 }
 
 /// Reads a video frame from the file handle.
-pub fn core_file_read_video(
+pub(crate) fn core_file_read_video(
     fh: *mut sys::switch_file_handle_t,
     frame: *mut sys::switch_frame_t,
     flags: sys::switch_video_read_flag_t,
@@ -59,7 +59,7 @@ pub fn core_file_read_video(
 
 /// Seeks within the file handle. `*cur_pos` receives the new position; `samples` is the offset;
 /// `whence` is a `SEEK_*`-style int. Returns the new position via `cur_pos`.
-pub fn core_file_seek(
+pub(crate) fn core_file_seek(
     fh: *mut sys::switch_file_handle_t,
     cur_pos: &mut u32,
     samples: i64,
@@ -70,7 +70,7 @@ pub fn core_file_seek(
 }
 
 /// Sets a metadata string column (`col`) on the file handle.
-pub fn core_file_set_string(
+pub(crate) fn core_file_set_string(
     fh: *mut sys::switch_file_handle_t,
     col: sys::switch_audio_col_t,
     string: impl AsRef<str>,
@@ -81,7 +81,7 @@ pub fn core_file_set_string(
 }
 
 /// Reads a metadata string column (`col`) from the file handle.
-pub fn core_file_get_string(
+pub(crate) fn core_file_get_string(
     fh: *mut sys::switch_file_handle_t,
     col: sys::switch_audio_col_t,
 ) -> Result<Option<String>> {
@@ -102,13 +102,13 @@ pub fn core_file_get_string(
 }
 
 /// Pre-closes a file handle (releases codecs while keeping the handle).
-pub fn core_file_pre_close(fh: *mut sys::switch_file_handle_t) -> Result<()> {
+pub(crate) fn core_file_pre_close(fh: *mut sys::switch_file_handle_t) -> Result<()> {
     // SAFETY: `fh` live.
     status_to_result(unsafe { sys::switch_core_file_pre_close(fh) })
 }
 
 /// Duplicates `oldfh` into `newfh` allocated on `pool`. `newfh` is an out-param.
-pub fn core_file_handle_dup(
+pub(crate) fn core_file_handle_dup(
     oldfh: *mut sys::switch_file_handle_t,
     newfh: *mut *mut sys::switch_file_handle_t,
     pool: &Pool,
@@ -118,13 +118,13 @@ pub fn core_file_handle_dup(
 }
 
 /// Closes a file handle (releases codecs + the handle).
-pub fn core_file_close(fh: *mut sys::switch_file_handle_t) -> Result<()> {
+pub(crate) fn core_file_close(fh: *mut sys::switch_file_handle_t) -> Result<()> {
     // SAFETY: `fh` live.
     status_to_result(unsafe { sys::switch_core_file_close(fh) })
 }
 
 /// Sends a control command to the file handle.
-pub fn core_file_command(
+pub(crate) fn core_file_command(
     fh: *mut sys::switch_file_handle_t,
     command: sys::switch_file_command_t,
 ) -> Result<()> {
@@ -133,13 +133,13 @@ pub fn core_file_command(
 }
 
 /// Truncates the file handle to `offset` bytes.
-pub fn core_file_truncate(fh: *mut sys::switch_file_handle_t, offset: i64) -> Result<()> {
+pub(crate) fn core_file_truncate(fh: *mut sys::switch_file_handle_t, offset: i64) -> Result<()> {
     // SAFETY: `fh` live; plain int.
     status_to_result(unsafe { sys::switch_core_file_truncate(fh, offset) })
 }
 
 /// `true` if the file handle has a video stream. `check_open` re-checks the open state.
-pub fn core_file_has_video(fh: *mut sys::switch_file_handle_t, check_open: bool) -> bool {
+pub(crate) fn core_file_has_video(fh: *mut sys::switch_file_handle_t, check_open: bool) -> bool {
     let cb = if check_open {
         sys::switch_bool_t_SWITCH_TRUE
     } else {
@@ -154,7 +154,7 @@ pub fn core_file_has_video(fh: *mut sys::switch_file_handle_t, check_open: bool)
 
 /// Opens a file. `flag` is an APR open-flags bitmask, `perm` an APR perms value, `pool` the
 /// APR pool. Returns a `*mut switch_file_t` handle (null on error → `Err`).
-pub fn file_open(
+pub(crate) fn file_open(
     fname: impl AsRef<str>,
     flag: i32,
     perm: sys::switch_fileperms_t,
@@ -170,7 +170,7 @@ pub fn file_open(
 }
 
 /// Seeks within an APR file. `whence` is a `switch_seek_where_t`; `*offset` is in/out.
-pub fn file_seek(
+pub(crate) fn file_seek(
     thefile: *mut sys::switch_file_t,
     whence: sys::switch_seek_where_t,
     offset: &mut i64,
@@ -180,7 +180,7 @@ pub fn file_seek(
 }
 
 /// Copies `from_path` to `to_path` with `perms` on `pool`.
-pub fn file_copy(
+pub(crate) fn file_copy(
     from_path: impl AsRef<str>,
     to_path: impl AsRef<str>,
     perms: sys::switch_fileperms_t,
@@ -195,19 +195,19 @@ pub fn file_copy(
 }
 
 /// Closes an APR file handle.
-pub fn file_close(thefile: *mut sys::switch_file_t) -> Result<()> {
+pub(crate) fn file_close(thefile: *mut sys::switch_file_t) -> Result<()> {
     // SAFETY: `thefile` live.
     status_to_result(unsafe { sys::switch_file_close(thefile) })
 }
 
 /// Truncates an APR file to `offset`.
-pub fn file_trunc(thefile: *mut sys::switch_file_t, offset: i64) -> Result<()> {
+pub(crate) fn file_trunc(thefile: *mut sys::switch_file_t, offset: i64) -> Result<()> {
     // SAFETY: `thefile` live; plain int.
     status_to_result(unsafe { sys::switch_file_trunc(thefile, offset) })
 }
 
 /// Locks an APR file (`type_` is an APR lock-type int).
-pub fn file_lock(thefile: *mut sys::switch_file_t, type_: i32) -> Result<()> {
+pub(crate) fn file_lock(thefile: *mut sys::switch_file_t, type_: i32) -> Result<()> {
     // SAFETY: `thefile` live; plain int.
     status_to_result(unsafe { sys::switch_file_lock(thefile, type_) })
 }
@@ -232,7 +232,7 @@ pub fn file_rename(
 }
 
 /// Reads up to `*nbytes` into `buf`; returns the actual count in `nbytes`.
-pub fn file_read(
+pub(crate) fn file_read(
     thefile: *mut sys::switch_file_t,
     buf: *mut c_void,
     nbytes: &mut u64,
@@ -245,7 +245,7 @@ pub fn file_read(
 }
 
 /// Writes `*nbytes` from `buf`; returns the actual count in `nbytes`.
-pub fn file_write(
+pub(crate) fn file_write(
     thefile: *mut sys::switch_file_t,
     buf: *const c_void,
     nbytes: &mut u64,
@@ -263,7 +263,7 @@ pub fn file_write(
 /// # Safety
 /// `templ` must point to a writable buffer that remains valid and large enough for FS to write
 /// the generated name back into it.
-pub unsafe fn file_mktemp(
+pub(crate) unsafe fn file_mktemp(
     templ: *mut std::os::raw::c_char,
     flags: i32,
     pool: &Pool,
@@ -275,7 +275,7 @@ pub unsafe fn file_mktemp(
 }
 
 /// Size of an APR file in bytes.
-pub fn file_get_size(thefile: *mut sys::switch_file_t) -> u64 {
+pub(crate) fn file_get_size(thefile: *mut sys::switch_file_t) -> u64 {
     // SAFETY: `thefile` live.
     unsafe { sys::switch_file_get_size(thefile) as u64 }
 }
@@ -288,7 +288,7 @@ pub fn file_exists(filename: impl AsRef<str>, pool: &Pool) -> Result<()> {
 }
 
 /// Creates an APR pipe pair (`in_`/`out` out-params).
-pub fn file_pipe_create(
+pub(crate) fn file_pipe_create(
     in_: &mut *mut sys::switch_file_t,
     out: &mut *mut sys::switch_file_t,
     pool: &Pool,
@@ -298,7 +298,7 @@ pub fn file_pipe_create(
 }
 
 /// Gets a pipe's read timeout.
-pub fn file_pipe_timeout_get(
+pub(crate) fn file_pipe_timeout_get(
     thepipe: *mut sys::switch_file_t,
     timeout: &mut sys::switch_interval_time_t,
 ) -> Result<()> {
@@ -307,7 +307,7 @@ pub fn file_pipe_timeout_get(
 }
 
 /// Sets a pipe's read timeout.
-pub fn file_pipe_timeout_set(
+pub(crate) fn file_pipe_timeout_set(
     thepipe: *mut sys::switch_file_t,
     timeout: sys::switch_interval_time_t,
 ) -> Result<()> {

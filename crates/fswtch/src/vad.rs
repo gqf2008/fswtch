@@ -218,7 +218,7 @@ impl Vad {
     /// The raw `switch_vad_t` pointer for the FreeSwitch engine, or null for the earshot engine
     /// (which has no FreeSWITCH handle). Escape hatch for direct FFI; prefer the safe API.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_vad_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_vad_t {
         match &self.backend {
             VadBackend::FreeSwitch(raw) => raw.as_ptr(),
             #[cfg(feature = "earshot")]

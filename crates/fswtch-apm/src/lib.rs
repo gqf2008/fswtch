@@ -7,7 +7,10 @@
 //! Status: AEC3 + HF + NS + AGC2 are all exposed, plus the chained `mod_apm` FreeSWITCH module.
 //! The lower-level `api_version`/`ooura_smoke` entrypoints remain as pipeline smoke checks.
 
-pub use fswtch_apm_sys as sys;
+// The raw `fswtch_apm_sys` crate is an internal implementation detail. It is `pub(crate)` so the
+// safe wrappers can name C types internally, but it is deliberately NOT part of `fswtch-apm`'s
+// public API: no `*-sys` type appears in any documented signature.
+pub(crate) use fswtch_apm_sys as sys;
 
 mod aec3;
 /// Shared error type (alias of [`Aec3Error`](crate::aec3::Aec3Error)) used by every module.

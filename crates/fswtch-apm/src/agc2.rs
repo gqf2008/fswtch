@@ -74,7 +74,7 @@ impl GainController2 {
 
     /// The raw `fswtch_agc2_t` pointer for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::fswtch_agc2_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::fswtch_agc2_t {
         self.raw.as_ptr()
     }
 
@@ -85,12 +85,12 @@ impl GainController2 {
     /// `raw` must point to a live `fswtch_agc2_t` that the caller is willing to hand over for
     /// destruction via `fswtch_agc2_destroy` when this [`GainController2`] is dropped. The rate /
     /// channel count must match those the handle was created with.
-    pub unsafe fn from_raw(
-        raw: *mut sys::fswtch_agc2_t,
+    pub unsafe fn from_raw<T>(
+        raw: *mut T,
         sample_rate_hz: i32,
         num_channels: usize,
     ) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self {
+        NonNull::new(raw as *mut sys::fswtch_agc2_t).map(|raw| Self {
             raw,
             sample_rate_hz,
             num_channels,

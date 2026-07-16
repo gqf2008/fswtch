@@ -221,7 +221,7 @@ pub fn status(backend: &str) -> Result<Option<String>> {
 ///
 /// `pool` must point to a live `switch_memory_pool_t` that remains valid for the duration of
 /// the call. Callers normally never need this — the core invokes it during startup.
-pub unsafe fn init(pool: *mut sys::switch_memory_pool_t) {
+pub(crate) unsafe fn init(pool: *mut sys::switch_memory_pool_t) {
     // SAFETY: upheld by the caller via the `# Safety` contract above.
     unsafe { sys::switch_limit_init(pool) };
 }

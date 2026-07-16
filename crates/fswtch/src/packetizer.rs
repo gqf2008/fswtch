@@ -171,7 +171,7 @@ impl Packetizer {
     /// transferring to this wrapper — it will be closed via `switch_packetizer_close` when
     /// the [`Packetizer`] is dropped. `raw` must not be used by any other wrapper or
     /// freed by anything else after this call.
-    pub unsafe fn from_raw(raw: *mut sys::switch_packetizer_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_packetizer_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _marker: PhantomData,
@@ -180,7 +180,7 @@ impl Packetizer {
 
     /// The raw `switch_packetizer_t` pointer, for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_packetizer_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_packetizer_t {
         self.raw.as_ptr()
     }
 
@@ -248,7 +248,7 @@ impl Packetizer {
     /// (`SWITCH_STATUS_FALSE`) is FreeSWITCH's standard "nothing more" sentinel and is
     /// mapped to `Ok(false)`; any other non-success status is surfaced as
     /// [`crate::SwitchError`].
-    pub fn read(&self, frame: *mut sys::switch_frame_t) -> Result<bool> {
+    pub(crate) fn read(&self, frame: *mut sys::switch_frame_t) -> Result<bool> {
         // SAFETY: `self.raw` is a live owned packetizer. `frame` is a valid writable
         // `switch_frame_t` supplied by the caller; `switch_packetizer_read` fills in its
         // `data` / `datalen` / `timestamp` / `seq` / `m` / `payload` fields and writes at

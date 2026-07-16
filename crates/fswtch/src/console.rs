@@ -226,7 +226,7 @@ impl CompletionFunc {
     /// `name` must be a valid C string (no interior NUL) and should be unique among registered
     /// completion functions. `callback` is stored by FreeSWITCH by reference, so it must remain
     /// valid until the guard is dropped — use a `static` `unsafe extern "C" fn`.
-    pub fn new(
+    pub(crate) fn new(
         name: impl AsRef<str>,
         callback: sys::switch_console_complete_callback_t,
     ) -> Result<Self> {
@@ -271,7 +271,7 @@ impl Drop for CompletionFunc {
 /// `matches` must point to writable storage holding either null or a list allocated by FreeSWITCH's
 /// completion functions (`switch_console_complete`, `switch_console_run_complete_func`, or the
 /// `switch_console_push_match` family).
-pub unsafe fn free_matches(matches: &mut *mut sys::switch_console_callback_match_t) {
+pub(crate) unsafe fn free_matches(matches: &mut *mut sys::switch_console_callback_match_t) {
     // SAFETY: The caller guarantees `matches` points to storage holding null or a FreeSWITCH-allocated
     // match list.
     unsafe { sys::switch_console_free_matches(matches) };
@@ -295,7 +295,7 @@ impl<'a> CompletionMatches<'a> {
     /// Callers holding a raw `*mut switch_console_callback_match_t` should first obtain a borrow
     /// via `matches.as_ref()` (after a null check) so the lifetime is anchored to a local and
     /// cannot be extended to `'static`.
-    pub fn from_list(matches: &'a sys::switch_console_callback_match_t) -> Option<Self> {
+    pub(crate) fn from_list(matches: &'a sys::switch_console_callback_match_t) -> Option<Self> {
         let head = matches.head;
         if head.is_null() {
             return None;

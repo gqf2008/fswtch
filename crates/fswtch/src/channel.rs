@@ -123,12 +123,6 @@ impl CallState {
     }
 }
 
-impl From<sys::switch_channel_callstate_t> for CallState {
-    fn from(v: sys::switch_channel_callstate_t) -> Self {
-        Self(v)
-    }
-}
-
 /// A borrowed handle to a FreeSWITCH channel — the per-call state machine, variable store, and
 /// caller-profile owner.
 ///
@@ -145,12 +139,12 @@ impl Channel {
     /// # Safety
     ///
     /// `raw` must point to a live FreeSWITCH channel and remain valid while this wrapper is used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_channel_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_channel_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 
     #[inline]
-    pub fn as_ptr(self) -> *mut sys::switch_channel_t {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_channel_t {
         self.raw.as_ptr()
     }
 
@@ -357,7 +351,7 @@ impl Channel {
     /// method intentionally exposes the raw `sys` type rather than wrapping it — the same
     /// "escape hatch" convention as [`Channel::as_ptr`]. `table` must remain valid for the
     /// channel's lifetime.
-    pub fn add_state_handler(self, table: *const sys::switch_state_handler_table_t) -> i32 {
+    pub(crate) fn add_state_handler(self, table: *const sys::switch_state_handler_table_t) -> i32 {
         // SAFETY: `self.raw` is a live channel; `table` is null or a valid handler table per the
         // caller's contract.
         unsafe { sys::switch_channel_add_state_handler(self.raw.as_ptr(), table) }
@@ -369,7 +363,7 @@ impl Channel {
     ///
     /// See [`add_state_handler`](Self::add_state_handler) — `table` is a raw
     /// `switch_state_handler_table_t` pointer (the same one earlier passed to `add_state_handler`).
-    pub fn clear_state_handler(self, table: *const sys::switch_state_handler_table_t) {
+    pub(crate) fn clear_state_handler(self, table: *const sys::switch_state_handler_table_t) {
         // SAFETY: `self.raw` is a live channel; `table` is null or a previously-registered table.
         unsafe { sys::switch_channel_clear_state_handler(self.raw.as_ptr(), table) };
     }
@@ -401,7 +395,7 @@ impl Channel {
     ///
     /// The raw pointer is not wrapped in a safe type because `switch_channel_timetable_t` is an
     /// opaque C struct with public fields; dereference it only while this `Channel` is live.
-    pub fn timetable(self) -> Option<*mut sys::switch_channel_timetable_t> {
+    pub(crate) fn timetable(self) -> Option<*mut sys::switch_channel_timetable_t> {
         // SAFETY: `self.raw` is a live channel; the returned pointer borrows channel storage.
         let ptr = unsafe { sys::switch_channel_get_timetable(self.raw.as_ptr()) };
         if ptr.is_null() { None } else { Some(ptr) }
@@ -447,7 +441,7 @@ impl Channel {
     /// # Safety escape hatch
     ///
     /// Raw pointer to an opaque C struct; dereference only while this `Channel` is live.
-    pub fn device_record(self) -> Option<*mut sys::switch_device_record_t> {
+    pub(crate) fn device_record(self) -> Option<*mut sys::switch_device_record_t> {
         // SAFETY: `self.raw` is a live channel; the returned pointer borrows channel storage.
         let ptr = unsafe { sys::switch_channel_get_device_record(self.raw.as_ptr()) };
         if ptr.is_null() { None } else { Some(ptr) }
@@ -737,7 +731,7 @@ impl Channel {
     ///
     /// Raw pointer to an opaque C struct (`switch_hold_record_t`); dereference only while this
     /// `Channel` is live.
-    pub fn hold_record(self) -> Option<*mut sys::switch_hold_record_t> {
+    pub(crate) fn hold_record(self) -> Option<*mut sys::switch_hold_record_t> {
         // SAFETY: `self.raw` is a live channel; the returned pointer borrows channel storage.
         let ptr = unsafe { sys::switch_channel_get_hold_record(self.raw.as_ptr()) };
         if ptr.is_null() { None } else { Some(ptr) }
@@ -750,7 +744,7 @@ impl Channel {
     ///
     /// The returned pointer is a raw `*mut switch_event_t` (the crate does not wrap a borrowed
     /// event here); it borrows channel storage. Dereference only while this `Channel` is live.
-    pub fn log_tags(self) -> Option<*mut sys::switch_event_t> {
+    pub(crate) fn log_tags(self) -> Option<*mut sys::switch_event_t> {
         let mut out: *mut sys::switch_event_t = std::ptr::null_mut();
         // SAFETY: `self.raw` is a live channel; `out` is a valid write slot.
         let status = unsafe { sys::switch_channel_get_log_tags(self.raw.as_ptr(), &mut out) };
@@ -921,7 +915,7 @@ impl Channel {
     /// Wraps `switch_channel_add_variable_var_check` with `SWITCH_TRUE` (run the variable check).
     /// `stack` selects whether the value is pushed to the bottom (`SWITCH_STACK_BOTTOM`) or top
     /// (`SWITCH_STACK_TOP`) of the existing values.
-    pub fn add_variable(
+    pub(crate) fn add_variable(
         self,
         name: impl AsRef<str>,
         value: &str,
@@ -1222,7 +1216,7 @@ impl Channel {
     /// Sets a channel capability (`CC_*`) with an explicit integer value.
     ///
     /// Wraps `switch_channel_set_cap_value`.
-    pub fn set_cap_value(self, cap: sys::switch_channel_cap_t, value: u32) {
+    pub(crate) fn set_cap_value(self, cap: sys::switch_channel_cap_t, value: u32) {
         // SAFETY: `self.raw` is a live channel.
         unsafe { sys::switch_channel_set_cap_value(self.raw.as_ptr(), cap, value) };
     }
@@ -1230,7 +1224,7 @@ impl Channel {
     /// Clears a channel capability (`CC_*`).
     ///
     /// Wraps `switch_channel_clear_cap`.
-    pub fn clear_cap(self, cap: sys::switch_channel_cap_t) {
+    pub(crate) fn clear_cap(self, cap: sys::switch_channel_cap_t) {
         // SAFETY: `self.raw` is a live channel.
         unsafe { sys::switch_channel_clear_cap(self.raw.as_ptr(), cap) };
     }
@@ -1238,7 +1232,7 @@ impl Channel {
     /// Returns `true` when the capability `cap` (`CC_*`) is set on the channel.
     ///
     /// Wraps `switch_channel_test_cap`.
-    pub fn test_cap(self, cap: sys::switch_channel_cap_t) -> bool {
+    pub(crate) fn test_cap(self, cap: sys::switch_channel_cap_t) -> bool {
         // SAFETY: `self.raw` is a live channel.
         let set = unsafe { sys::switch_channel_test_cap(self.raw.as_ptr(), cap) };
         set != 0
@@ -1247,7 +1241,7 @@ impl Channel {
     /// Returns `true` when the capability `cap` (`CC_*`) is set on the peer/bridged channel.
     ///
     /// Wraps `switch_channel_test_cap_partner`.
-    pub fn test_cap_partner(self, cap: sys::switch_channel_cap_t) -> bool {
+    pub(crate) fn test_cap_partner(self, cap: sys::switch_channel_cap_t) -> bool {
         // SAFETY: `self.raw` is a live channel.
         let set = unsafe { sys::switch_channel_test_cap_partner(self.raw.as_ptr(), cap) };
         set != 0
@@ -1322,7 +1316,7 @@ impl Channel {
     }
 
     /// Queues a DTMF digit struct onto this channel (`dtmf` borrowed).
-    pub fn queue_dtmf(self, dtmf: *const sys::switch_dtmf_t) -> Result<()> {
+    pub(crate) fn queue_dtmf(self, dtmf: *const sys::switch_dtmf_t) -> Result<()> {
         // SAFETY: live channel; valid dtmf ptr per caller.
         status_to_result(unsafe { sys::switch_channel_queue_dtmf(self.as_ptr(), dtmf) })
     }
@@ -1354,7 +1348,7 @@ impl Channel {
     }
 
     /// Transfers this channel to a caller extension (`ext` borrowed for the call).
-    pub fn transfer_to_extension(self, ext: *mut sys::switch_caller_extension_t) {
+    pub(crate) fn transfer_to_extension(self, ext: *mut sys::switch_caller_extension_t) {
         // SAFETY: live channel; valid ext ptr per caller.
         unsafe { sys::switch_channel_transfer_to_extension(self.as_ptr(), ext) };
     }
@@ -1456,7 +1450,7 @@ pub fn callstate_to_str(state: CallState) -> Option<&'static str> {
 ///
 /// `user_data` is an opaque raw pointer whose lifetime the caller must manage; it is stored and
 /// later passed back to `function` by FreeSWITCH.
-pub fn bind_device_state_handler(
+pub(crate) fn bind_device_state_handler(
     function: sys::switch_device_state_function_t,
     user_data: *mut std::os::raw::c_void,
 ) -> Result<()> {
@@ -1467,7 +1461,9 @@ pub fn bind_device_state_handler(
 }
 
 /// Globally removes a previously-registered device-state callback. Returns `Err` on failure.
-pub fn unbind_device_state_handler(function: sys::switch_device_state_function_t) -> Result<()> {
+pub(crate) fn unbind_device_state_handler(
+    function: sys::switch_device_state_function_t,
+) -> Result<()> {
     // SAFETY: `function` is null or a callback previously registered with
     // [`bind_device_state_handler`].
     let status = unsafe { sys::switch_channel_unbind_device_state_handler(function) };
@@ -1533,7 +1529,7 @@ pub fn cause_q850(cause: crate::Cause) -> crate::Cause {
 }
 
 /// The name of a device state (borrowed static string).
-pub fn device_state2str(state: crate::sys::switch_device_state_t) -> Option<&'static str> {
+pub(crate) fn device_state2str(state: crate::sys::switch_device_state_t) -> Option<&'static str> {
     // SAFETY: returns null or a static string.
     let ptr = unsafe { crate::sys::switch_channel_device_state2str(state) };
     // SAFETY: null or a static C string.
@@ -1541,7 +1537,7 @@ pub fn device_state2str(state: crate::sys::switch_device_state_t) -> Option<&'st
 }
 
 /// The name of a channel state (borrowed static string).
-pub fn state_name(state: crate::sys::switch_channel_state_t) -> Option<&'static str> {
+pub(crate) fn state_name(state: crate::sys::switch_channel_state_t) -> Option<&'static str> {
     // SAFETY: returns null or a static string.
     let ptr = unsafe { crate::sys::switch_channel_state_name(state) };
     // SAFETY: null or a static C string.

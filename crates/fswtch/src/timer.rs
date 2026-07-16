@@ -66,7 +66,7 @@ impl Timer {
     }
 
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_timer_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_timer_t {
         std::ptr::addr_of!(*self.raw) as *mut sys::switch_timer_t
     }
 

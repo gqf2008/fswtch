@@ -183,12 +183,6 @@ impl EventType {
     }
 }
 
-impl From<sys::switch_event_types_t> for EventType {
-    fn from(v: sys::switch_event_types_t) -> Self {
-        Self(v)
-    }
-}
-
 // ── Priority ─────────────────────────────────────────────────────────────
 
 /// FreeSWITCH delivery priority (`switch_priority_t`). A single-valued enum — pass to
@@ -222,12 +216,6 @@ impl Priority {
     }
 }
 
-impl From<sys::switch_priority_t> for Priority {
-    fn from(v: sys::switch_priority_t) -> Self {
-        Self(v)
-    }
-}
-
 pub struct Event {
     raw: Option<NonNull<sys::switch_event_t>>,
 }
@@ -256,7 +244,7 @@ impl Event {
         })
     }
 
-    pub fn as_ptr(&self) -> *mut sys::switch_event_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_event_t {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
@@ -645,7 +633,7 @@ impl Event {
     /// Wraps `switch_event_serialize_json_obj`. **Escape hatch:** `obj` is a raw `*mut *mut
     /// sys::cJSON` because this crate does not expose a safe cJSON builder; construct the object
     /// with FreeSWITCH's JSON helpers and pass its address here.
-    pub fn to_json_obj(&self, obj: *mut *mut sys::cJSON) -> Result<()> {
+    pub(crate) fn to_json_obj(&self, obj: *mut *mut sys::cJSON) -> Result<()> {
         let Some(raw) = self.raw else {
             return Ok(());
         };
@@ -870,7 +858,7 @@ impl EventRef {
         }
     }
 
-    pub fn as_ptr(self) -> *mut sys::switch_event_t {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_event_t {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
@@ -1072,7 +1060,7 @@ impl EventBinder {
     }
 
     /// The registration handle, for advanced use with the raw event API.
-    pub fn as_ptr(&self) -> *mut sys::switch_event_node_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_event_node_t {
         self.node.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
@@ -1121,7 +1109,7 @@ impl EventBinder {
     /// Wraps `switch_event_unbind_callback`, which unbinds by callback function pointer rather than
     /// by node handle. This is the counterpart to [`EventBinder::bind_permanent`] for callers that did not receive
     /// a node.
-    pub fn unbind_callback(callback: sys::switch_event_callback_t) -> Result<()> {
+    pub(crate) fn unbind_callback(callback: sys::switch_event_callback_t) -> Result<()> {
         // SAFETY: `callback` is the function pointer originally passed to `switch_event_bind`.
         let status = unsafe { sys::switch_event_unbind_callback(callback) };
         status_to_result(status)
@@ -1148,7 +1136,7 @@ impl Drop for EventBinder {
 ///
 /// `func` is the C trampoline FreeSWITCH invokes when a JSON message is delivered to the channel
 /// (see `sys::switch_event_channel_func_t`).
-pub fn channel_bind(
+pub(crate) fn channel_bind(
     event_channel: impl AsRef<str>,
     func: sys::switch_event_channel_func_t,
     user_data: *mut std::ffi::c_void,
@@ -1165,7 +1153,7 @@ pub fn channel_bind(
 /// Removes every subscription on `event_channel` matching `func` and `user_data`.
 ///
 /// Wraps `switch_event_channel_unbind`, returning the number of subscriptions removed.
-pub fn channel_unbind(
+pub(crate) fn channel_unbind(
     event_channel: impl AsRef<str>,
     func: sys::switch_event_channel_func_t,
     user_data: *mut std::ffi::c_void,
@@ -1183,7 +1171,7 @@ pub fn channel_unbind(
 /// sys::cJSON` because this crate does not expose a safe cJSON builder; construct the cJSON
 /// object with the underlying FreeSWITCH JSON helpers and pass its address here. FreeSWITCH
 /// consumes the cJSON on success.
-pub fn channel_broadcast(
+pub(crate) fn channel_broadcast(
     event_channel: impl AsRef<str>,
     json: *mut *mut sys::cJSON,
     key: impl AsRef<str>,
@@ -1203,7 +1191,7 @@ pub fn channel_broadcast(
 ///
 /// Wraps `switch_event_channel_deliver`. **Escape hatch:** `json` is a raw `*mut *mut
 /// sys::cJSON` because this crate does not expose a safe cJSON builder.
-pub fn channel_deliver(
+pub(crate) fn channel_deliver(
     event_channel: impl AsRef<str>,
     json: *mut *mut sys::cJSON,
     key: impl AsRef<str>,
@@ -1284,7 +1272,7 @@ pub struct EventXml {
 
 impl EventXml {
     /// The raw `switch_xml_t` handle, for advanced use with the XML API.
-    pub fn as_ptr(&self) -> sys::switch_xml_t {
+    pub(crate) fn as_ptr(&self) -> sys::switch_xml_t {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 }

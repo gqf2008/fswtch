@@ -134,14 +134,14 @@ impl Dtmf {
 
     /// The underlying `switch_dtmf_t` by value.
     #[inline]
-    pub fn into_inner(self) -> sys::switch_dtmf_t {
+    pub(crate) fn into_inner(self) -> sys::switch_dtmf_t {
         self.0
     }
 
     /// A pointer to the inner `switch_dtmf_t`, suitable for passing to a C
     /// callback expecting `*const switch_dtmf_t`.
     #[inline]
-    pub fn as_ptr(&self) -> *const sys::switch_dtmf_t {
+    pub(crate) fn as_ptr(&self) -> *const sys::switch_dtmf_t {
         &self.0
     }
 }
@@ -399,12 +399,6 @@ impl MessageType {
     }
 }
 
-impl From<sys::switch_core_session_message_types_t> for MessageType {
-    fn from(v: sys::switch_core_session_message_types_t) -> Self {
-        Self(v)
-    }
-}
-
 /// A borrowed view of a FreeSWITCH session message (`switch_core_session_message_t`).
 ///
 /// Wraps the raw pointer passed to the `receive_message` I/O callback for the
@@ -422,13 +416,13 @@ impl SessionMessage {
     ///
     /// `raw` must point to a live `switch_core_session_message_t` and remain
     /// valid while this wrapper is used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_core_session_message_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_core_session_message_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 
     /// The raw pointer this wrapper holds.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_core_session_message_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_core_session_message_t {
         self.raw.as_ptr()
     }
 
@@ -539,85 +533,85 @@ impl IoRoutinesBuilder {
     }
 
     /// Installs the `outgoing_channel` callback.
-    pub fn outgoing_channel(mut self, cb: sys::switch_io_outgoing_channel_t) -> Self {
+    pub(crate) fn outgoing_channel(mut self, cb: sys::switch_io_outgoing_channel_t) -> Self {
         self.inner.outgoing_channel = cb;
         self
     }
 
     /// Installs the `read_frame` (audio) callback.
-    pub fn read_frame(mut self, cb: sys::switch_io_read_frame_t) -> Self {
+    pub(crate) fn read_frame(mut self, cb: sys::switch_io_read_frame_t) -> Self {
         self.inner.read_frame = cb;
         self
     }
 
     /// Installs the `write_frame` (audio) callback.
-    pub fn write_frame(mut self, cb: sys::switch_io_write_frame_t) -> Self {
+    pub(crate) fn write_frame(mut self, cb: sys::switch_io_write_frame_t) -> Self {
         self.inner.write_frame = cb;
         self
     }
 
     /// Installs the `kill_channel` callback (invoked when a session is hung up).
-    pub fn kill_channel(mut self, cb: sys::switch_io_kill_channel_t) -> Self {
+    pub(crate) fn kill_channel(mut self, cb: sys::switch_io_kill_channel_t) -> Self {
         self.inner.kill_channel = cb;
         self
     }
 
     /// Installs the `send_dtmf` callback.
-    pub fn send_dtmf(mut self, cb: sys::switch_io_send_dtmf_t) -> Self {
+    pub(crate) fn send_dtmf(mut self, cb: sys::switch_io_send_dtmf_t) -> Self {
         self.inner.send_dtmf = cb;
         self
     }
 
     /// Installs the `receive_message` callback.
-    pub fn receive_message(mut self, cb: sys::switch_io_receive_message_t) -> Self {
+    pub(crate) fn receive_message(mut self, cb: sys::switch_io_receive_message_t) -> Self {
         self.inner.receive_message = cb;
         self
     }
 
     /// Installs the `receive_event` callback.
-    pub fn receive_event(mut self, cb: sys::switch_io_receive_event_t) -> Self {
+    pub(crate) fn receive_event(mut self, cb: sys::switch_io_receive_event_t) -> Self {
         self.inner.receive_event = cb;
         self
     }
 
     /// Installs the `state_change` callback (session state transition).
-    pub fn state_change(mut self, cb: sys::switch_io_state_change_t) -> Self {
+    pub(crate) fn state_change(mut self, cb: sys::switch_io_state_change_t) -> Self {
         self.inner.state_change = cb;
         self
     }
 
     /// Installs the `read_video_frame` callback.
-    pub fn read_video_frame(mut self, cb: sys::switch_io_read_video_frame_t) -> Self {
+    pub(crate) fn read_video_frame(mut self, cb: sys::switch_io_read_video_frame_t) -> Self {
         self.inner.read_video_frame = cb;
         self
     }
 
     /// Installs the `write_video_frame` callback.
-    pub fn write_video_frame(mut self, cb: sys::switch_io_write_video_frame_t) -> Self {
+    pub(crate) fn write_video_frame(mut self, cb: sys::switch_io_write_video_frame_t) -> Self {
         self.inner.write_video_frame = cb;
         self
     }
 
     /// Installs the `read_text_frame` callback.
-    pub fn read_text_frame(mut self, cb: sys::switch_io_read_text_frame_t) -> Self {
+    pub(crate) fn read_text_frame(mut self, cb: sys::switch_io_read_text_frame_t) -> Self {
         self.inner.read_text_frame = cb;
         self
     }
 
     /// Installs the `write_text_frame` callback.
-    pub fn write_text_frame(mut self, cb: sys::switch_io_write_text_frame_t) -> Self {
+    pub(crate) fn write_text_frame(mut self, cb: sys::switch_io_write_text_frame_t) -> Self {
         self.inner.write_text_frame = cb;
         self
     }
 
     /// Installs the `state_run` callback (per-state custom run handler).
-    pub fn state_run(mut self, cb: sys::switch_io_state_run_t) -> Self {
+    pub(crate) fn state_run(mut self, cb: sys::switch_io_state_run_t) -> Self {
         self.inner.state_run = cb;
         self
     }
 
     /// Installs the `get_jb` callback (jitter-buffer accessor).
-    pub fn get_jb(mut self, cb: sys::switch_io_get_jb_t) -> Self {
+    pub(crate) fn get_jb(mut self, cb: sys::switch_io_get_jb_t) -> Self {
         self.inner.get_jb = cb;
         self
     }
@@ -629,12 +623,13 @@ impl IoRoutinesBuilder {
     /// table is intentionally leaked, matching the module-lifetime expectation of
     /// FreeSWITCH endpoint interfaces). Repeated calls return distinct
     /// allocations; do not free the pointer.
-    pub fn build(self) -> Result<*mut sys::switch_io_routines_t> {
+    pub fn build(self) -> Result<IoRoutines> {
         let boxed = Box::new(self.inner);
         let ptr = Box::into_raw(boxed);
         // SAFETY: `ptr` is a valid, well-aligned, owned allocation produced by
-        // `Box::into_raw`; it remains valid for the program lifetime by design.
-        Ok(ptr)
+        // `Box::into_raw`; it remains valid for the program lifetime by design. `Box::into_raw`
+        // never returns null.
+        Ok(IoRoutines(unsafe { NonNull::new_unchecked(ptr) }))
     }
 }
 
@@ -756,12 +751,27 @@ pub trait EndpointIoRoutines: Send + Sync + 'static {
 /// `<T as EndpointIoRoutines>`'s associated functions. The table is leaked
 /// (module-lifetime), matching FreeSWITCH's expectation that `io_routines`
 /// outlive the endpoint interface.
+/// Opaque handle to a leaked `switch_io_routines` table, produced by
+/// [`IoRoutinesBuilder::build`] / [`EndpointIoBuilder::build`]. Pass it to
+/// [`crate::ModuleBuilder::endpoint`]. The underlying allocation is intentionally leaked for the
+/// module lifetime (matching FreeSWITCH's expectation that I/O routines outlive the endpoint
+/// interface), so the handle does not free anything on drop.
+pub struct IoRoutines(NonNull<sys::switch_io_routines_t>);
+
+impl IoRoutines {
+    /// The raw `switch_io_routines_t` pointer, for internal FFI use.
+    #[inline]
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_io_routines_t {
+        self.0.as_ptr()
+    }
+}
+
 pub struct EndpointIoBuilder;
 
 impl EndpointIoBuilder {
-    /// Finalize the I/O routines table for endpoint type `T`. Returns the raw
-    /// pointer to pass to [`crate::ModuleBuilder::endpoint`].
-    pub fn build<T: EndpointIoRoutines>() -> Result<*mut sys::switch_io_routines_t> {
+    /// Finalize the I/O routines table for endpoint type `T`. Returns an opaque
+    /// [`IoRoutines`] handle to pass to [`crate::ModuleBuilder::endpoint`].
+    pub fn build<T: EndpointIoRoutines>() -> Result<IoRoutines> {
         let io = sys::switch_io_routines {
             outgoing_channel: Some(outgoing_trampoline::<T>),
             read_frame: Some(read_frame_trampoline::<T>),
@@ -772,7 +782,9 @@ impl EndpointIoBuilder {
         };
         // SAFETY: `Box::into_raw` produces a valid, well-aligned, owned
         // allocation valid for the program lifetime (intentionally leaked).
-        Ok(Box::into_raw(Box::new(io)))
+        let ptr = Box::into_raw(Box::new(io));
+        // SAFETY: `Box::into_raw` never returns null.
+        Ok(IoRoutines(unsafe { NonNull::new_unchecked(ptr) }))
     }
 }
 
@@ -946,17 +958,26 @@ unsafe extern "C" fn state_change_trampoline<T: EndpointIoRoutines>(
 /// FreeSWITCH's standard state handlers run unmodified (each NULL `on_*` is
 /// treated by `STATE_MACRO` as a no-op returning `SWITCH_STATUS_SUCCESS`).
 ///
-/// Build one with [`StateHandlerTable::new_null`] and pass the pointer to
+/// Build one with [`StateHandlerTable::new_null`] and pass it to
 /// [`crate::ModuleBuilder::endpoint`].
-pub struct StateHandlerTable;
+pub struct StateHandlerTable(NonNull<sys::switch_state_handler_table_t>);
 
 impl StateHandlerTable {
-    /// Allocates a leaked, all-NULL state-handler table and returns the raw
-    /// pointer for endpoint registration. Valid for the program lifetime.
-    pub fn new_null() -> *mut sys::switch_state_handler_table_t {
+    /// Allocates a leaked, all-NULL state-handler table and returns the handle
+    /// for endpoint registration. Valid for the program lifetime.
+    pub fn new_null() -> Self {
         // SAFETY: `Default` zero-initializes the struct (MaybeUninit +
-        // write_bytes); `Box::into_raw` leaks it for module lifetime.
-        Box::into_raw(Box::new(sys::switch_state_handler_table::default()))
+        // write_bytes); `Box::into_raw` leaks it for module lifetime and never
+        // returns null.
+        let ptr = Box::into_raw(Box::new(sys::switch_state_handler_table::default()));
+        // SAFETY: `Box::into_raw` never returns null.
+        Self(unsafe { NonNull::new_unchecked(ptr) })
+    }
+
+    /// The raw `switch_state_handler_table_t` pointer, for internal FFI use.
+    #[inline]
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_state_handler_table_t {
+        self.0.as_ptr()
     }
 }
 
@@ -986,7 +1007,7 @@ impl EndpointInterfaceRef {
     }
 
     /// Raw pointer for FFI calls (e.g. `switch_core_session_request_uuid`).
-    pub fn as_ptr(&self) -> *mut sys::switch_endpoint_interface_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_endpoint_interface_t {
         self.raw.as_ptr()
     }
 }
@@ -1174,10 +1195,11 @@ mod tests {
             crate::SUCCESS.raw()
         }
         let cb: sys::switch_io_kill_channel_t = Some(noop_kill);
-        let ptr = IoRoutinesBuilder::new()
+        let io = IoRoutinesBuilder::new()
             .kill_channel(cb)
             .build()
             .expect("build");
+        let ptr = io.as_ptr();
         // SAFETY: `ptr` is a leaked boxed `switch_io_routines` produced by `build`.
         let r = unsafe { &*ptr };
         assert!(r.kill_channel.is_some());
@@ -1198,9 +1220,10 @@ mod tests {
         );
         assert_eq!(MessageType::INDICATE_ANSWER.raw(), 2);
         assert_eq!(MessageType::INVALID.raw(), 61);
-        // From<raw> agrees with from_raw.
-        let from_raw: MessageType =
-            sys::switch_core_session_message_types_t_SWITCH_MESSAGE_TRANSMIT_TEXT.into();
+        // `from_raw` agrees with the associated constant.
+        let from_raw = MessageType::from_raw(
+            sys::switch_core_session_message_types_t_SWITCH_MESSAGE_TRANSMIT_TEXT,
+        );
         assert_eq!(from_raw, MessageType::TRANSMIT_TEXT);
     }
 

@@ -62,7 +62,7 @@ impl HighPassFilter {
 
     /// The raw `fswtch_hpf_t` pointer for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::fswtch_hpf_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::fswtch_hpf_t {
         self.raw.as_ptr()
     }
 
@@ -73,12 +73,12 @@ impl HighPassFilter {
     /// `raw` must point to a live `fswtch_hpf_t` that the caller is willing to hand over for
     /// destruction via `fswtch_hpf_destroy` when this [`HighPassFilter`] is dropped. The
     /// `sample_rate_hz` / `num_channels` must match those the handle was created with.
-    pub unsafe fn from_raw(
-        raw: *mut sys::fswtch_hpf_t,
+    pub unsafe fn from_raw<T>(
+        raw: *mut T,
         sample_rate_hz: i32,
         num_channels: usize,
     ) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self {
+        NonNull::new(raw as *mut sys::fswtch_hpf_t).map(|raw| Self {
             raw,
             sample_rate_hz,
             num_channels,

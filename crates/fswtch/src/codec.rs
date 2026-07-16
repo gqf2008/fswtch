@@ -84,7 +84,7 @@ impl Codec {
     }
 
     /// The raw codec handle, for advanced use with the FreeSWITCH codec FFI.
-    pub fn as_ptr(&self) -> *mut sys::switch_codec_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_codec_t {
         self.raw.as_ptr()
     }
 
@@ -178,7 +178,7 @@ mod tests {
 
 // ── codec helpers ──────────────────────────────────────────────────────────
 
-pub fn codec_reset(codec: *mut crate::sys::switch_codec_t) -> crate::Result<()> {
+pub(crate) fn codec_reset(codec: *mut crate::sys::switch_codec_t) -> crate::Result<()> {
     // SAFETY: `codec` is a live codec struct per caller.
     crate::status_to_result(unsafe { crate::sys::switch_core_codec_reset(codec) })
 }
@@ -195,7 +195,7 @@ impl crate::Session {
     }
 }
 
-pub fn codec_decode_video(
+pub(crate) fn codec_decode_video(
     codec: *mut crate::sys::switch_codec_t,
     frame: *mut crate::sys::switch_frame_t,
 ) -> crate::Result<()> {
@@ -203,7 +203,7 @@ pub fn codec_decode_video(
     crate::status_to_result(unsafe { crate::sys::switch_core_codec_decode_video(codec, frame) })
 }
 
-pub fn codec_encode_video(
+pub(crate) fn codec_encode_video(
     codec: *mut crate::sys::switch_codec_t,
     frame: *mut crate::sys::switch_frame_t,
 ) -> crate::Result<()> {

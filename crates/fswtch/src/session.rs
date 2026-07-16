@@ -24,7 +24,7 @@ impl Session {
     }
 
     #[inline]
-    pub fn as_ptr(self) -> *mut sys::switch_core_session_t {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_core_session_t {
         self.raw.as_ptr()
     }
 
@@ -337,7 +337,7 @@ impl Session {
     /// Dequeues one event from `session`'s event queue. Returns an owned `*mut switch_event_t` the
     /// caller must destroy (`switch_event_destroy`), or `None` if empty. `force` bypasses
     /// private-event filtering.
-    pub fn dequeue_event(self, force: bool) -> Result<Option<*mut sys::switch_event_t>> {
+    pub(crate) fn dequeue_event(self, force: bool) -> Result<Option<*mut sys::switch_event_t>> {
         let mut ev: *mut sys::switch_event_t = std::ptr::null_mut();
         let force = if force {
             sys::switch_bool_t_SWITCH_TRUE
@@ -351,13 +351,13 @@ impl Session {
     }
 
     /// Queues an event onto `session`'s queue (ownership of `*event` transfers to the queue).
-    pub fn queue_event(self, event: &mut *mut sys::switch_event_t) -> Result<()> {
+    pub(crate) fn queue_event(self, event: &mut *mut sys::switch_event_t) -> Result<()> {
         // SAFETY: live session; `event` is a valid `*mut *mut` per caller.
         status_to_result(unsafe { sys::switch_core_session_queue_event(self.as_ptr(), event) })
     }
 
     /// Receives an event into `session` (ownership of `*event` transfers).
-    pub fn receive_event(self, event: &mut *mut sys::switch_event_t) -> Result<()> {
+    pub(crate) fn receive_event(self, event: &mut *mut sys::switch_event_t) -> Result<()> {
         // SAFETY: live session; `event` valid `*mut *mut`.
         status_to_result(unsafe { sys::switch_core_session_receive_event(self.as_ptr(), event) })
     }
@@ -376,7 +376,7 @@ impl Session {
 
     /// Dequeues one message from `session`. Returns an owned `*mut switch_core_session_message_t`
     /// (caller frees via `switch_core_session_free_message`), or `None` if empty.
-    pub fn dequeue_message(self) -> Result<Option<*mut sys::switch_core_session_message_t>> {
+    pub(crate) fn dequeue_message(self) -> Result<Option<*mut sys::switch_core_session_message_t>> {
         let mut m: *mut sys::switch_core_session_message_t = std::ptr::null_mut();
         // SAFETY: live session; `&mut m` valid out.
         let s = unsafe { sys::switch_core_session_dequeue_message(self.as_ptr(), &mut m) };
@@ -385,13 +385,16 @@ impl Session {
     }
 
     /// Queues a message onto `session` (`message` borrowed for the call).
-    pub fn queue_message(self, message: *mut sys::switch_core_session_message_t) -> Result<()> {
+    pub(crate) fn queue_message(
+        self,
+        message: *mut sys::switch_core_session_message_t,
+    ) -> Result<()> {
         // SAFETY: live session; `message` valid per caller.
         status_to_result(unsafe { sys::switch_core_session_queue_message(self.as_ptr(), message) })
     }
 
     /// The session's application log (a `*mut switch_app_log_t` borrowed from the session; do not free).
-    pub fn get_app_log(self) -> *mut sys::switch_app_log_t {
+    pub(crate) fn get_app_log(self) -> *mut sys::switch_app_log_t {
         // SAFETY: live session; the returned pointer borrows session storage.
         unsafe { sys::switch_core_session_get_app_log(self.as_ptr()) }
     }
@@ -443,7 +446,7 @@ impl Session {
     }
 
     /// Receives an outbound DTMF on `session` (`dtmf` borrowed for the call).
-    pub fn recv_dtmf(self, dtmf: *const sys::switch_dtmf_t) -> Result<()> {
+    pub(crate) fn recv_dtmf(self, dtmf: *const sys::switch_dtmf_t) -> Result<()> {
         // SAFETY: live session; `dtmf` valid per caller.
         status_to_result(unsafe { sys::switch_core_session_recv_dtmf(self.as_ptr(), dtmf) })
     }
@@ -529,7 +532,7 @@ impl Session {
     }
 
     /// Reads one media frame from `session` into `*frame` (out-param). `flags`/`stream_id` per FS.
-    pub fn read_frame(
+    pub(crate) fn read_frame(
         self,
         frame: &mut *mut sys::switch_frame_t,
         flags: sys::switch_io_flag_t,
@@ -542,7 +545,7 @@ impl Session {
     }
 
     /// Writes one media frame to `session`. `frame` borrowed; `flags`/`stream_id` per FS.
-    pub fn write_frame(
+    pub(crate) fn write_frame(
         self,
         frame: *mut sys::switch_frame_t,
         flags: sys::switch_io_flag_t,
@@ -555,7 +558,7 @@ impl Session {
     }
 
     /// Sets the per-session log level.
-    pub fn set_loglevel(self, loglevel: sys::switch_log_level_t) -> Result<()> {
+    pub(crate) fn set_loglevel(self, loglevel: sys::switch_log_level_t) -> Result<()> {
         // SAFETY: live session; valid enum.
         status_to_result(unsafe { sys::switch_core_session_set_loglevel(self.as_ptr(), loglevel) })
     }
@@ -653,7 +656,10 @@ pub fn execute_application_async(
 // yet RAII every FS container type.
 
 /// Sends an event to the session identified by `uuid` (ownership of `*event` transfers).
-pub fn event_send(uuid: impl AsRef<str>, event: &mut *mut sys::switch_event_t) -> Result<()> {
+pub(crate) fn event_send(
+    uuid: impl AsRef<str>,
+    event: &mut *mut sys::switch_event_t,
+) -> Result<()> {
     let uuid = cstring(uuid)?;
     // SAFETY: valid C string; `event` valid `*mut *mut`.
     status_to_result(unsafe { sys::switch_core_session_event_send(uuid.as_ptr(), event) })
@@ -662,7 +668,7 @@ pub fn event_send(uuid: impl AsRef<str>, event: &mut *mut sys::switch_event_t) -
 /// Finds every session whose channel variable `var_name == var_val`. Returns a
 /// `*mut switch_console_callback_match_t` (null if none) the caller must destroy via
 /// `switch_console_callback_match_destroy`.
-pub fn findall_matching_var(
+pub(crate) fn findall_matching_var(
     var_name: impl AsRef<str>,
     var_val: impl AsRef<str>,
 ) -> Result<*mut sys::switch_console_callback_match_t> {
@@ -673,7 +679,7 @@ pub fn findall_matching_var(
 }
 
 /// Finds every active session. Returns a match struct (null if none) the caller destroys.
-pub fn findall() -> *mut sys::switch_console_callback_match_t {
+pub(crate) fn findall() -> *mut sys::switch_console_callback_match_t {
     // SAFETY: no args.
     unsafe { sys::switch_core_session_findall() }
 }
@@ -691,7 +697,7 @@ pub fn get_app_flags(app: impl AsRef<str>) -> Result<i32> {
 // ── locks / state machine / media frames (high-frequency) ─────────────────
 
 /// `true` if `session_a` and `session_b` are transcoding `type_` media between each other.
-pub fn transcoding(
+pub(crate) fn transcoding(
     session_a: Session,
     session_b: Session,
     type_: sys::switch_media_type_t,

@@ -81,7 +81,7 @@ impl Regex {
     /// `raw` must point to a `switch_regex_t` produced by `switch_regex_compile` (or
     /// `switch_regex_perform`) that the caller transfers ownership of, and which has not yet been
     /// freed. `pattern` must be the exact pattern text that produced `raw`.
-    pub unsafe fn from_raw(raw: *mut sys::switch_regex_t, pattern: CString) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_regex_t, pattern: CString) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw: Some(raw),
             pattern,
@@ -90,7 +90,7 @@ impl Regex {
 
     /// The raw compiled-regex pointer, for direct FFI use.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_regex_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_regex_t {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 
@@ -197,7 +197,10 @@ impl RegexMatch {
     /// `raw` must point to a `switch_regex_match_t` produced by `switch_regex_perform` (or PCRE2)
     /// that the caller transfers ownership of, and which has not yet been freed. `group_count`
     /// must be the value `switch_regex_perform` returned for that match.
-    pub unsafe fn from_raw(raw: *mut sys::switch_regex_match_t, group_count: i32) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(
+        raw: *mut sys::switch_regex_match_t,
+        group_count: i32,
+    ) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw: Some(raw),
             re: None,
@@ -208,7 +211,7 @@ impl RegexMatch {
 
     /// The raw match-data pointer, for direct FFI use.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_regex_match_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_regex_match_t {
         self.raw.map_or(std::ptr::null_mut(), NonNull::as_ptr)
     }
 

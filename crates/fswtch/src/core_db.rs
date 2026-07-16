@@ -98,7 +98,7 @@ impl CoreDb {
     ///
     /// `raw` must point to a live `switch_core_db_t` obtained from `switch_core_db_open*` that the
     /// caller intends to transfer ownership of to this wrapper (it will be closed on `Drop`).
-    pub unsafe fn from_raw(raw: *mut sys::switch_core_db_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_core_db_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _marker: PhantomData,
@@ -106,7 +106,7 @@ impl CoreDb {
     }
 
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_core_db_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_core_db_t {
         self.raw.as_ptr()
     }
 
@@ -389,7 +389,7 @@ impl<'a> Stmt<'a> {
     ///
     /// `stmt` must point to a live `switch_core_db_stmt_t` produced by `switch_core_db_prepare`
     /// on a connection that outlives the returned `Stmt`.
-    pub unsafe fn from_raw(stmt: *mut sys::switch_core_db_stmt_t) -> Option<Stmt<'a>> {
+    pub(crate) unsafe fn from_raw(stmt: *mut sys::switch_core_db_stmt_t) -> Option<Stmt<'a>> {
         NonNull::new(stmt).map(|stmt| Stmt {
             stmt,
             db: PhantomData,
@@ -398,7 +398,7 @@ impl<'a> Stmt<'a> {
     }
 
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_core_db_stmt_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_core_db_stmt_t {
         self.stmt.as_ptr()
     }
 

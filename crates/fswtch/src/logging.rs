@@ -35,7 +35,7 @@ pub enum LogLevel {
 }
 
 impl LogLevel {
-    pub const fn as_raw(self) -> sys::switch_log_level_t {
+    pub(crate) const fn as_raw(self) -> sys::switch_log_level_t {
         match self {
             Self::Disable => sys::switch_log_level_t_SWITCH_LOG_DISABLE,
             Self::Console => sys::switch_log_level_t_SWITCH_LOG_CONSOLE,
@@ -179,13 +179,13 @@ unsafe fn log_printf(level: sys::switch_log_level_t, text: *const std::ffi::c_ch
 
 // ── log level conversion + logger bind/unbind ─────────────────────────────
 
-pub fn log_level2str(level: crate::sys::switch_log_level_t) -> Option<&'static str> {
+pub(crate) fn log_level2str(level: crate::sys::switch_log_level_t) -> Option<&'static str> {
     // SAFETY: returns null or a static string.
     let ptr = unsafe { crate::sys::switch_log_level2str(level) };
     unsafe { crate::borrowed_cstr_to_str(ptr) }
 }
 
-pub fn log_str2level(s: impl AsRef<str>) -> crate::Result<crate::sys::switch_log_level_t> {
+pub(crate) fn log_str2level(s: impl AsRef<str>) -> crate::Result<crate::sys::switch_log_level_t> {
     let s = crate::cstring(s)?;
     // SAFETY: valid C string.
     Ok(unsafe { crate::sys::switch_log_str2level(s.as_ptr()) })
@@ -197,7 +197,7 @@ pub fn log_str2mask(s: impl AsRef<str>) -> crate::Result<u32> {
     Ok(unsafe { crate::sys::switch_log_str2mask(s.as_ptr()) })
 }
 
-pub fn log_bind_logger(
+pub(crate) fn log_bind_logger(
     function: crate::sys::switch_log_function_t,
     level: crate::sys::switch_log_level_t,
     is_console: bool,
@@ -211,7 +211,7 @@ pub fn log_bind_logger(
     crate::status_to_result(unsafe { crate::sys::switch_log_bind_logger(function, level, ic) })
 }
 
-pub fn log_unbind_logger(function: crate::sys::switch_log_function_t) -> crate::Result<()> {
+pub(crate) fn log_unbind_logger(function: crate::sys::switch_log_function_t) -> crate::Result<()> {
     // SAFETY: valid fn ptr.
     crate::status_to_result(unsafe { crate::sys::switch_log_unbind_logger(function) })
 }

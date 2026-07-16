@@ -82,7 +82,7 @@ impl Resample {
     }
 
     /// The raw resampler pointer, for advanced use with the FreeSWITCH API.
-    pub fn as_ptr(&self) -> *mut sys::switch_audio_resampler_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_audio_resampler_t {
         self.raw.as_ptr()
     }
 
@@ -272,7 +272,7 @@ impl Agc {
     }
 
     /// The raw AGC pointer, for advanced use with the FreeSWITCH API.
-    pub fn as_ptr(&self) -> *mut sys::switch_agc_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_agc_t {
         self.raw.as_ptr()
     }
 

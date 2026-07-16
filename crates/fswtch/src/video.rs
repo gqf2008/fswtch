@@ -249,7 +249,7 @@ impl Image {
     /// `raw` must point to a live `switch_image_t` obtained from a `switch_img_*` allocator
     /// (e.g. `switch_img_alloc`, `switch_img_read_file`, `switch_img_copy_rect`), and the caller
     /// must transfer sole ownership to this wrapper — the image must not be freed elsewhere.
-    pub unsafe fn from_raw(raw: *mut sys::switch_image_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_image_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _marker: PhantomData,
@@ -257,7 +257,7 @@ impl Image {
     }
 
     /// The raw image pointer (escape hatch for FFI). The wrapper retains ownership.
-    pub fn as_ptr(&self) -> *mut sys::switch_image_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_image_t {
         self.raw.as_ptr()
     }
 
@@ -551,7 +551,7 @@ impl Chromakey {
     ///
     /// `raw` must point to a live `switch_chromakey_t` obtained from `switch_chromakey_create`,
     /// and the caller must transfer sole ownership to this wrapper.
-    pub unsafe fn from_raw(raw: *mut sys::switch_chromakey_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_chromakey_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _marker: PhantomData,
@@ -559,7 +559,7 @@ impl Chromakey {
     }
 
     /// The raw chromakey pointer (escape hatch for FFI). The wrapper retains ownership.
-    pub fn as_ptr(&self) -> *mut sys::switch_chromakey_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_chromakey_t {
         self.raw.as_ptr()
     }
 
@@ -667,7 +667,7 @@ pub struct CachedImage<'a> {
 
 impl CachedImage<'_> {
     /// The raw image pointer (escape hatch for FFI). The chromakey retains ownership.
-    pub fn as_ptr(&self) -> *mut sys::switch_image_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_image_t {
         self.raw.as_ptr()
     }
 

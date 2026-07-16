@@ -55,7 +55,7 @@ impl Plc {
     /// for destruction via `switch_plc_free` when this `Plc` is dropped. Wrapping a handle
     /// already owned by another `Plc` (or any other RAII guard) is unsound — it would be freed
     /// twice.
-    pub unsafe fn from_raw(raw: *mut sys::switch_plc_state_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_plc_state_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _marker: PhantomData,
@@ -64,7 +64,7 @@ impl Plc {
 
     /// The raw `switch_plc_state_t` pointer for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_plc_state_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_plc_state_t {
         self.raw.as_ptr()
     }
 

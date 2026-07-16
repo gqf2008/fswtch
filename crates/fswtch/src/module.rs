@@ -6,9 +6,9 @@ use crate::{
 };
 
 // Callback type aliases for interfaces whose fields are inline `Option<fn>` (no bindgen typedef).
-pub type ChatSendFn =
+pub(crate) type ChatSendFn =
     Option<unsafe extern "C" fn(message_event: *mut sys::switch_event_t) -> sys::switch_status_t>;
-pub type ManagementFn = Option<
+pub(crate) type ManagementFn = Option<
     unsafe extern "C" fn(
         relative_oid: *mut c_char,
         action: sys::switch_management_action_t,
@@ -16,7 +16,7 @@ pub type ManagementFn = Option<
         datalen: sys::switch_size_t,
     ) -> sys::switch_status_t,
 >;
-pub type LimitIncrFn = Option<
+pub(crate) type LimitIncrFn = Option<
     unsafe extern "C" fn(
         session: *mut sys::switch_core_session_t,
         realm: *const c_char,
@@ -25,67 +25,67 @@ pub type LimitIncrFn = Option<
         interval: std::os::raw::c_int,
     ) -> sys::switch_status_t,
 >;
-pub type LimitReleaseFn = Option<
+pub(crate) type LimitReleaseFn = Option<
     unsafe extern "C" fn(
         session: *mut sys::switch_core_session_t,
         realm: *const c_char,
         resource: *const c_char,
     ) -> sys::switch_status_t,
 >;
-pub type LimitUsageFn = Option<
+pub(crate) type LimitUsageFn = Option<
     unsafe extern "C" fn(
         realm: *const c_char,
         resource: *const c_char,
         rcount: *mut u32,
     ) -> std::os::raw::c_int,
 >;
-pub type LimitResetFn = Option<unsafe extern "C" fn() -> sys::switch_status_t>;
-pub type LimitStatusFn = Option<unsafe extern "C" fn() -> *mut c_char>;
-pub type LimitIntervalResetFn = Option<
+pub(crate) type LimitResetFn = Option<unsafe extern "C" fn() -> sys::switch_status_t>;
+pub(crate) type LimitStatusFn = Option<unsafe extern "C" fn() -> *mut c_char>;
+pub(crate) type LimitIntervalResetFn = Option<
     unsafe extern "C" fn(realm: *const c_char, resource: *const c_char) -> sys::switch_status_t,
 >;
-pub type TimerInitFn =
+pub(crate) type TimerInitFn =
     Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
-pub type TimerNextFn =
+pub(crate) type TimerNextFn =
     Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
-pub type TimerStepFn =
+pub(crate) type TimerStepFn =
     Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
-pub type TimerSyncFn =
+pub(crate) type TimerSyncFn =
     Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
-pub type TimerCheckFn = Option<
+pub(crate) type TimerCheckFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_timer_t,
         arg2: sys::switch_bool_t,
     ) -> sys::switch_status_t,
 >;
-pub type TimerDestroyFn =
+pub(crate) type TimerDestroyFn =
     Option<unsafe extern "C" fn(arg1: *mut sys::switch_timer_t) -> sys::switch_status_t>;
-pub type FileOpenFn = Option<
+pub(crate) type FileOpenFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_file_handle_t,
         file_path: *const c_char,
     ) -> sys::switch_status_t,
 >;
-pub type FileCloseFn =
+pub(crate) type FileCloseFn =
     Option<unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t) -> sys::switch_status_t>;
-pub type FileTruncateFn = Option<
+pub(crate) type FileTruncateFn = Option<
     unsafe extern "C" fn(arg1: *mut sys::switch_file_handle_t, offset: i64) -> sys::switch_status_t,
 >;
-pub type FileReadFn = Option<
+pub(crate) type FileReadFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_file_handle_t,
         data: *mut std::ffi::c_void,
         len: *mut sys::switch_size_t,
     ) -> sys::switch_status_t,
 >;
-pub type FileWriteFn = Option<
+pub(crate) type FileWriteFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_file_handle_t,
         data: *mut std::ffi::c_void,
         len: *mut sys::switch_size_t,
     ) -> sys::switch_status_t,
 >;
-pub type SpeechOpenFn = Option<
+pub(crate) type SpeechOpenFn = Option<
     unsafe extern "C" fn(
         sh: *mut sys::switch_speech_handle_t,
         voice_name: *const c_char,
@@ -94,20 +94,20 @@ pub type SpeechOpenFn = Option<
         flags: *mut sys::switch_speech_flag_t,
     ) -> sys::switch_status_t,
 >;
-pub type SpeechCloseFn = Option<
+pub(crate) type SpeechCloseFn = Option<
     unsafe extern "C" fn(
         arg1: *mut sys::switch_speech_handle_t,
         flags: *mut sys::switch_speech_flag_t,
     ) -> sys::switch_status_t,
 >;
-pub type SpeechFeedTtsFn = Option<
+pub(crate) type SpeechFeedTtsFn = Option<
     unsafe extern "C" fn(
         sh: *mut sys::switch_speech_handle_t,
         text: *mut c_char,
         flags: *mut sys::switch_speech_flag_t,
     ) -> sys::switch_status_t,
 >;
-pub type SpeechReadTtsFn = Option<
+pub(crate) type SpeechReadTtsFn = Option<
     unsafe extern "C" fn(
         sh: *mut sys::switch_speech_handle_t,
         data: *mut std::ffi::c_void,
@@ -115,7 +115,7 @@ pub type SpeechReadTtsFn = Option<
         flags: *mut sys::switch_speech_flag_t,
     ) -> sys::switch_status_t,
 >;
-pub type AsrOpenFn = Option<
+pub(crate) type AsrOpenFn = Option<
     unsafe extern "C" fn(
         ah: *mut sys::switch_asr_handle_t,
         codec: *const c_char,
@@ -124,26 +124,26 @@ pub type AsrOpenFn = Option<
         flags: *mut sys::switch_asr_flag_t,
     ) -> sys::switch_status_t,
 >;
-pub type AsrLoadGrammarFn = Option<
+pub(crate) type AsrLoadGrammarFn = Option<
     unsafe extern "C" fn(
         ah: *mut sys::switch_asr_handle_t,
         grammar: *const c_char,
         name: *const c_char,
     ) -> sys::switch_status_t,
 >;
-pub type AsrUnloadGrammarFn = Option<
+pub(crate) type AsrUnloadGrammarFn = Option<
     unsafe extern "C" fn(
         ah: *mut sys::switch_asr_handle_t,
         name: *const c_char,
     ) -> sys::switch_status_t,
 >;
-pub type AsrCloseFn = Option<
+pub(crate) type AsrCloseFn = Option<
     unsafe extern "C" fn(
         ah: *mut sys::switch_asr_handle_t,
         flags: *mut sys::switch_asr_flag_t,
     ) -> sys::switch_status_t,
 >;
-pub type AsrFeedFn = Option<
+pub(crate) type AsrFeedFn = Option<
     unsafe extern "C" fn(
         ah: *mut sys::switch_asr_handle_t,
         data: *mut std::ffi::c_void,
@@ -151,7 +151,7 @@ pub type AsrFeedFn = Option<
         flags: *mut sys::switch_asr_flag_t,
     ) -> sys::switch_status_t,
 >;
-pub type DirectoryOpenFn = Option<
+pub(crate) type DirectoryOpenFn = Option<
     unsafe extern "C" fn(
         dh: *mut sys::switch_directory_handle_t,
         source: *mut c_char,
@@ -159,36 +159,36 @@ pub type DirectoryOpenFn = Option<
         passwd: *mut c_char,
     ) -> sys::switch_status_t,
 >;
-pub type DirectoryCloseFn =
+pub(crate) type DirectoryCloseFn =
     Option<unsafe extern "C" fn(dh: *mut sys::switch_directory_handle_t) -> sys::switch_status_t>;
-pub type DirectoryQueryFn = Option<
+pub(crate) type DirectoryQueryFn = Option<
     unsafe extern "C" fn(
         dh: *mut sys::switch_directory_handle_t,
         base: *mut c_char,
         query: *mut c_char,
     ) -> sys::switch_status_t,
 >;
-pub type DirectoryNextFn =
+pub(crate) type DirectoryNextFn =
     Option<unsafe extern "C" fn(dh: *mut sys::switch_directory_handle_t) -> sys::switch_status_t>;
-pub type DirectoryNextPairFn = Option<
+pub(crate) type DirectoryNextPairFn = Option<
     unsafe extern "C" fn(
         dh: *mut sys::switch_directory_handle_t,
         var: *mut *mut c_char,
         val: *mut *mut c_char,
     ) -> sys::switch_status_t,
 >;
-pub type DbHandleNewFn = Option<
+pub(crate) type DbHandleNewFn = Option<
     unsafe extern "C" fn(
         database_interface_options: sys::switch_cache_db_database_interface_options_t,
         dih: *mut *mut sys::switch_database_interface_handle_t,
     ) -> sys::switch_status_t,
 >;
-pub type DbHandleDestroyFn = Option<
+pub(crate) type DbHandleDestroyFn = Option<
     unsafe extern "C" fn(
         dih: *mut *mut sys::switch_database_interface_handle_t,
     ) -> sys::switch_status_t,
 >;
-pub type DbExecDetailedFn = Option<
+pub(crate) type DbExecDetailedFn = Option<
     unsafe extern "C" fn(
         file: *const c_char,
         func: *const c_char,
@@ -211,7 +211,7 @@ impl Module {
     ///
     /// `slot` and `pool` must be the live loader-owned pointers passed by FreeSWITCH to this
     /// module's load callback. `slot` must be writable for one module interface pointer.
-    pub unsafe fn create(
+    pub(crate) unsafe fn create(
         slot: *mut *mut sys::switch_loadable_module_interface_t,
         pool: *mut sys::switch_memory_pool_t,
         name: impl StaticCStr,
@@ -231,7 +231,7 @@ impl Module {
         Ok(Self { raw })
     }
 
-    pub fn as_ptr(&self) -> *mut sys::switch_loadable_module_interface_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_loadable_module_interface_t {
         self.raw.as_ptr()
     }
 
@@ -329,7 +329,7 @@ impl Module {
         Ok(ChatApplicationInterface { raw: application })
     }
 
-    pub fn add_endpoint(
+    pub(crate) fn add_endpoint(
         self,
         name: impl StaticCStr,
         io_routines: *mut sys::switch_io_routines_t,
@@ -357,7 +357,7 @@ impl Module {
     }
 
     /// Registers a dialplan interface — a `hunt` callback that routes calls.
-    pub fn add_dialplan(
+    pub(crate) fn add_dialplan(
         self,
         name: impl StaticCStr,
         hunt: sys::switch_dialplan_hunt_function_t,
@@ -488,7 +488,7 @@ impl Module {
     }
 
     /// Registers a `say` interface (number/date/time pronunciation).
-    pub fn add_say(
+    pub(crate) fn add_say(
         self,
         name: impl StaticCStr,
         say_function: sys::switch_say_callback_t,
@@ -601,7 +601,7 @@ impl Module {
     }
 
     /// Registers a JSON API command — like [`Module::add_api`] but returning a cJSON object.
-    pub fn add_json_api(
+    pub(crate) fn add_json_api(
         self,
         name: impl StaticCStr,
         description: impl StaticCStr,
@@ -762,10 +762,11 @@ impl ModuleBuilder {
     pub fn endpoint(
         self,
         name: impl StaticCStr,
-        io_routines: *mut sys::switch_io_routines_t,
-        state_handler: *mut sys::switch_state_handler_table_t,
+        io_routines: crate::endpoint::IoRoutines,
+        state_handler: crate::endpoint::StateHandlerTable,
     ) -> Result<Self> {
-        self.module.add_endpoint(name, io_routines, state_handler)?;
+        self.module
+            .add_endpoint(name, io_routines.as_ptr(), state_handler.as_ptr())?;
         Ok(self)
     }
 
@@ -831,7 +832,7 @@ pub struct ApiInterface {
 }
 
 impl ApiInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_api_interface_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_api_interface_t {
         self.raw.as_ptr()
     }
 }
@@ -842,7 +843,7 @@ pub struct ApplicationInterface {
 }
 
 impl ApplicationInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_application_interface_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_application_interface_t {
         self.raw.as_ptr()
     }
 }
@@ -853,7 +854,7 @@ pub struct ChatApplicationInterface {
 }
 
 impl ChatApplicationInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_chat_application_interface_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_chat_application_interface_t {
         self.raw.as_ptr()
     }
 }
@@ -864,7 +865,7 @@ pub struct EndpointInterface {
 }
 
 impl EndpointInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_endpoint_interface_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_endpoint_interface_t {
         self.raw.as_ptr()
     }
 }
@@ -875,7 +876,7 @@ pub struct DialplanInterface {
 }
 
 impl DialplanInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_dialplan_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_dialplan_interface {
         self.raw.as_ptr()
     }
 }
@@ -886,7 +887,7 @@ pub struct TimerInterface {
 }
 
 impl TimerInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_timer_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_timer_interface {
         self.raw.as_ptr()
     }
 }
@@ -897,7 +898,7 @@ pub struct FileInterface {
 }
 
 impl FileInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_file_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_file_interface {
         self.raw.as_ptr()
     }
 }
@@ -908,7 +909,7 @@ pub struct SpeechInterface {
 }
 
 impl SpeechInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_speech_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_speech_interface {
         self.raw.as_ptr()
     }
 }
@@ -919,7 +920,7 @@ pub struct AsrInterface {
 }
 
 impl AsrInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_asr_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_asr_interface {
         self.raw.as_ptr()
     }
 }
@@ -930,7 +931,7 @@ pub struct SayInterface {
 }
 
 impl SayInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_say_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_say_interface {
         self.raw.as_ptr()
     }
 }
@@ -941,7 +942,7 @@ pub struct DirectoryInterface {
 }
 
 impl DirectoryInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_directory_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_directory_interface {
         self.raw.as_ptr()
     }
 }
@@ -952,7 +953,7 @@ pub struct ChatInterface {
 }
 
 impl ChatInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_chat_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_chat_interface {
         self.raw.as_ptr()
     }
 }
@@ -963,7 +964,7 @@ pub struct ManagementInterface {
 }
 
 impl ManagementInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_management_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_management_interface {
         self.raw.as_ptr()
     }
 }
@@ -974,7 +975,7 @@ pub struct LimitInterface {
 }
 
 impl LimitInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_limit_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_limit_interface {
         self.raw.as_ptr()
     }
 }
@@ -985,7 +986,7 @@ pub struct JsonApiInterface {
 }
 
 impl JsonApiInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_json_api_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_json_api_interface {
         self.raw.as_ptr()
     }
 }
@@ -996,7 +997,7 @@ pub struct DatabaseInterface {
 }
 
 impl DatabaseInterface {
-    pub fn as_ptr(&self) -> *mut sys::switch_database_interface {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_database_interface {
         self.raw.as_ptr()
     }
 }

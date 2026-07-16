@@ -59,17 +59,17 @@ impl Task {
     ///
     /// `raw` must point to a live `switch_scheduler_task` and remain valid while this wrapper is
     /// used.
-    pub unsafe fn from_raw(raw: *mut sys::switch_scheduler_task) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_scheduler_task) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self { raw })
     }
 
     #[inline]
-    pub fn as_ptr(self) -> *mut sys::switch_scheduler_task {
+    pub(crate) fn as_ptr(self) -> *mut sys::switch_scheduler_task {
         self.raw.as_ptr()
     }
 
     /// The epoch second at which this run was scheduled to execute.
-    pub fn runtime(self) -> sys::time_t {
+    pub(crate) fn runtime(self) -> sys::time_t {
         // SAFETY: `self.raw` is live for this callback.
         unsafe { self.raw.as_ref().runtime }
     }
@@ -188,7 +188,7 @@ impl TaskConfig {
     /// [`crate::StaticCStr`] convention used by [`crate::media`]. `runtime == 0` fires the task
     /// immediately.
     pub fn new(
-        runtime: sys::time_t,
+        runtime: i64,
         desc: impl crate::StaticCStr,
         group: impl crate::StaticCStr,
     ) -> Result<Self> {

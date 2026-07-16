@@ -78,7 +78,7 @@ impl Buffer {
     /// `raw` must point to a live `switch_buffer_t` that the caller is willing to hand over for
     /// destruction via `switch_buffer_destroy` when this `Buffer` is dropped. Wrapping a
     /// pool-allocated buffer is unsound — its storage belongs to the pool, not this wrapper.
-    pub unsafe fn from_raw(raw: *mut sys::switch_buffer_t) -> Option<Self> {
+    pub(crate) unsafe fn from_raw(raw: *mut sys::switch_buffer_t) -> Option<Self> {
         NonNull::new(raw).map(|raw| Self {
             raw,
             _marker: PhantomData,
@@ -87,7 +87,7 @@ impl Buffer {
 
     /// Returns the raw `switch_buffer_t` pointer for escape-hatch FFI.
     #[inline]
-    pub fn as_ptr(&self) -> *mut sys::switch_buffer_t {
+    pub(crate) fn as_ptr(&self) -> *mut sys::switch_buffer_t {
         self.raw.as_ptr()
     }
 

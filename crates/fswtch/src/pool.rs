@@ -63,7 +63,7 @@ impl Pool {
     /// configuration) that are not yet wrapped. The pointer is valid for as long as this `Pool` is
     /// alive.
     #[inline]
-    pub fn as_ptr(&self) -> *mut switch_memory_pool_t {
+    pub(crate) fn as_ptr(&self) -> *mut switch_memory_pool_t {
         self.raw.as_ptr()
     }
 
@@ -197,7 +197,7 @@ mod tests {
 
 // ── pool helpers ───────────────────────────────────────────────────────────
 
-pub fn pool_stats(stream: *mut crate::sys::switch_stream_handle_t) {
+pub(crate) fn pool_stats(stream: *mut crate::sys::switch_stream_handle_t) {
     // SAFETY: `stream` valid per caller.
     unsafe { crate::sys::switch_core_pool_stats(stream) };
 }
