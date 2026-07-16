@@ -21,6 +21,13 @@ const RELEASE_COEF: f32 = 0.25;
 
 const EPS: f32 = 1e-6;
 
+/// Silence-hold threshold: below this RMS the gain is frozen to prevent creep
+/// toward `max_gain` during quiet periods. The original pipeline had a far-field
+/// gate upstream of the AGC; as a standalone library API that gate is gone, so
+/// this hold replaces its function — without it, ~1 s of silence drives gain
+/// to the ceiling and the next speech frame saturates.
+const SILENCE_HOLD_RMS: f32 = 30.0;
+
 #[derive(Debug, Clone)]
 pub struct Agc {
     /// Target RMS the AGC drives toward (i16 scale, 0–32767).
@@ -50,6 +57,19 @@ impl Agc {
         // Not reusing dsp::rms (f32) — gain accuracy needs the extra headroom.
         let sum_sq: f64 = pcm.iter().map(|&s| (s as i64 * s as i64) as f64).sum();
         let rms = (sum_sq / pcm.len() as f64).sqrt() as f32;
+
+        // Silence-hold: freeze gain during quiet frames. Without this, silence
+        // (rms≈0) drives desired→max_gain and the slow attack creeps gain to
+        // the ceiling; the next speech frame then saturates. The original
+        // pipeline had a far-field gate upstream; this hold replaces it.
+        if rms < SILENCE_HOLD_RMS {
+            for s in pcm.iter_mut() {
+                let v = (*s as f32) * self.gain;
+                *s = v.round().clamp(-32768.0, 32767.0) as i16;
+            }
+            return;
+        }
+
         // Desired gain to reach target. Clamp floor at 0 (never invert); ceiling at max_gain
         // so residual echo / noise is not amplified beyond the ceiling.
         let desired = (self.target_rms / (rms + EPS)).clamp(0.0, self.max_gain);
@@ -129,5 +149,36 @@ mod tests {
         agc.process(&mut pcm);
         // Gain dropped below unity quickly (release fast).
         assert!(agc.gain() < 1.0, "gain {} not pulled down", agc.gain());
+    }
+
+    #[test]
+    fn silence_hold_prevents_speech_onset_clipping() {
+        // Regression: ~1 s of silence should not creep gain toward max_gain.
+        // Without the silence-hold, gain creeps to ~8.7 and the next speech
+        // frame (5000 × 8.7 ≈ 43500) saturates to 32767.
+        let mut agc = Agc::new(3000.0, 20.0);
+
+        // 100 frames of silence (~1 s at 10 ms frames).
+        for _ in 0..100 {
+            let mut silence = vec![0i16; 160];
+            agc.process(&mut silence);
+        }
+
+        // Gain must not have crept up during silence.
+        assert!(
+            agc.gain() < 1.1,
+            "gain crept to {} during silence — will clip speech onset",
+            agc.gain()
+        );
+
+        // A speech-level frame should not saturate.
+        let mut speech = vec![5000i16; 160];
+        agc.process(&mut speech);
+        let saturated = speech.iter().filter(|&&s| s.abs() >= 32767).count();
+        assert_eq!(
+            saturated, 0,
+            "{} samples saturated — speech onset clipped",
+            saturated
+        );
     }
 }

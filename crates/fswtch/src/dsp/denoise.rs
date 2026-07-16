@@ -48,13 +48,16 @@ impl DenoiseStage {
         self.enabled
     }
 
-    /// Feed input samples and drain cleaned output into `out`.
+    /// Feed input samples and receive cleaned output in `out`.
     ///
-    /// When disabled, copies input straight to out (zero latency). When
-    /// enabled, buffers input into 480-sample frames, denoises each, and
-    /// appends the result to out. The caller should drain `out` after each
-    /// call — it is cleared at the start of the next call.
+    /// `out` is cleared at the start of each call, so it contains only the
+    /// output for the current invocation. When disabled, copies input straight
+    /// to `out` (zero latency). When enabled, buffers input into 480-sample
+    /// frames, denoises each, and writes the result to `out`.
     pub fn process(&mut self, input: &[f32], out: &mut Vec<f32>) {
+        // Clear the caller's buffer — each call returns only this call's output.
+        out.clear();
+
         if !self.enabled {
             out.extend_from_slice(input);
             return;
@@ -131,5 +134,20 @@ mod tests {
         stage.process(&[0.0; 160], &mut out2);
         // Not enough for a full frame → no output (or partial from reset state).
         assert!(out2.len() <= 160);
+    }
+
+    #[test]
+    fn out_is_cleared_between_calls() {
+        // Regression: the doc says `out` is cleared at the start of each call.
+        // Without out.clear(), a reused `out` would accumulate across calls.
+        let mut stage = DenoiseStage::new(false);
+        let mut out = Vec::new();
+
+        stage.process(&[0.5; 480], &mut out);
+        assert_eq!(out.len(), 480);
+
+        // Second call with the same `out` — must not accumulate.
+        stage.process(&[0.5; 480], &mut out);
+        assert_eq!(out.len(), 480, "out was not cleared between calls");
     }
 }
