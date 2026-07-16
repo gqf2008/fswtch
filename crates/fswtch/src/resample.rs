@@ -30,6 +30,11 @@ pub const DEFAULT_QUALITY: i32 = 2;
 /// [`process`]: Resample::process
 pub struct Resample {
     raw: NonNull<sys::switch_audio_resampler_t>,
+    // FreeSWITCH's `switch_audio_resampler_t` stores from_rate/to_rate/channels and the live `to`
+    // buffer capacity, but *not* the quality or the originally-requested to_size — so we cache
+    // both here. They are read-only after construction (no setters), so plain fields suffice.
+    quality: i32,
+    to_size: u32,
     // Not thread-safe; `process` mutates the resampler's internal `to` buffer through `&self`.
     _marker: PhantomData<*const ()>,
 }
@@ -65,6 +70,8 @@ impl Resample {
         let raw = NonNull::new(raw).ok_or(SwitchError(GENERR))?;
         Ok(Self {
             raw,
+            quality,
+            to_size,
             _marker: PhantomData,
         })
     }
@@ -95,6 +102,27 @@ impl Resample {
     pub fn channels(&self) -> u32 {
         // SAFETY: `self.raw` is a live resampler; reading a plain integer field is safe.
         unsafe { (*self.raw.as_ptr()).channels as u32 }
+    }
+
+    /// The resampler quality used at creation (0-10). FreeSWITCH's `switch_audio_resampler_t`
+    /// does not retain the quality after creation, so this value is cached at construction time.
+    pub fn quality(&self) -> i32 {
+        self.quality
+    }
+
+    /// The target output buffer size (in samples) requested at creation. Note that
+    /// [`process`](Self::process) may grow the internal `to` buffer beyond this; for the current
+    /// allocated capacity see [`to_capacity`](Self::to_capacity).
+    pub fn to_size(&self) -> u32 {
+        self.to_size
+    }
+
+    /// The current allocated capacity (in samples) of the internal `to` output buffer. Unlike
+    /// [`to_size`](Self::to_size) (the creation-time request), this reflects live growth by
+    /// `switch_resample_process`.
+    pub fn to_capacity(&self) -> u32 {
+        // SAFETY: `self.raw` is a live resampler; reading a plain uint field is safe.
+        unsafe { (*self.raw.as_ptr()).to_size }
     }
 
     /// Resamples `src` and returns a borrowed slice of the resampled output.

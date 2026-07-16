@@ -6,6 +6,7 @@
 //! Not thread-safe: all three state types have internal mutable state accessed through `&self`
 //! (mirroring the C API's `*const`-but-mutates convention). Marked `!Send + !Sync`.
 
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -229,6 +230,14 @@ impl Drop for SpeexPreprocess {
 /// [`process_int`](Self::process_int) on interleaved i16 audio. Quality 0 = fastest, 10 = best.
 pub struct SpeexResampler {
     raw: NonNull<sys::SpeexResamplerState>,
+    // The underlying speex state is opaque, so we mirror the creation params the caller supplied to
+    // `new` and keep them in sync through `set_rate`/`set_quality`. Stored in `Cell`s because the
+    // setters take `&self` (mirroring the C API's `*const`-but-mutates convention) — interior
+    // mutability lets them update the cache without going `&mut self`.
+    channels: Cell<u32>,
+    in_rate: Cell<u32>,
+    out_rate: Cell<u32>,
+    quality: Cell<i32>,
     _marker: PhantomData<*const ()>,
 }
 
@@ -246,9 +255,36 @@ impl SpeexResampler {
         NonNull::new(raw)
             .map(|raw| Self {
                 raw,
+                channels: Cell::new(channels),
+                in_rate: Cell::new(in_rate),
+                out_rate: Cell::new(out_rate),
+                quality: Cell::new(quality),
                 _marker: PhantomData,
             })
             .ok_or(SwitchError(GENERR))
+    }
+
+    /// The number of interleaved channels the resampler was created for.
+    pub fn channels(&self) -> u32 {
+        self.channels.get()
+    }
+
+    /// The configured source sample rate (Hz). Mirrors the value supplied to
+    /// [new](Self::new), updated by [set_rate](Self::set_rate) on success.
+    pub fn in_rate(&self) -> u32 {
+        self.in_rate.get()
+    }
+
+    /// The configured destination sample rate (Hz). Mirrors the value supplied to
+    /// [new](Self::new), updated by [set_rate](Self::set_rate) on success.
+    pub fn out_rate(&self) -> u32 {
+        self.out_rate.get()
+    }
+
+    /// The resampler quality (0-10). Mirrors the value supplied to [new](Self::new), updated by
+    /// [set_quality](Self::set_quality) on success.
+    pub fn quality(&self) -> i32 {
+        self.quality.get()
     }
 
     /// Resamples interleaved i16 audio: `input` → `output`. Returns `(status, in_used,
@@ -272,10 +308,28 @@ impl SpeexResampler {
         (status, in_len, out_len)
     }
 
-    /// Changes the in/out sample rates (Hz).
+    /// Changes the in/out sample rates (Hz). Returns 0 on success (the speexdsp status code); on
+    /// success the cached [in_rate](Self::in_rate)/[out_rate](Self::out_rate) are updated.
     pub fn set_rate(&self, in_rate: u32, out_rate: u32) -> i32 {
         // SAFETY: `self.raw` live; plain uints.
-        unsafe { sys::speex_resampler_set_rate(self.raw.as_ptr(), in_rate, out_rate) }
+        let status = unsafe { sys::speex_resampler_set_rate(self.raw.as_ptr(), in_rate, out_rate) };
+        if status == 0 {
+            self.in_rate.set(in_rate);
+            self.out_rate.set(out_rate);
+        }
+        status
+    }
+
+    /// Changes the resampler quality (0-10 — the bounds of speexdsp's
+    /// `SPEEX_RESAMPLER_QUALITY_MIN..=MAX`; 0 = fastest, 10 = best). Returns 0 on success; on
+    /// success the cached [quality](Self::quality) is updated.
+    pub fn set_quality(&self, quality: i32) -> i32 {
+        // SAFETY: `self.raw` live; plain int.
+        let status = unsafe { sys::speex_resampler_set_quality(self.raw.as_ptr(), quality) };
+        if status == 0 {
+            self.quality.set(quality);
+        }
+        status
     }
 }
 
