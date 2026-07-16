@@ -143,3 +143,64 @@ error[E0425]: cannot find function `attach_media_bug` in crate `fswtch`
 2. **DenoiseStage `out` 清空契约文档/代码不符**。
 
 二者都小、都好修，建议合入前一并处理——尤其若近期要把 `dsp::Agc`/`DenoiseStage` 接进实活 pipeline（其上游 far-field gate 已被删，A 会直接咬人）。
+
+---
+
+## 第三轮复审（2026-07-16，分支已前进至 `8972223`）
+
+用户落了 `8972223 fix(dsp): AGC 静默爬升降顶 + DenoiseStage out 清空契约`，A/B 一并修。本轮验证两修复 + 重跑门禁。
+
+### A/B 修复 — 行为正确，实证通过
+
+把修复后的 dsp 四文件抽进隔离 crate 跑全套：
+
+- **18 个内联测试全过**（17 跑 + 1 ignored），含作者新加的两条回归测试 `silence_hold_prevents_speech_onset_clipping`、`out_is_cleared_between_calls`。
+- **关键交叉验证**：上轮那两条 assert 旧行为（buggy）的探针现在**双双 FAILED**——`agc_gain_creeps_to_max...`（旧期望 gain>5、饱和>100）与 `denoise_out_is_not_cleared...`（旧期望 out 累加到 960）都失败。**buggy 行为确已消失**，与作者新回归测试「assert 修复后行为全过」互相印证——最干净的 fix 验证形态。
+
+**A — AGC**：加 `SILENCE_HOLD_RMS=30.0` 噪声门，`rms<30` 时冻结增益（只套现值、return，跳过 desired/attack 更新）。静默期增益不再爬，语音起始不削顶。
+**B — Denoise**：`process` 开头 `out.clear()` + 文档同步改成「out is cleared at the start of each call … contains only the output for the current invocation」，契约自洽。
+
+### 🚨 但引入了一处门禁回归（blocking — 本分支首次）
+
+`cargo clippy --workspace --all-targets` 现在 **1 error 挂掉**，而 `c69c85f` 时它还是 Finished 的：
+
+```text
+error: this comparison involving the minimum or maximum element for this type
+       contains a case that is always true or always false
+   --> crates/fswtch/src/dsp/agc.rs:177:52
+    |
+177 |         let saturated = speech.iter().filter(|&&s| s.abs() >= 32767).count();
+    |                                                    ^^^^^^^^^^^^^^^^
+    = note: `#[deny(clippy::absurd_extreme_comparisons)]` on by default
+```
+
+新回归测试里 `s.abs() >= 32767`（`32767 == i16::MAX`）触发 **deny-by-default** 的 `absurd_extreme_comparisons`。commit message 只声明「18 测试全过」——跑了 `cargo test` 没跑 `cargo clippy --workspace --all-targets`（AGENTS.md 明列的强制门禁），所以漏了。
+
+**修法（trivial）**：clippy 自己也建议了——别用 `i16::abs()` 跟 `i16::MAX` 比。换 `s.unsigned_abs() >= 32767`（返回 u16，`32767` 非 u16::MAX 不触发该 lint，且顺带消掉 `i16::MIN.abs()` 在 debug 下 panic 的隐患——clamp 上下界是 `(-32768.0, 32767.0)`，负向饱和样本会是 -32768，`(-32768i16).abs()` debug 下直接 panic；当前测试只喂正 5000 没踩到，但模式本身脆）。或直接按 clamp 界判：`*s == 32767 || *s == -32768`。
+
+> 本分支第一次出现 blocking 项——前面几轮都是 approve-with-nits。合入前必须改掉，否则 `cargo clippy --workspace --all-targets` 永远红。
+
+### 非阻塞观察 — 阈值 30 vs 爬升阈 300 的 gap（残留 1 帧响起始削顶）
+
+第三个探针 `residual_probe.rs`：喂 100 帧 rms=100（高于 30 的 hold 阈、低于 300 的爬升阈 `target_rms/max_gain=3000/10`）再喂 rms=5000 语音：
+
+```text
+gain after 100 quiet(rms=100) frames = 8.806   ← 仍爬到近顶（hold 没挡，100>30）
+loud frame 0: gain=6.755, saturated 160/160     ← 首帧全饱和
+loud frame 1: gain=5.216, saturated 0/160       ← fast release 1 帧清干净
+saturated loud frames (of 8): 1
+```
+
+即：**静默（rms<30）已修，但「安静但高于本底噪声的段落（rms 30–300，如很轻语音/底噪）」仍会爬增益，紧接响帧首帧饱和**——残留 1 帧（10–20ms）硬削顶，fast release（0.25/帧）1 帧即清。
+
+这不是 bug、是 AGC 内禀：rms 30–300 是「该被抬升的安静信号」（hold 阈若抬到 300 会连安静语音一起冻结，AGC 失去意义）。30≈-60 dBFS 作噪声门是合理取舍；残留的 1 帧响起始削顶是 slow-attack/fast-release 不对称的代价，clamp 兜底（饱和不回绕）。建议文档补一句阈值取舍说明即可，不必改算法。
+
+### 第三轮结论
+
+**Request changes（本分支首次 blocking）。**
+
+- A/B 两修复**行为正确、实证通过**（旧探针转失败 + 新回归测试转通过的双重印证）。
+- **但 `8972223` 引入 clippy 回归**（`absurd_extreme_comparisons` @ agc.rs:177），`cargo clippy --workspace --all-targets` 由绿转红。改 `s.unsigned_abs() >= 32767` 即可，一行的事。
+- 非阻塞：阈值 30 vs 300 的 gap 残留 1 帧响起始削顶（内禀、bounded），建议文档补取舍说明。
+
+修掉那行 clippy 就可以合了。
