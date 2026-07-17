@@ -159,8 +159,15 @@ pub fn check_presence_mapping(
 /// disconnect cause FreeSWITCH assigned to the attempt, and the cancel cause (set when the
 /// originate was aborted before completing).
 pub struct OriginateOutcome {
-    /// The newly created outbound session, when the call was answered. The caller owns the use of
-    /// this handle for the originate bridge window; FreeSWITCH retains the underlying session.
+    /// The newly created outbound session, when the call was answered.
+    ///
+    /// **Lock ownership**: `switch_ivr_originate` returns this session still
+    /// READ-LOCKED and the reference passes to the caller — call
+    /// [`Session::rwunlock`] exactly once when you're done with it (typically
+    /// immediately; a bridge re-locates the session by uuid and takes its own
+    /// lock). Forgetting leaks the session: its writer lock blocks at hangup,
+    /// so the session object is never destroyed and FreeSWITCH can't shut
+    /// down cleanly.
     pub peer: Option<Session>,
     /// `SWITCH_CAUSE_*` value describing why the originate ended (e.g. `CAUSE_NORMAL_CLEARING` on
     /// success, `CAUSE_NO_ANSWER` / `CAUSE_USER_BUSY` / `CAUSE_NO_USER_RESPONSE` on failure).

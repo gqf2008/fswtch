@@ -433,6 +433,25 @@ impl Session {
         status_to_result(unsafe { sys::switch_core_session_read_lock_hangup(self.as_ptr()) })
     }
 
+    /// Unlocks `session` — releases ONE read or write lock reference. Pairs with
+    /// [`read_lock`](Self::read_lock) / [`write_lock`](Self::write_lock) /
+    /// [`read_lock_hangup`](Self::read_lock_hangup) ([`SessionGuard::locate`]
+    /// needs no such call — its `Drop` unlocks), and with the read lock
+    /// FreeSWITCH hands the CALLER on a successful
+    /// [`originate`](Self::originate) / [`originate_with_vars`](Self::originate_with_vars):
+    /// `switch_ivr_originate` returns the answered B-leg still read-locked
+    /// (its cleanup skips `rwunlock` only for the returned `bleg`), so the
+    /// caller must release it — forgetting leaks the session: at hangup its
+    /// writer lock blocks forever, the session object is never destroyed
+    /// (zombie in `show calls`), and FreeSWITCH can't shut down cleanly.
+    ///
+    /// Call exactly once per held lock reference, and only when you actually
+    /// hold one — over-unlocking corrupts the rwlock count.
+    pub fn rwunlock(self) {
+        // SAFETY: live session; releases one lock reference held by the caller.
+        unsafe { sys::switch_core_session_rwunlock(self.as_ptr()) };
+    }
+
     /// Soft-locks `session` for `sec` seconds (waits on hangup during that window).
     pub fn soft_lock(self, sec: u32) {
         // SAFETY: live session; plain u32.
