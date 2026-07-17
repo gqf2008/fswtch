@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "ai-agent-seat"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -564,7 +564,7 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
 name = "fswtch"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64",
  "earshot",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "fswtch-apm"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "fswtch",
  "fswtch-apm-sys",
@@ -590,7 +590,7 @@ dependencies = [
 
 [[package]]
 name = "fswtch-apm-sys"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bindgen",
  "cmake",
@@ -598,11 +598,11 @@ dependencies = [
 
 [[package]]
 name = "fswtch-src"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "fswtch-sys"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bindgen",
  "fswtch-src",
