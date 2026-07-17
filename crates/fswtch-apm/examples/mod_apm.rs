@@ -41,6 +41,16 @@ struct ApmState {
     frames_processed: u64,
 }
 
+// SAFETY: `ApmState` is auto-`!Send` only because the WebRTC DSP handles (`EchoCanceller3`,
+// `NoiseSuppressor`, `GainController2`, `HighPassFilter`) each hold a `NonNull` to their C++
+// state (an auto-trait derivation, not real thread affinity — these modules have no thread-local
+// storage). A `MediaBugHandler` is `Box::into_raw`'d on the registration thread and dispatched by
+// FreeSWITCH's per-session media thread; each bug's callbacks are serialized by the trampoline,
+// so no two threads touch the handler concurrently. Moving the boxed state across threads is
+// therefore sound (only `Sync` — shared concurrent access — would be unsound, and the handler is
+// reached via `&mut self`, not shared).
+unsafe impl Send for ApmState {}
+
 impl ApmState {
     const fn new() -> Self {
         Self {

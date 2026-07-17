@@ -160,6 +160,7 @@ Default builds use the bundled FreeSWITCH headers from `fswtch-src`:
 ```sh
 cargo check -p fswtch-sys
 cargo check -p fswtch --examples
+cargo check -p fswtch-apm --examples
 cargo test --workspace
 cargo fmt --all --check
 cargo clippy --workspace --all-targets

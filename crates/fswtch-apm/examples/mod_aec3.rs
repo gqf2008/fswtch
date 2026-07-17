@@ -35,6 +35,15 @@ struct Aec3BugState {
     frames_processed: u64,
 }
 
+// SAFETY: `Aec3BugState` is auto-`!Send` only because `EchoCanceller3` holds a `NonNull` to its
+// C++ state (an auto-trait derivation, not real thread affinity — the WebRTC AEC3 has no
+// thread-local storage). A `MediaBugHandler` is `Box::into_raw`'d on the registration thread and
+// dispatched by FreeSWITCH's per-session media thread; each bug's callbacks are serialized by the
+// trampoline, so no two threads touch the handler concurrently. Moving the boxed state across
+// threads is therefore sound (only `Sync` — shared concurrent access — would be unsound, and the
+// handler is reached via `&mut self`, not shared).
+unsafe impl Send for Aec3BugState {}
+
 impl Aec3BugState {
     const fn new() -> Self {
         Self {
