@@ -123,9 +123,11 @@ impl Task {
 /// reclaimed; call [`Task::set_repeat`] from inside `run` to make it recurring, or to stop a
 /// repeating task by setting it back to `0`.
 ///
-/// The handler is `'static` because it outlives the [`spawn`] call site — it is boxed and held by
-/// the scheduler until the task terminates.
-pub trait TaskHandler: 'static {
+/// The handler is `'static + Send` because it outlives the [`spawn`] call site — it is boxed and
+/// held by the scheduler until the task terminates, and FreeSWITCH dispatches the task on its own
+/// thread (see [`TaskFlags::OWN_THREAD`]) or the shared scheduler thread. The `Send` bound ensures
+/// the handler can be safely moved from the registration thread to the scheduler thread.
+pub trait TaskHandler: 'static + Send {
     /// Invoked once per scheduled firing of the task. Mutate `task` (e.g. via
     /// [`Task::set_repeat`]) to control recurrence.
     fn run(&mut self, task: &mut Task);
