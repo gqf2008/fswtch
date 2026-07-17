@@ -249,7 +249,7 @@ impl MediaBug {
     }
 }
 
-pub trait MediaBugHandler: 'static {
+pub trait MediaBugHandler: 'static + Send {
     fn on_init(&mut self, _ctx: &mut MediaBugContext<'_>) -> MediaBugAction {
         MediaBugAction::Continue
     }

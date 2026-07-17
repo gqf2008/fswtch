@@ -272,15 +272,35 @@ macro_rules! module_load {
             module_interface: *mut *mut ::std::ffi::c_void,
             pool: *mut ::std::ffi::c_void,
         ) -> $crate::Status {
-            let $module =
-                match unsafe { $crate::ModuleBuilder::new(module_interface, pool, $module_name) } {
-                    Ok(module) => module,
-                    Err(error) => return error.status(),
-                };
-            let result: $crate::Result<$crate::ModuleBuilder> = $body;
+            // See `api_callback!` — the whole body is wrapped in `catch_unwind` so a panic cannot
+            // unwind across the `unsafe extern "C"` boundary into FreeSWITCH. Module load returns
+            // a `Status`, so on panic we log and return `Status::GENERR`.
+            let result = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                let $module =
+                    match unsafe { $crate::ModuleBuilder::new(module_interface, pool, $module_name) }
+                    {
+                        Ok(module) => module,
+                        Err(error) => return error.status(),
+                    };
+                let result: $crate::Result<$crate::ModuleBuilder> = $body;
+                match result {
+                    Ok(_) => $crate::Status::SUCCESS,
+                    Err(error) => error.status(),
+                }
+            }));
             match result {
-                Ok(_) => $crate::Status::SUCCESS,
-                Err(error) => error.status(),
+                ::std::result::Result::Ok(status) => status,
+                ::std::result::Result::Err(panic) => {
+                    $crate::log_error(
+                        "fswtch",
+                        ::std::format!(
+                            "panic in module load {}: {:?}",
+                            stringify!($name),
+                            panic
+                        ),
+                    );
+                    $crate::Status::GENERR
+                }
             }
         }
     };
