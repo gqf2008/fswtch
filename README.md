@@ -5,11 +5,14 @@
 
 Rust bindings and helper APIs for writing FreeSWITCH modules.
 
-This workspace is intentionally split into three crates:
+This workspace is split into six crates:
 
 - `fswtch`: safe-ish helpers for module exports, module interface creation, API command registration, stream writes, status conversion, and example logging.
 - `fswtch-sys`: raw FreeSWITCH ABI bindings generated with bindgen.
 - `fswtch-src`: packaged FreeSWITCH headers used by default bundled builds.
+- `fswtch-apm`: safe Rust wrappers over the vendored WebRTC audio-processing C++ (AEC3 / high-pass filter / noise suppressor / AGC2); see [`## fswtch-apm`](#fswtch-apm).
+- `fswtch-apm-sys`: raw generated bindings to the vendored WebRTC audio-processing C++.
+- `ai-agent-seat`: in-process FreeSWITCH AI agent seat module.
 
 ## Wrapper API
 
@@ -115,6 +118,8 @@ let config = fswtch::MediaBugConfig::new(
 fswtch::attach_media_bug(session, config, Meter)?;
 ```
 
+`MediaBugHandler` (and `TaskHandler`) have required `Send` since 0.3.0: the boxed handler is moved from the registration thread to FreeSWITCH's per-session media thread. Handler state that is auto-`!Send` — e.g. types holding raw pointers, like the WebRTC DSP handles in `fswtch-apm` — must assert `Send`; see the `fswtch-apm` examples for the worked `unsafe impl Send` pattern.
+
 ## Subsystem coverage
 
 | Subsystem | fswtch type(s) | Example |
@@ -152,6 +157,12 @@ fswtch::attach_media_bug(session, config, Meter)?;
 | XML config | `XmlConfig`, `XmlNode` | [`mod_config_xml.rs`](crates/fswtch/examples/mod_config_xml.rs) |
 
 cJSON is intentionally not wrapped; use `serde_json` from modules. The raw `fswtch-sys` types are an internal (`pub(crate)`) implementation detail and are not part of the public API.
+
+## fswtch-apm
+
+The `fswtch-apm` crate (companion to `fswtch`) provides safe Rust wrappers over the vendored WebRTC audio-processing C++ tree: `EchoCanceller3` (AEC3), `HighPassFilter`, `NoiseSuppressor`, and `GainController2` (AGC2). Each is an owned, RAII handle over the raw `extern "C"` ABI in `fswtch-apm-sys` (`NonNull` handle, `Drop` frees the C object, `# Safety` contracts on public `unsafe fn`) — the same conventions as the `fswtch` wrappers.
+
+A typical module consumes them from inside a `MediaBugHandler`: the handler holds the DSP state and feeds far-end render / near-end capture frames per 10 ms media-bug callback. Because the WebRTC C++ state is mutated through `&self`-shaped accessors and is not thread-safe, the DSP handles are deliberately `!Send`/`!Sync`; handler state that embeds them must assert `Send` (sound because each media bug's callbacks are serialized by the trampoline on FreeSWITCH's per-session media thread, and the handler is reached via `&mut self`, not shared). See [`mod_aec3.rs`](crates/fswtch-apm/examples/mod_aec3.rs) and [`mod_apm.rs`](crates/fswtch-apm/examples/mod_apm.rs).
 
 ## Build
 
@@ -246,6 +257,11 @@ AI and media integration:
 - `mod_remote_vad`: async websocket VAD worker with custom event reporting.
 - `mod_local_ai_bridge`: local ASR/TTS integration boundary plus OpenAI Responses API NLP calls.
 
+Audio processing (`fswtch-apm` crate, in `crates/fswtch-apm/examples`):
+
+- `mod_aec3`: WebRTC AEC3 echo canceller as a read/write media bug (far-end render + near-end capture).
+- `mod_apm`: full WebRTC APM chain (HPF → AEC3 → NS → AGC2) as a media bug.
+
 ## Local AI Example
 
 `mod_local_ai_bridge` exposes:
@@ -286,5 +302,8 @@ Unsafe blocks are kept small and local to FFI operations. Public unsafe APIs in 
 - `crates/fswtch`: wrapper API and compile-checked Rust module examples.
 - `crates/fswtch-sys`: raw generated FreeSWITCH bindings and bindgen build script.
 - `crates/fswtch-src`: packaged FreeSWITCH headers.
+- `crates/fswtch-apm`: safe wrappers over the vendored WebRTC audio-processing C++.
+- `crates/fswtch-apm-sys`: raw generated bindings to the vendored WebRTC audio-processing C++.
+- `ai-agent-seat`: in-process FreeSWITCH AI agent seat module.
 
 The vendored FreeSWITCH trees are third-party inputs. Avoid reformatting or refactoring them unless intentionally updating vendored FreeSWITCH content.
