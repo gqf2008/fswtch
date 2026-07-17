@@ -1,6 +1,6 @@
 use crate::{
-    Cause, Pool, Result, Session, borrowed_cstr_to_str, cstring, status_to_result,
-    strdup_to_string, sys,
+    Cause, Event, OriginateFlag, Pool, Result, Session, borrowed_cstr_to_str, cstring,
+    status_to_result, strdup_to_string, sys,
 };
 
 use std::ffi::c_char;
@@ -1417,6 +1417,42 @@ impl Session {
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             0,
+            std::ptr::null_mut(),
+        )
+    }
+
+    /// Like [`originate`](Self::originate), but additionally passes a variable event and originate
+    /// flags to the B-leg — the two `switch_ivr_originate` parameters that carry channel variables
+    /// (notably `sip_h_*` headers) and originate behavior. The remaining complex parameters
+    /// (state-handler table, caller-profile override, dial handle) are still passed as null; use
+    /// [`originate_raw`](Self::originate_raw) to supply them.
+    ///
+    /// `ovars`, when given, is only read by FreeSWITCH for the duration of the call and must outlive
+    /// it. `flags` is a bitmask of [`OriginateFlag`] variants combined with `|`, or
+    /// [`OriginateFlag::NONE`] for the default originate behavior.
+    ///
+    /// See [`originate`](Self::originate) for the meaning of the returned [`OriginateOutcome`].
+    pub fn originate_with_vars(
+        self,
+        bridge_to: impl AsRef<str>,
+        timelimit_sec: u32,
+        cid_name: Option<&str>,
+        cid_num: Option<&str>,
+        ovars: Option<&Event>,
+        flags: OriginateFlag,
+    ) -> Result<OriginateOutcome> {
+        let bridge_to = cstring(bridge_to)?;
+        let cid_name = cid_name.map(cstring).transpose()?;
+        let cid_num = cid_num.map(cstring).transpose()?;
+        self.originate_raw(
+            bridge_to.as_ptr(),
+            timelimit_sec,
+            std::ptr::null(),
+            cid_name.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            cid_num.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            std::ptr::null_mut(),
+            ovars.map_or(std::ptr::null_mut(), Event::as_ptr),
+            flags.bits(),
             std::ptr::null_mut(),
         )
     }
