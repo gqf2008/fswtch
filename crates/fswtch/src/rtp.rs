@@ -17,8 +17,8 @@ use std::ptr::NonNull;
 
 use crate::pool::Pool;
 use crate::sys::{
-    self, switch_frame_t, switch_io_flag_t, switch_memory_pool_t, switch_payload_t, switch_port_t,
-    switch_rtp_flag_t, switch_rtp_hdr_t, switch_rtp_packet_t, switch_rtp_t,
+    self, switch_memory_pool_t, switch_payload_t, switch_port_t, switch_rtp_flag_t,
+    switch_rtp_hdr_t, switch_rtp_packet_t, switch_rtp_t,
 };
 use crate::{GENERR, Result, SwitchError, cstring, status_to_result};
 
@@ -48,13 +48,17 @@ pub struct Rtp {
 impl Rtp {
     /// Wraps a pre-existing `switch_rtp_t *` created outside this wrapper.
     ///
+    /// Generic over the pointee so callers can pass a pointee-erased `*mut c_void` without naming a
+    /// `*-sys` type; the pointee is cast to `switch_rtp_t` internally.
+    ///
     /// # Safety
     ///
     /// `raw` must point to a live `switch_rtp_t` obtained from `switch_rtp_new` (or equivalent) and
     /// must not already be owned by another [`Rtp`] or have been destroyed. Ownership transfers to
     /// the returned [`Rtp`]; dropping it will call `switch_rtp_destroy`.
-    pub unsafe fn from_raw(raw: *mut switch_rtp_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self {
+    pub unsafe fn from_raw<T>(raw: *mut T) -> Option<Self> {
+        // SAFETY: pointer validity is the caller's contract (see `# Safety`); null → None.
+        NonNull::new(raw as *mut sys::switch_rtp_t).map(|raw| Self {
             raw,
             _marker: PhantomData,
         })
@@ -68,15 +72,15 @@ impl Rtp {
 
     /// Writes a media frame to the session. Returns the number of bytes written.
     ///
-    /// `frame` is a raw `switch_frame_t *` because [`crate::Frame`] is not yet available; construct
-    /// or borrow the frame on the C side and pass the pointer through. The pointer is only read for
-    /// the duration of this call.
+    /// `frame` is a pointee-erased `*mut c_void` that must actually point to a `switch_frame_t`
+    /// ([`crate::Frame`] is not yet available, so the frame is constructed/borrowed on the C side).
+    /// The pointer is only read for the duration of this call.
     ///
     /// `switch_rtp_write_frame` returns the byte count on success; a negative return indicates a
     /// write failure and is mapped to [`crate::SwitchError`]`([`crate::GENERR`]`).
-    pub fn write_frame(&self, frame: *mut switch_frame_t) -> Result<u32> {
-        // SAFETY: `self.raw` is a live RTP session; `frame` is borrowed for the call only.
-        let written = unsafe { sys::switch_rtp_write_frame(self.raw.as_ptr(), frame) };
+    pub fn write_frame(&self, frame: *mut std::ffi::c_void) -> Result<u32> {
+        // SAFETY: `self.raw` is a live RTP session; `frame` borrows a `switch_frame_t` for the call.
+        let written = unsafe { sys::switch_rtp_write_frame(self.raw.as_ptr(), frame.cast()) };
         if written < 0 {
             return Err(SwitchError(GENERR));
         }
@@ -87,12 +91,14 @@ impl Rtp {
     ///
     /// Uses `switch_rtp_zerocopy_read_frame`, which fills the supplied `switch_frame_t` with a
     /// pointer into the RTP read buffer (no copy). The frame and the buffer it references are valid
-    /// until the next read on this session. `frame` is a raw pointer because [`crate::Frame`] is not
-    /// yet available.
-    pub fn read_frame(&self, frame: *mut switch_frame_t, io_flags: switch_io_flag_t) -> Result<()> {
-        // SAFETY: `self.raw` is a live RTP session; `frame` is a valid out-pointer for the call.
-        let status =
-            unsafe { sys::switch_rtp_zerocopy_read_frame(self.raw.as_ptr(), frame, io_flags) };
+    /// until the next read on this session. `frame` is a pointee-erased `*mut c_void` that must
+    /// actually point to a `switch_frame_t` ([`crate::Frame`] is not yet available). `io_flags` is
+    /// the raw `switch_io_flag_t` bitmask (a `u32`).
+    pub fn read_frame(&self, frame: *mut std::ffi::c_void, io_flags: u32) -> Result<()> {
+        // SAFETY: `self.raw` is a live RTP session; `frame` is a valid `switch_frame_t` out-pointer.
+        let status = unsafe {
+            sys::switch_rtp_zerocopy_read_frame(self.raw.as_ptr(), frame.cast(), io_flags)
+        };
         status_to_result(status)
     }
 
@@ -109,7 +115,7 @@ impl Rtp {
     }
 
     /// The remote UDP port currently associated with the session.
-    pub fn remote_port(&self) -> switch_port_t {
+    pub fn remote_port(&self) -> u16 {
         // SAFETY: `self.raw` is a live RTP session.
         unsafe { sys::switch_rtp_get_remote_port(self.raw.as_ptr()) }
     }
@@ -122,8 +128,8 @@ impl Rtp {
     pub fn set_remote_address(
         &self,
         host: impl AsRef<str>,
-        port: switch_port_t,
-        remote_rtcp_port: switch_port_t,
+        port: u16,
+        remote_rtcp_port: u16,
         change_adv_addr: bool,
     ) -> Result<()> {
         let host = cstring(host)?;
@@ -144,7 +150,7 @@ impl Rtp {
     }
 
     /// Sets the local (bind) address. This also (re)binds the session's UDP socket.
-    pub fn set_local_address(&self, host: impl AsRef<str>, port: switch_port_t) -> Result<()> {
+    pub fn set_local_address(&self, host: impl AsRef<str>, port: u16) -> Result<()> {
         let host = cstring(host)?;
         let mut err: *const c_char = std::ptr::null();
         // SAFETY: `self.raw` is a live RTP session; `host` is a valid C string; `err` is a valid
@@ -236,7 +242,7 @@ impl RtpConfig {
     }
 
     /// Local (bind) UDP port. `0` lets the OS choose.
-    pub fn rx_port(mut self, port: switch_port_t) -> Self {
+    pub fn rx_port(mut self, port: u16) -> Self {
         self.rx_port = port;
         self
     }
@@ -248,13 +254,13 @@ impl RtpConfig {
     }
 
     /// Remote (peer) UDP port.
-    pub fn tx_port(mut self, port: switch_port_t) -> Self {
+    pub fn tx_port(mut self, port: u16) -> Self {
         self.tx_port = port;
         self
     }
 
     /// IANA RTP payload number (e.g. `0` for PCMU, `8` for PCMA).
-    pub fn payload(mut self, payload: switch_payload_t) -> Self {
+    pub fn payload(mut self, payload: u8) -> Self {
         self.payload = payload;
         self
     }
@@ -273,7 +279,7 @@ impl RtpConfig {
 
     /// Sets a single `switch_rtp_flag_t` (`SWITCH_RTP_FLAG_*`) in the flag array, leaving others
     /// unchanged. Safe to call repeatedly to combine flags.
-    pub fn flag(mut self, flag: switch_rtp_flag_t) -> Self {
+    pub fn flag(mut self, flag: u32) -> Self {
         let idx = flag as usize;
         if idx < RTP_FLAG_COUNT {
             self.flags[idx] = flag;
@@ -288,13 +294,13 @@ impl RtpConfig {
     }
 
     /// Bundle internal port (audio/video bundling). `0` disables bundling.
-    pub fn bundle_internal_port(mut self, port: switch_port_t) -> Self {
+    pub fn bundle_internal_port(mut self, port: u16) -> Self {
         self.bundle_internal_port = port;
         self
     }
 
     /// Bundle external port (audio/video bundling). `0` disables bundling.
-    pub fn bundle_external_port(mut self, port: switch_port_t) -> Self {
+    pub fn bundle_external_port(mut self, port: u16) -> Self {
         self.bundle_external_port = port;
         self
     }
@@ -354,7 +360,7 @@ impl RtpConfig {
 /// Returns the port to bind to, or `0` if none is available. The returned port should be released
 /// back to the allocator via `switch_rtp_release_port` when the session ends (not wrapped here —
 /// [`Rtp`] manages its own socket and frees the port on drop).
-pub fn request_port(ip: impl AsRef<str>) -> Result<switch_port_t> {
+pub fn request_port(ip: impl AsRef<str>) -> Result<u16> {
     let ip = cstring(ip)?;
     // SAFETY: `ip` is a valid C string for the duration of the call.
     let port = unsafe { sys::switch_rtp_request_port(ip.as_ptr()) };
@@ -374,8 +380,8 @@ pub fn request_port(ip: impl AsRef<str>) -> Result<switch_port_t> {
 /// underlying storage. Reach the unwrapped struct via [`RtpPacket::as_ptr`] for code paths that
 /// need fields not yet wrapped.
 ///
-/// Created with [`RtpPacket::from_raw`] (from a C pointer) or
-/// [`RtpPacket::from_ref`] (from an existing `&switch_rtp_packet_t`).
+/// Created with [`RtpPacket::from_raw`] (from a C pointer). An in-crate `from_ref` constructor
+/// exists for tests and internal use when a `switch_rtp_packet_t` value is already on the Rust side.
 #[derive(Copy, Clone)]
 pub struct RtpPacket<'a> {
     raw: NonNull<switch_rtp_packet_t>,
@@ -385,20 +391,25 @@ pub struct RtpPacket<'a> {
 impl<'a> RtpPacket<'a> {
     /// Wraps a raw `switch_rtp_packet_t *` for borrowed access.
     ///
+    /// Generic over the pointee so callers can pass a pointee-erased `*mut c_void` without naming a
+    /// `*-sys` type; the pointee is cast to `switch_rtp_packet_t` internally.
+    ///
     /// # Safety
     ///
     /// `raw` must be null or point to a live `switch_rtp_packet_t` whose storage remains valid for
     /// the lifetime `'a`. The returned handle borrows the struct without owning it.
-    pub unsafe fn from_raw(raw: *mut switch_rtp_packet_t) -> Option<Self> {
-        NonNull::new(raw).map(|raw| Self {
+    pub unsafe fn from_raw<T>(raw: *mut T) -> Option<Self> {
+        // SAFETY: pointer validity is the caller's contract (see `# Safety`); null → None.
+        NonNull::new(raw as *mut sys::switch_rtp_packet_t).map(|raw| Self {
             raw,
             _lt: PhantomData,
         })
     }
 
-    /// Borrows an existing `switch_rtp_packet_t` by reference. Convenient when the struct is
-    /// already on the Rust side (e.g. a `Default` value used in [`crate::JitterBuffer`] I/O).
-    pub fn from_ref(raw: &'a switch_rtp_packet_t) -> Self {
+    /// Borrows an existing `switch_rtp_packet_t` by reference. In-crate convenience for tests and
+    /// internal call sites where the struct is already on the Rust side (e.g. a `Default` value
+    /// used in [`crate::JitterBuffer`] I/O).
+    pub(crate) fn from_ref(raw: &'a switch_rtp_packet_t) -> Self {
         // SAFETY: `raw` is a shared reference to a live value valid for `'a`; casting it to a
         // pointer and re-wrapping in `NonNull` preserves that borrow.
         Self {
@@ -414,13 +425,15 @@ impl<'a> RtpPacket<'a> {
         self.raw.as_ptr()
     }
 
-    /// Read-only access to the fixed RTP header.
+    /// Read-only access to the fixed RTP header (in-crate escape hatch).
     ///
-    /// The header is a bindgen bitfield unit; callers needing the raw bitfields (version, marker,
-    /// padding, CSRC count, etc.) can read them through the returned reference's bindgen-generated
-    /// accessors (`version`, `pt`, `seq`, `ts`, `ssrc`, ...).
+    /// The header is a bindgen bitfield unit; the public accessors below ([`version`](Self::version),
+    /// [`payload_type`](Self::payload_type), [`marker`](Self::marker), [`seq`](Self::seq),
+    /// [`timestamp`](Self::timestamp), [`ssrc`](Self::ssrc)) read through this. Kept `pub(crate)`
+    /// so the `switch_rtp_hdr_t` pointee does not leak into the public API; callers needing raw
+    /// bitfields can reach the struct via the `as_ptr` escape hatch in their own `unsafe` code.
     #[inline]
-    pub fn header(self) -> &'a switch_rtp_hdr_t {
+    pub(crate) fn header(self) -> &'a switch_rtp_hdr_t {
         // SAFETY: `self.raw` points to a live packet valid for `'a`. We form the shared borrow to
         // the `header` field via `addr_of!` then reborrow it as `&'a`, so no exclusive aliasing of
         // the surrounding struct can occur.
@@ -555,7 +568,7 @@ mod packet_tests {
     #[test]
     fn from_raw_null_returns_none() {
         // SAFETY: null is explicitly permitted by the `from_raw` contract.
-        let none = unsafe { RtpPacket::from_raw(std::ptr::null_mut()) };
+        let none = unsafe { RtpPacket::from_raw(std::ptr::null_mut::<sys::switch_rtp_packet_t>()) };
         assert!(none.is_none());
     }
 

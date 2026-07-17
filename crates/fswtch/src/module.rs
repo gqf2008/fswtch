@@ -802,7 +802,7 @@ impl __ModuleFunctionTable {
     /// macro supplies exactly these (the `module_load!` trampoline for `load`, and user
     /// `-> fswtch::Status` fns for `shutdown`/`runtime`); do not call `__new` directly.
     #[doc(hidden)]
-    #[allow(clippy::missing_safety_doc, clippy::missing_transmute_annotations)]
+    #[allow(clippy::missing_transmute_annotations)]
     pub const unsafe fn __new(
         load: Option<
             unsafe extern "C" fn(
@@ -1083,5 +1083,25 @@ mod alias_type_checks {
         let _: DbHandleNewFn = r.handle_new;
         let _: DbHandleDestroyFn = r.handle_destroy;
         let _: DbExecDetailedFn = r.exec_detailed;
+    }
+
+    /// Load-bearing ABI invariant for every callback `transmute` in this crate: the public
+    /// `extern "C" fn(...) -> Status` callback types are bitcast onto FreeSWITCH's
+    /// `... -> switch_status_t` field types. That bitcast is sound only while `Status` stays
+    /// `#[repr(transparent)]` over `sys::switch_status_t`. (Function-pointer *arity* drift cannot
+    /// be compile-checked — the source and target types intentionally differ, which is exactly why
+    /// `transmute` is required — so this size/align assertion is the strongest static guard
+    /// available for the eight transmute sites in `module.rs` / `event.rs`.)
+    #[test]
+    fn status_is_abi_compatible_with_switch_status_t() {
+        use std::mem::{align_of, size_of};
+        assert_eq!(
+            size_of::<crate::Status>(),
+            size_of::<sys::switch_status_t>()
+        );
+        assert_eq!(
+            align_of::<crate::Status>(),
+            align_of::<sys::switch_status_t>()
+        );
     }
 }

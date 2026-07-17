@@ -174,7 +174,7 @@ impl std::ops::BitOr for TaskFlags {
 /// Configuration for a scheduled task. Mirrors the [`crate::media::MediaBugConfig`] style.
 #[derive(Debug, Copy, Clone)]
 pub struct TaskConfig {
-    pub runtime: sys::time_t,
+    pub runtime: i64,
     pub desc: &'static std::ffi::CStr,
     pub group: &'static std::ffi::CStr,
     pub cmd_id: u32,

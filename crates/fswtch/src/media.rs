@@ -82,7 +82,7 @@ pub struct MediaBugConfig {
     pub function: &'static CStr,
     pub target: &'static CStr,
     pub flags: MediaBugFlags,
-    pub stop_time: sys::time_t,
+    pub stop_time: i64,
 }
 
 impl MediaBugConfig {
@@ -99,7 +99,7 @@ impl MediaBugConfig {
         })
     }
 
-    pub(crate) const fn stop_time(mut self, stop_time: sys::time_t) -> Self {
+    pub(crate) const fn stop_time(mut self, stop_time: i64) -> Self {
         self.stop_time = stop_time;
         self
     }

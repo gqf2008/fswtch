@@ -78,9 +78,11 @@ impl Status {
 // Bridge from raw FreeSWITCH status values into the safe `Status` newtype. This is the single
 // point every internal FFI call site uses to funnel a `sys::switch_status_t` return through
 // `status_to_result(impl Into<Status>)`. It is `pub(crate)`-reachable only (the `sys` alias is
-// crate-private), so it cannot be invoked from outside `fswtch`; it surfaces in rustdoc purely as
-// the canonical raw→safe conversion. Removing it would require wrapping ~250 call sites in
-// `Status::from_raw(..)` for no safety benefit.
+// crate-private), so it cannot be invoked from outside `fswtch`. The impl is `#[doc(hidden)]` so
+// the `sys::switch_status_t` type does not surface in `Status`'s public rustdoc trait-impl list.
+// Removing it would require wrapping ~250 call sites in `Status::from_raw(..)` for no safety
+// benefit.
+#[doc(hidden)]
 impl From<sys::switch_status_t> for Status {
     #[inline]
     fn from(v: sys::switch_status_t) -> Self {

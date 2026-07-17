@@ -642,8 +642,10 @@ pub enum CacheDbType {
     Unknown(u32),
 }
 
-impl From<sys::switch_cache_db_handle_type_t> for CacheDbType {
-    fn from(v: sys::switch_cache_db_handle_type_t) -> Self {
+impl CacheDbType {
+    /// Converts a raw `switch_cache_db_handle_type_t` discriminant into the safe enum. In-crate
+    /// only (the `sys` alias is crate-private), so the `sys` type does not enter the public API.
+    pub(crate) fn from_raw(v: sys::switch_cache_db_handle_type_t) -> Self {
         match v {
             sys::switch_cache_db_handle_type_t_SCDB_TYPE_CORE_DB => Self::CoreDb,
             sys::switch_cache_db_handle_type_t_SCDB_TYPE_ODBC => Self::Odbc,
@@ -660,5 +662,5 @@ impl From<sys::switch_cache_db_handle_type_t> for CacheDbType {
 /// Wraps `switch_core_dbtype`.
 pub fn cache_db_type() -> CacheDbType {
     // SAFETY: no arguments; returns a plain enum-discriminant u32.
-    CacheDbType::from(unsafe { sys::switch_core_dbtype() })
+    CacheDbType::from_raw(unsafe { sys::switch_core_dbtype() })
 }
