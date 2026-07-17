@@ -1,0 +1,19 @@
+[package]
+name = "fswtch-unicast"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "FreeSWITCH endpoint module bridging call media over a single raw-PCM UDP socket"
+
+[lib]
+name = "fswtch_unicast"
+crate-type = ["cdylib"]
+
+[dependencies]
+fswtch = { path = "../crates/fswtch" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "net"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+dashmap = "6"

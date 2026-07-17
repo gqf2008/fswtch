@@ -610,6 +610,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fswtch-unicast"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "dashmap",
+ "fswtch",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"

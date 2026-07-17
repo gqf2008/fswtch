@@ -6,6 +6,7 @@ members = [
     "crates/fswtch-apm",
     "crates/fswtch-apm-sys",
     "ai-agent-seat",
+    "fswtch-unicast",
 ]
 resolver = "3"
 
