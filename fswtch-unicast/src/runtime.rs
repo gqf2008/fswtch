@@ -88,9 +88,3 @@ where
     };
     Some(runtime.spawn(future))
 }
-
-/// Returns a handle to the live runtime, if started.
-pub fn handle() -> Option<tokio::runtime::Handle> {
-    let guard = runtime_slot().lock().expect("runtime mutex poisoned");
-    guard.as_ref().map(|r| r.handle().clone())
-}

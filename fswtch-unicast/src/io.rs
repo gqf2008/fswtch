@@ -14,7 +14,9 @@
 //!   UDP send task via an async channel.
 //! - `read_frame` drains UDP-received PCM from an async channel into the frame
 //!   buffer; missing samples are filled with silence.
-//! - `kill_channel` removes the per-call state, aborting the UDP tasks.
+//! - `kill_channel` removes the per-call state, aborting the UDP tasks. A
+//!   background [`reap_loop`] reclaims entries whose session was destroyed
+//!   without `kill_channel(SIG_KILL)` ever firing.
 //!
 //! The UDP payload is **raw little-endian i16 PCM** with no framing — one UDP
 //! socket per call, raw PCM in both directions.
@@ -22,6 +24,7 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use dashmap::DashMap;
 use fswtch::{
@@ -44,6 +47,17 @@ const UDP_BUF_BYTES: usize = 2048;
 /// Channel capacity between the FS media thread and the tokio UDP tasks,
 /// measured in frames. 256 frames ≈ 5 s at 20 ms / frame.
 const FRAME_CHANNEL_CAP: usize = 256;
+
+/// Soft cap on the recv staging buffer, in samples. Bounds memory under
+/// sustained stalls where `read_frame` is not driven (the mpsc channel already
+/// caps incoming frames at `FRAME_CHANNEL_CAP`; this is a defensive ceiling on
+/// the drained buffer). Excess is dropped oldest-first. 81_920 samples ≈ 5.1 s
+/// at 8 kHz mono.
+const RECV_BUFFER_CAP_SAMPLES: usize = 81_920;
+
+/// How often the orphan-call [`reap_loop`] scans [`CALLS`] for entries whose
+/// FreeSWITCH session has been destroyed without `kill_channel(SIG_KILL)`.
+const REAP_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Global registry: call UUID → per-call UDP/media state.
 pub static CALLS: std::sync::LazyLock<DashMap<String, CallState>> =
@@ -132,24 +146,26 @@ async fn recv_loop(socket: Arc<UdpSocket>, tx: mpsc::Sender<Vec<i16>>) {
 }
 
 /// Tokio task: receive i16 PCM from the FS media thread and send raw LE bytes
-/// to `remote`.
+/// to `remote`. Reuses a single send buffer to avoid per-frame allocation.
 async fn send_loop(socket: Arc<UdpSocket>, remote: SocketAddr, mut rx: mpsc::Receiver<Vec<i16>>) {
+    let mut buf = Vec::<u8>::with_capacity(UDP_BUF_BYTES);
     while let Some(samples) = rx.recv().await {
-        let bytes = i16_to_bytes(&samples);
-        if let Err(e) = socket.send_to(&bytes, remote).await {
+        write_i16_le(&samples, &mut buf);
+        if let Err(e) = socket.send_to(&buf, remote).await {
             tracing::error!("UDP send error: {e}");
             break;
         }
     }
 }
 
-/// Convert PCM samples to little-endian bytes for UDP transmission.
-fn i16_to_bytes(samples: &[i16]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(samples.len() * 2);
+/// Encode PCM samples as little-endian bytes into `out` (cleared first). Used by
+/// [`send_loop`] with a reused buffer; it is the inverse of [`bytes_to_i16`].
+fn write_i16_le(samples: &[i16], out: &mut Vec<u8>) {
+    out.clear();
+    out.reserve(samples.len() * 2);
     for &sample in samples {
-        bytes.extend_from_slice(&sample.to_le_bytes());
+        out.extend_from_slice(&sample.to_le_bytes());
     }
-    bytes
 }
 
 /// Convert little-endian bytes from UDP to PCM samples. Odd trailing byte is
@@ -159,6 +175,81 @@ fn bytes_to_i16(bytes: &[u8]) -> Vec<i16> {
         .chunks_exact(2)
         .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
         .collect()
+}
+
+/// Drain queued recv chunks into `state.recv_buffer`, then copy `buf.len()`
+/// samples into `buf`. Missing samples are zero-filled (silence). This is the
+/// pure, FreeSWITCH-free core of [`FswtchUnicast::read_frame`], extracted so it
+/// can be exercised without a live session.
+fn stage_and_fill(state: &mut CallState, buf: &mut [i16]) {
+    // Move all available received chunks into the staging buffer.
+    while let Ok(chunk) = state.recv_rx.try_recv() {
+        state.recv_buffer.extend(chunk);
+    }
+    // Defensive cap: drop oldest if a sustained stall let it grow past the
+    // ceiling (the mpsc cap alone bounds this only indirectly).
+    while state.recv_buffer.len() > RECV_BUFFER_CAP_SAMPLES {
+        state.recv_buffer.pop_front();
+    }
+
+    let available = state.recv_buffer.len().min(buf.len());
+    for slot in buf.iter_mut().take(available) {
+        *slot = state.recv_buffer.pop_front().unwrap_or(0);
+    }
+    for slot in &mut buf[available..] {
+        *slot = 0;
+    }
+}
+
+/// Forward caller-supplied samples to the tokio UDP send task. This is the pure
+/// core of [`FswtchUnicast::write_frame`]; logs and drops on `Full`/`Closed`.
+fn try_enqueue(state: &CallState, uuid: &str, samples: Vec<i16>) {
+    if let Err(e) = state.send_tx.try_send(samples) {
+        match e {
+            mpsc::error::TrySendError::Full(_) => {
+                tracing::warn!("write_frame: send channel full for {uuid}, dropping frame");
+            }
+            mpsc::error::TrySendError::Closed(_) => {
+                tracing::debug!("write_frame: send channel closed for {uuid}");
+            }
+        }
+    }
+}
+
+/// Background reaper: drops [`CallState`] entries whose FreeSWITCH session has
+/// been destroyed out from under us — teardown paths where
+/// `kill_channel(SIG_KILL)` never fires. Runs on the module tokio runtime every
+/// [`REAP_INTERVAL`]; in normal operation `kill_channel` handles teardown and
+/// the reaper is a no-op.
+///
+/// `SessionGuard::locate` read-locks the looked-up session, so each probe runs
+/// on the blocking pool to avoid stalling the async worker (and thus the media
+/// thread's mpsc channels).
+async fn reap_loop() {
+    let mut interval = tokio::time::interval(REAP_INTERVAL);
+    loop {
+        interval.tick().await;
+        let uuids: Vec<String> = CALLS.iter().map(|entry| entry.key().clone()).collect();
+        for uuid in uuids {
+            let probe = uuid.clone();
+            let gone = tokio::task::spawn_blocking(move || {
+                matches!(fswtch::SessionGuard::locate(&probe), Ok(None))
+            })
+            .await
+            .unwrap_or(false);
+            if gone && let Some((_, _state)) = CALLS.remove(&uuid) {
+                tracing::info!("reaper: removed orphaned call state for {uuid}");
+                // `_state` drops at block end → aborts tasks, closes socket.
+            }
+        }
+    }
+}
+
+/// Spawn the orphan-call [`reap_loop`] on the module tokio runtime. Returns
+/// `None` (with a log) if the runtime isn't started — the task self-cancels
+/// when the runtime stops.
+pub(crate) fn spawn_reaper() -> Option<JoinHandle<()>> {
+    crate::runtime::spawn(reap_loop())
 }
 
 /// The `fswtch_unicast` endpoint: a unit-struct implementing
@@ -174,6 +265,18 @@ impl EndpointIoRoutines for FswtchUnicast {
     /// Parses the remote UDP address from `destination_number`, creates a new
     /// session on this endpoint, sets up L16 8 kHz mono codecs, and starts the
     /// per-call UDP socket + tasks.
+    ///
+    /// If `CallState::new` (UDP bind / task spawn) fails, the B-leg is still
+    /// handed to FreeSWITCH via `success` with **degraded media** (`read_frame`
+    /// emits silence, `write_frame` drops — no entry in [`CALLS`]). Refusing
+    /// would be the intuitive choice, but `fswtch` exposes no
+    /// `switch_core_session_destroy`, and `Session` has no `Drop`/refcount
+    /// decrement — so refusing without handing the session to FS would strand
+    /// it: `hangup` only sets the cause, it does not run the state machine to
+    /// `CS_DESTROY`, leaking the session. Success lets FS launch the state
+    /// machine and tear the B-leg down normally when the call ends. This
+    /// matches the `ai-agent-seat` sibling. The failure itself (UDP bind to
+    /// `0.0.0.0:0`) is near-impossible except under socket/port exhaustion.
     fn outgoing_channel(
         _session: Option<&Session>,
         caller_profile: Option<CallerProfile>,
@@ -215,6 +318,7 @@ impl EndpointIoRoutines for FswtchUnicast {
 
         let Some(channel) = new_session.channel() else {
             tracing::error!("outgoing_channel: get_channel returned null");
+            // No channel to hang up through; FS will reclaim the session.
             return OutgoingResult::refused();
         };
 
@@ -241,7 +345,15 @@ impl EndpointIoRoutines for FswtchUnicast {
                     CALLS.insert(uuid, state);
                 }
                 Err(e) => {
-                    tracing::error!("outgoing_channel: CallState::new failed: {e}");
+                    // See the doc comment above: we intentionally do NOT refuse
+                    // here. Hand the session to FS (success below) so its state
+                    // machine can tear it down normally; read_frame/write_frame
+                    // degrade to silence/drop with no CALLS entry. Refusing
+                    // would leak the unlaunched session (no destroy API).
+                    tracing::error!(
+                        "outgoing_channel: CallState::new failed for {uuid}: {e} — \
+                         session handed to FS with degraded (silent) media"
+                    );
                 }
             }
         }
@@ -257,25 +369,24 @@ impl EndpointIoRoutines for FswtchUnicast {
             return SUCCESS;
         };
 
-        let samples = match frame.pcm_i16() {
-            Some(s) if !s.is_empty() => s,
-            _ => return SUCCESS,
+        let Some(samples) = frame.pcm_i16() else {
+            return SUCCESS;
         };
+        if samples.is_empty() {
+            return SUCCESS;
+        }
 
         let Some(state) = CALLS.get(&uuid) else {
             return SUCCESS;
         };
 
-        if let Err(e) = state.send_tx.try_send(samples.to_vec()) {
-            match e {
-                mpsc::error::TrySendError::Full(_) => {
-                    tracing::warn!("write_frame: send channel full for {uuid}, dropping frame");
-                }
-                mpsc::error::TrySendError::Closed(_) => {
-                    tracing::debug!("write_frame: send channel closed for {uuid}");
-                }
-            }
-        }
+        // NOTE: `to_vec()` is required — the channel carries owned `Vec<i16>`
+        // consumed asynchronously by `send_loop` after this callback returns;
+        // `pcm_i16()` only borrows the frame for the call's duration. A future
+        // fswtch API exposing a borrowed session UUID (avoiding the per-frame
+        // `channel().uuid()` allocation) would remove the remaining allocations
+        // on this path; out of scope here.
+        try_enqueue(&state, &uuid, samples.to_vec());
 
         SUCCESS
     }
@@ -295,34 +406,25 @@ impl EndpointIoRoutines for FswtchUnicast {
         };
 
         let Some(mut state) = CALLS.get_mut(&uuid) else {
+            // No per-call state (e.g. CallState::new failed earlier): emit
+            // silence rather than uninitialized media.
             for s in buf {
                 *s = 0;
             }
             return SUCCESS;
         };
 
-        // Move all available received chunks into the staging buffer.
-        while let Ok(chunk) = state.recv_rx.try_recv() {
-            state.recv_buffer.extend(chunk);
-        }
-
-        let needed = buf.len();
-        let available = state.recv_buffer.len().min(needed);
-
-        for s in buf.iter_mut().take(available) {
-            *s = state.recv_buffer.pop_front().unwrap_or(0);
-        }
-        for s in &mut buf[available..] {
-            *s = 0;
-        }
+        stage_and_fill(&mut state, buf);
 
         SUCCESS
     }
 
     /// `kill_channel`: call ended — remove the [`CallState`] from [`CALLS`].
     fn kill_channel(session: &Session, sig: i32) -> Status {
-        // Only SWITCH_SIG_KILL (1) tears the call down. BREAK/XFER are media
-        // control signals and must not destroy state.
+        // FreeSWITCH's `switch_signal_t` (see `switch_types.h`): NONE=0, KILL=1,
+        // BREAK=2, … Only KILL tears the call down; BREAK/XFER are media-control
+        // signals and must not destroy state. `fswtch` does not yet expose a
+        // named `SwitchSig`, so this mirrors the header.
         const SIG_KILL: i32 = 1;
         if sig != SIG_KILL {
             tracing::trace!("kill_channel sig={sig} (non-KILL; keeping call state)");
@@ -333,10 +435,10 @@ impl EndpointIoRoutines for FswtchUnicast {
             return SUCCESS;
         };
 
-        if let Some((_, state)) = CALLS.remove(&uuid) {
-            // Dropping CallState aborts the tokio tasks and closes the socket.
-            drop(state);
+        if CALLS.remove(&uuid).is_some() {
             tracing::info!("kill_channel: removed call state for {uuid}");
+            // The removed `CallState` is dropped at the end of this statement,
+            // aborting the tokio tasks and closing the UDP socket.
         }
 
         SUCCESS
@@ -347,10 +449,36 @@ impl EndpointIoRoutines for FswtchUnicast {
 mod tests {
     use super::*;
 
+    /// A [`CallState`] with live mpsc channels but no real UDP socket or
+    /// runtime tasks, so unit tests can exercise [`stage_and_fill`] and
+    /// [`try_enqueue`] without FreeSWITCH or the module runtime. Also returns
+    /// the `recv_tx` (to inject received samples) and `send_rx` (to observe
+    /// enqueued samples). Must be called from a tokio runtime context (the
+    /// tests below are `#[tokio::test]`).
+    fn call_state_for_test() -> (CallState, mpsc::Sender<Vec<i16>>, mpsc::Receiver<Vec<i16>>) {
+        let (send_tx, send_rx) = mpsc::channel::<Vec<i16>>(FRAME_CHANNEL_CAP);
+        let (recv_tx, recv_rx) = mpsc::channel::<Vec<i16>>(FRAME_CHANNEL_CAP);
+        // `tokio::spawn` is available because callers run inside `#[tokio::test]`.
+        // The handles complete immediately; `Drop` aborts them harmlessly.
+        let recv_task = tokio::spawn(async {});
+        let send_task = tokio::spawn(async {});
+        let state = CallState {
+            uuid: String::from("test-uuid"),
+            remote_addr: "127.0.0.1:0".parse().unwrap(),
+            send_tx,
+            recv_rx,
+            recv_buffer: VecDeque::new(),
+            recv_task,
+            send_task,
+        };
+        (state, recv_tx, send_rx)
+    }
+
     #[test]
     fn i16_bytes_roundtrip() {
         let samples: Vec<i16> = vec![0, 1, -1, i16::MAX, i16::MIN, 32767, -32768];
-        let bytes = i16_to_bytes(&samples);
+        let mut bytes = Vec::new();
+        write_i16_le(&samples, &mut bytes);
         let decoded = bytes_to_i16(&bytes);
         assert_eq!(decoded, samples);
     }
@@ -360,5 +488,111 @@ mod tests {
         let bytes = vec![0x01, 0x00, 0xFF]; // 1 i16 sample + 1 trailing byte
         let decoded = bytes_to_i16(&bytes);
         assert_eq!(decoded, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn stage_and_fill_drains_chunks_and_zero_fills_tail() {
+        let (mut state, recv_tx, _send_rx) = call_state_for_test();
+        recv_tx.send(vec![1, 2, 3]).await.unwrap();
+        recv_tx.send(vec![4, 5]).await.unwrap();
+
+        let mut buf = vec![0i16; 10];
+        stage_and_fill(&mut state, &mut buf);
+
+        // First 5 samples come from the queued chunks in order; rest silenced.
+        assert_eq!(buf, vec![1, 2, 3, 4, 5, 0, 0, 0, 0, 0]);
+        // Buffer fully drained (we asked for ≥ what was queued).
+        assert!(state.recv_buffer.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stage_and_fill_silences_when_no_input() {
+        let (mut state, _recv_tx, _send_rx) = call_state_for_test();
+        let mut buf = vec![1i16; 5];
+        stage_and_fill(&mut state, &mut buf);
+        assert_eq!(buf, vec![0, 0, 0, 0, 0]);
+    }
+
+    #[tokio::test]
+    async fn stage_and_fill_preserves_leftover_for_next_frame() {
+        let (mut state, recv_tx, _send_rx) = call_state_for_test();
+        recv_tx.send(vec![1, 2, 3, 4, 5]).await.unwrap();
+
+        let mut buf = vec![0i16; 2];
+        stage_and_fill(&mut state, &mut buf);
+        assert_eq!(buf, vec![1, 2]);
+        // 3 samples remain staged for the next read_frame.
+        assert_eq!(
+            state.recv_buffer.iter().copied().collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+
+        let mut buf = vec![0i16; 3];
+        stage_and_fill(&mut state, &mut buf);
+        assert_eq!(buf, vec![3, 4, 5]);
+        assert!(state.recv_buffer.is_empty());
+    }
+
+    #[tokio::test]
+    async fn try_enqueue_delivers_to_send_channel() {
+        let (state, _recv_tx, mut send_rx) = call_state_for_test();
+        try_enqueue(&state, "test-uuid", vec![1, -1, 2]);
+        let got = tokio::time::timeout(Duration::from_secs(1), send_rx.recv())
+            .await
+            .expect("timed out waiting for send_rx")
+            .expect("send_rx closed unexpectedly");
+        assert_eq!(got, vec![1, -1, 2]);
+    }
+
+    #[tokio::test]
+    async fn try_enqueue_drops_overflow_without_panicking() {
+        // Bounded channel cap is FRAME_CHANNEL_CAP; overflowing must drop via
+        // `Full` rather than block or panic.
+        let (state, _recv_tx, _send_rx) = call_state_for_test();
+        for i in 0..(FRAME_CHANNEL_CAP + 50) {
+            try_enqueue(&state, "test-uuid", vec![i as i16]);
+        }
+    }
+
+    #[tokio::test]
+    async fn recv_loop_forwards_udp_payload_to_channel() {
+        let listener = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let listener_addr = listener.local_addr().unwrap();
+        let (tx, mut rx) = mpsc::channel::<Vec<i16>>(8);
+        let task = tokio::spawn(recv_loop(listener, tx));
+
+        // Send two LE i16 samples (1, -1) into the listener.
+        let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        sender
+            .send_to(&[0x01, 0x00, 0xFF, 0xFF], listener_addr)
+            .await
+            .unwrap();
+
+        let samples = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for recv_loop")
+            .expect("recv channel closed");
+        assert_eq!(samples, vec![1, -1]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn send_loop_emits_udp_payload_from_channel() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let receiver_addr = receiver.local_addr().unwrap();
+        let sender = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let (tx, rx) = mpsc::channel::<Vec<i16>>(8);
+        let task = tokio::spawn(send_loop(sender, receiver_addr, rx));
+
+        tx.send(vec![1, -1]).await.unwrap();
+
+        let mut buf = [0u8; 4];
+        let (n, _) = tokio::time::timeout(Duration::from_secs(1), receiver.recv_from(&mut buf))
+            .await
+            .expect("timed out waiting for send_loop")
+            .expect("recv_from failed");
+        assert_eq!(n, 4);
+        assert_eq!(&buf[..], &[0x01, 0x00, 0xFF, 0xFF]);
+        task.abort();
     }
 }

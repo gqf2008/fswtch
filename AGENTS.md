@@ -10,6 +10,12 @@ This is a Rust workspace for FreeSWITCH module bindings. The maintained code is 
 - `crates/fswtch-sys`: raw FreeSWITCH ABI bindings and bindgen build script.
 - `crates/fswtch-src`: packaged FreeSWITCH headers used by default bundled builds.
 
+Deployable cdylib endpoint modules (e.g. `fswtch-unicast`, `ai-agent-seat`) live
+at the repo root — distinct from the library/helper crates under `crates/`.
+Their `[lib]` name and `module_exports! { module = … }` ident intentionally
+match the installed `.so` basename (no `mod_` prefix), because FreeSWITCH's
+loader derives the `dlsym` lookup name as `<basename>_module_interface`.
+
 The root `freeswitch/` tree and `crates/fswtch-src/freeswitch/` contain vendored upstream FreeSWITCH sources/headers. Treat them as third-party inputs. Do not reformat or refactor vendored files unless the task explicitly requires changing vendored FreeSWITCH content.
 
 ## Build And Check Commands

@@ -25,6 +25,11 @@ fn do_module_load(module: fswtch::ModuleBuilder) -> fswtch::Result<fswtch::Modul
     // Start the process-global tokio runtime used for UDP I/O tasks.
     crate::runtime::start()?;
 
+    // Spawn the orphan-call reaper on the module runtime. It drops `CallState`
+    // entries whose session was destroyed without `kill_channel(SIG_KILL)`.
+    // Auto-aborted when the runtime stops in `switch_module_shutdown`.
+    let _reaper = crate::io::spawn_reaper();
+
     // Build the I/O routines table and register the endpoint interface.
     let io = fswtch::EndpointIoBuilder::build::<io::FswtchUnicast>()?;
     let state_handler = fswtch::StateHandlerTable::new_null();
@@ -90,6 +95,11 @@ impl Visit for FieldCollector {
             self.0.push(' ');
         }
         if field.name() == "message" {
+            // `tracing` passes the message as `fmt::Arguments` wrapped in a
+            // `&dyn Debug`; `Arguments`'s `Debug` impl renders the formatted
+            // text with NO surrounding quotes, so `{:?}` here is correct (not
+            // `{}` — `&dyn Debug` has no `Display` bound). Matches the
+            // `ai-agent-seat` sibling.
             let _ = write!(self.0, "{:?}", value);
         } else {
             let _ = write!(self.0, "{}={:?}", field.name(), value);

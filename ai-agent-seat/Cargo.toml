@@ -37,3 +37,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 base64 = "0.22"
 rig-core = { version = "0.39", features = ["audio"] }
 
+[lints]
+workspace = true
+

@@ -26,10 +26,17 @@ The output is a shared object at:
 target/release/libfswtch_unicast.so
 ```
 
-Copy or symlink it into your FreeSWITCH modules directory, e.g.:
+Copy or symlink it into your FreeSWITCH modules directory. The installed
+basename (the `.so` filename **minus** its extension) **must** match the
+module's exported interface symbol `fswtch_unicast_module_interface` — i.e.
+install it as `fswtch_unicast.so`, **not** `mod_fswtch_unicast.so`.
+FreeSWITCH's loader derives the `dlsym` lookup name as `<basename>_module_interface`
+from the installed filename (it does not strip a `mod_` prefix), so a mismatched
+name fails to load with no symbol found. The `cargo`/`[lib]` name and the
+`module_exports! { module = … }` ident are both `fswtch_unicast` to match.
 
 ```bash
-sudo cp target/release/libfswtch_unicast.so /usr/lib/freeswitch/mod/mod_fswtch_unicast.so
+sudo cp target/release/libfswtch_unicast.so /usr/lib/freeswitch/mod/fswtch_unicast.so
 ```
 
 ## FreeSWITCH configuration
@@ -39,7 +46,7 @@ sudo cp target/release/libfswtch_unicast.so /usr/lib/freeswitch/mod/mod_fswtch_u
 Add to `autoload_configs/modules.conf.xml`:
 
 ```xml
-<load module="mod_fswtch_unicast"/>
+<load module="fswtch_unicast"/>
 ```
 
 ### Dialplan example
@@ -84,7 +91,7 @@ FreeSWITCH (`outgoing_channel: created session <uuid> remote=<addr>`).
 ## Verification
 
 1. Build and install the module.
-2. Start FreeSWITCH and confirm `mod_fswtch_unicast` loaded:
+2. Start FreeSWITCH and confirm `fswtch_unicast` loaded:
    ```
    fs_cli -x "show modules" | grep fswtch_unicast
    ```
