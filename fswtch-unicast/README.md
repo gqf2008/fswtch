@@ -73,7 +73,11 @@ fswtch_unicast/127.0.0.1:5000
 The peer at `<ip>:<port>` must:
 
 1. Listen on **UDP** port `P` for raw PCM.
-2. Optionally send raw little-endian i16 PCM back toward the caller.
+2. Optionally send raw little-endian i16 PCM back toward the caller — **from
+   the same `<ip>:<port>`**. The module accepts packets only from the
+   negotiated peer address: raw UDP has no authentication, so packets from any
+   other source are dropped (a stray sender cannot inject audio into the
+   call).
 3. Exchange raw little-endian i16 PCM at 8 kHz, 20 ms frames (160 samples per
    frame) over the UDP socket.
 
@@ -106,6 +110,16 @@ FreeSWITCH (`outgoing_channel: created session <uuid> remote=<addr>`).
    ```
 4. Place a call bridged to `fswtch_unicast/127.0.0.1:5000`.
 5. You should hear your own audio looped back.
+
+## Logging
+
+Module logs are emitted via `tracing` into the FreeSWITCH log. The default
+filter is `fswtch_unicast=info`; set `RUST_LOG` in the FreeSWITCH process
+environment to override it (e.g. `RUST_LOG=fswtch_unicast=debug`). Note that
+the `tracing` subscriber is process-global and first-come-first-served: if
+another Rust module (e.g. `ai_agent_seat`) loads first and installs its own
+subscriber, this module's default filter does not apply, and `RUST_LOG` is
+the reliable way to control its level.
 
 ## License
 

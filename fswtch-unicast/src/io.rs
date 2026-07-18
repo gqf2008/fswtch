@@ -83,23 +83,23 @@ pub struct CallState {
 impl CallState {
     /// Create per-call UDP state and spawn tokio send/recv tasks.
     pub fn new(uuid: String, remote_addr: SocketAddr) -> anyhow::Result<Self> {
-        // Bind a dynamic local UDP port. We create a std socket first because
-        // `outgoing_channel` runs on the synchronous FS media/origination thread,
-        // not inside a tokio runtime context.
-        let std_socket = std::net::UdpSocket::bind("0.0.0.0:0")
+        // `outgoing_channel` calls us on FreeSWITCH's synchronous originate
+        // thread, which has NO tokio context — and `tokio::net::UdpSocket`
+        // constructors panic without a reactor ("there is no reactor
+        // running"). Enter the module runtime via `runtime::block_on` for the
+        // bind; the async constructor also sets the socket non-blocking
+        // internally. (Regression history: `UdpSocket::from_std` here panicked
+        // on every call setup; `call_state_for_test` bypassing `new` hid it.)
+        let socket = crate::runtime::block_on(UdpSocket::bind("0.0.0.0:0"))
+            .ok_or_else(|| anyhow::anyhow!("tokio runtime not started"))?
             .map_err(|e| anyhow::anyhow!("UDP bind failed: {e}"))?;
-        std_socket
-            .set_nonblocking(true)
-            .map_err(|e| anyhow::anyhow!("set_nonblocking failed: {e}"))?;
-        let socket = UdpSocket::from_std(std_socket)
-            .map_err(|e| anyhow::anyhow!("tokio UdpSocket from std failed: {e}"))?;
         let socket = Arc::new(socket);
 
         let (send_tx, send_rx) = mpsc::channel::<Vec<i16>>(FRAME_CHANNEL_CAP);
         let (recv_tx, recv_rx) = mpsc::channel::<Vec<i16>>(FRAME_CHANNEL_CAP);
 
         let recv_socket = socket.clone();
-        let recv_task = crate::runtime::spawn(recv_loop(recv_socket, recv_tx))
+        let recv_task = crate::runtime::spawn(recv_loop(recv_socket, remote_addr, recv_tx))
             .ok_or_else(|| anyhow::anyhow!("tokio runtime not started"))?;
         let send_task = crate::runtime::spawn(send_loop(socket, remote_addr, send_rx))
             .ok_or_else(|| anyhow::anyhow!("tokio runtime not started"))?;
@@ -125,12 +125,28 @@ impl Drop for CallState {
 }
 
 /// Tokio task: read raw PCM from UDP and forward i16 samples to the FS media
-/// thread via `tx`.
-async fn recv_loop(socket: Arc<UdpSocket>, tx: mpsc::Sender<Vec<i16>>) {
+/// thread via `tx`. Only packets from `remote` are accepted: raw UDP has no
+/// authentication, so without the source check any host that can route to our
+/// port could inject audio into the call.
+///
+/// Socket errors are logged (throttled) and the task keeps running. On Linux
+/// an ICMP port-unreachable from the peer surfaces as `ECONNREFUSED` on the
+/// next socket operation even for unconnected UDP — a transient peer restart
+/// must not silence the call's media permanently.
+async fn recv_loop(socket: Arc<UdpSocket>, remote: SocketAddr, tx: mpsc::Sender<Vec<i16>>) {
     let mut buf = vec![0u8; UDP_BUF_BYTES];
+    let mut consecutive_errors = 0u64;
     loop {
         match socket.recv_from(&mut buf).await {
-            Ok((n, _addr)) => {
+            Ok((n, addr)) => {
+                if addr != remote {
+                    tracing::trace!(
+                        "recv_loop: dropping {n} bytes from unexpected source {addr} \
+                         (peer is {remote})"
+                    );
+                    continue;
+                }
+                consecutive_errors = 0;
                 let samples = bytes_to_i16(&buf[..n]);
                 if tx.send(samples).await.is_err() {
                     // Receiver dropped (call ended).
@@ -138,8 +154,12 @@ async fn recv_loop(socket: Arc<UdpSocket>, tx: mpsc::Sender<Vec<i16>>) {
                 }
             }
             Err(e) => {
-                tracing::error!("UDP recv error: {e}");
-                break;
+                consecutive_errors += 1;
+                if consecutive_errors == 1 || consecutive_errors.is_multiple_of(50) {
+                    tracing::warn!("UDP recv error (consecutive: {consecutive_errors}): {e}");
+                }
+                // Back off so a persistent error cannot spin the loop hot.
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }
     }
@@ -147,13 +167,22 @@ async fn recv_loop(socket: Arc<UdpSocket>, tx: mpsc::Sender<Vec<i16>>) {
 
 /// Tokio task: receive i16 PCM from the FS media thread and send raw LE bytes
 /// to `remote`. Reuses a single send buffer to avoid per-frame allocation.
+/// Socket errors are logged (throttled) and the task keeps running — a
+/// transient error must not mute the caller for the rest of the call. The
+/// loop is rate-limited by the channel, so no backoff is needed here.
 async fn send_loop(socket: Arc<UdpSocket>, remote: SocketAddr, mut rx: mpsc::Receiver<Vec<i16>>) {
     let mut buf = Vec::<u8>::with_capacity(UDP_BUF_BYTES);
+    let mut consecutive_errors = 0u64;
     while let Some(samples) = rx.recv().await {
         write_i16_le(&samples, &mut buf);
-        if let Err(e) = socket.send_to(&buf, remote).await {
-            tracing::error!("UDP send error: {e}");
-            break;
+        match socket.send_to(&buf, remote).await {
+            Ok(_) => consecutive_errors = 0,
+            Err(e) => {
+                consecutive_errors += 1;
+                if consecutive_errors == 1 || consecutive_errors.is_multiple_of(50) {
+                    tracing::warn!("UDP send error (consecutive: {consecutive_errors}): {e}");
+                }
+            }
         }
     }
 }
@@ -422,9 +451,9 @@ impl EndpointIoRoutines for FswtchUnicast {
     /// `kill_channel`: call ended — remove the [`CallState`] from [`CALLS`].
     fn kill_channel(session: &Session, sig: i32) -> Status {
         // FreeSWITCH's `switch_signal_t` (see `switch_types.h`): NONE=0, KILL=1,
-        // BREAK=2, … Only KILL tears the call down; BREAK/XFER are media-control
-        // signals and must not destroy state. `fswtch` does not yet expose a
-        // named `SwitchSig`, so this mirrors the header.
+        // XFER=2, BREAK=3. Only KILL tears the call down; XFER/BREAK are
+        // media-control signals and must not destroy state. `fswtch` does not
+        // yet expose a named `SwitchSig`, so this mirrors the header.
         const SIG_KILL: i32 = 1;
         if sig != SIG_KILL {
             tracing::trace!("kill_channel sig={sig} (non-KILL; keeping call state)");
@@ -558,11 +587,12 @@ mod tests {
     async fn recv_loop_forwards_udp_payload_to_channel() {
         let listener = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
         let listener_addr = listener.local_addr().unwrap();
-        let (tx, mut rx) = mpsc::channel::<Vec<i16>>(8);
-        let task = tokio::spawn(recv_loop(listener, tx));
-
-        // Send two LE i16 samples (1, -1) into the listener.
         let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sender_addr = sender.local_addr().unwrap();
+        let (tx, mut rx) = mpsc::channel::<Vec<i16>>(8);
+        let task = tokio::spawn(recv_loop(listener, sender_addr, tx));
+
+        // Send two LE i16 samples (1, -1) from the accepted peer address.
         sender
             .send_to(&[0x01, 0x00, 0xFF, 0xFF], listener_addr)
             .await
@@ -573,6 +603,38 @@ mod tests {
             .expect("timed out waiting for recv_loop")
             .expect("recv channel closed");
         assert_eq!(samples, vec![1, -1]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn recv_loop_drops_packets_from_unexpected_source() {
+        let listener = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+        let listener_addr = listener.local_addr().unwrap();
+        let peer = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let peer_addr = peer.local_addr().unwrap();
+        let (tx, mut rx) = mpsc::channel::<Vec<i16>>(8);
+        let task = tokio::spawn(recv_loop(listener, peer_addr, tx));
+
+        // A stranger (different source port) and the real peer both send.
+        let stranger = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        stranger
+            .send_to(&[0x01, 0x00], listener_addr)
+            .await
+            .unwrap();
+        peer.send_to(&[0x02, 0x00], listener_addr).await.unwrap();
+
+        // Only the peer's sample (2) is forwarded.
+        let samples = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timed out waiting for recv_loop")
+            .expect("recv channel closed");
+        assert_eq!(samples, vec![2]);
+        // And nothing from the stranger is queued behind it.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), rx.recv())
+                .await
+                .is_err()
+        );
         task.abort();
     }
 
@@ -594,5 +656,30 @@ mod tests {
         assert_eq!(n, 4);
         assert_eq!(&buf[..], &[0x01, 0x00, 0xFF, 0xFF]);
         task.abort();
+    }
+
+    /// Regression test: `CallState::new` must succeed on a thread with NO
+    /// tokio runtime context — that is exactly how `outgoing_channel` calls it
+    /// in production. Constructors that need a reactor (e.g. the former
+    /// `UdpSocket::from_std`) panic there with "there is no reactor running",
+    /// and the rest of this suite cannot catch that: `call_state_for_test`
+    /// bypasses `new` and `#[tokio::test]` provides a context. Deliberately a
+    /// plain `#[test]` + bare `std::thread`.
+    #[test]
+    fn call_state_new_works_on_bare_thread_without_tokio_context() {
+        crate::runtime::start_for_test();
+        let created = std::thread::spawn(|| {
+            CallState::new(
+                "bare-thread-uuid".to_string(),
+                "127.0.0.1:9999".parse().unwrap(),
+            )
+        })
+        .join()
+        .expect("CallState::new panicked on a non-tokio thread");
+        let state = created.expect("CallState::new failed on a non-tokio thread");
+        // Socket bound and both UDP tasks running on the module runtime.
+        assert!(!state.recv_task.is_finished());
+        assert!(!state.send_task.is_finished());
+        drop(state); // aborts the UDP tasks; runtime stays up for other tests
     }
 }

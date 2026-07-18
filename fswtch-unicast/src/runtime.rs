@@ -71,6 +71,19 @@ pub fn stop() {
     log_info(MODULE, "tokio Runtime stopped");
 }
 
+/// Report a runtime-API misuse (called before [`start()`]). Test builds skip
+/// the `log_error` call: it resolves FreeSWITCH's `switch_log_printf`, which
+/// does not exist outside a FreeSWITCH process, and a test-reachable
+/// reference to it fails to link the unit-test binary. Production behaviour
+/// is unchanged.
+#[inline]
+fn log_misuse(msg: &str) {
+    #[cfg(not(test))]
+    log_error(MODULE, msg);
+    #[cfg(test)]
+    let _ = msg;
+}
+
 /// Spawn a future on the tokio runtime from an arbitrary (non-tokio) thread.
 ///
 /// Use case: the `write_frame` I/O callback (on FreeSWITCH's media thread)
@@ -83,8 +96,39 @@ where
 {
     let guard = runtime_slot().lock().expect("runtime mutex poisoned");
     let Some(runtime) = guard.as_ref() else {
-        log_error(MODULE, "spawn() called before runtime start");
+        log_misuse("spawn() called before runtime start");
         return None;
     };
     Some(runtime.spawn(future))
+}
+
+/// Drive a future to completion on the tokio runtime, blocking the calling
+/// thread until it finishes.
+///
+/// Use case: `io::CallState::new` runs on FreeSWITCH's synchronous originate
+/// thread, which has no tokio context — but `tokio::net::UdpSocket`
+/// constructors require a reactor and panic without one. `Runtime::block_on`
+/// is legal from any thread that is not itself inside a runtime; all FS
+/// callback threads qualify. This is a once-per-call setup path, not the
+/// 50 Hz media loop, so the brief block is acceptable. The slot lock is held
+/// across the call so `stop()` cannot tear the runtime down mid-flight.
+/// Returns `None` (with a log) if the runtime isn't started.
+pub fn block_on<F: std::future::Future>(future: F) -> Option<F::Output> {
+    let guard = runtime_slot().lock().expect("runtime mutex poisoned");
+    let Some(runtime) = guard.as_ref() else {
+        log_misuse("block_on() called before runtime start");
+        return None;
+    };
+    Some(runtime.block_on(future))
+}
+
+/// Install a runtime for unit tests without any FreeSWITCH logging: the
+/// `log_*` helpers resolve `switch_log_printf` at call time, which does not
+/// exist in a test process. Idempotent, like [`start()`].
+#[cfg(test)]
+pub fn start_for_test() {
+    let mut guard = runtime_slot().lock().expect("runtime mutex poisoned");
+    if guard.is_none() {
+        *guard = Some(Runtime::new().expect("test tokio runtime"));
+    }
 }

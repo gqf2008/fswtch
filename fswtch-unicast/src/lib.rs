@@ -47,6 +47,17 @@ fswtch::module_load! {
 
 /// Module shutdown function.
 pub extern "C" fn switch_module_shutdown() -> fswtch::Status {
+    // Panic boundary: an unwind escaping this `extern "C"` frame would abort
+    // the whole FreeSWITCH process. The teardown path can panic only in
+    // exotic cases (e.g. a poisoned runtime mutex), but catch it anyway and
+    // degrade to a logged GENERR.
+    std::panic::catch_unwind(switch_module_shutdown_inner).unwrap_or_else(|_| {
+        fswtch::log_error("fswtch_unicast", "panic during switch_module_shutdown");
+        fswtch::GENERR
+    })
+}
+
+fn switch_module_shutdown_inner() -> fswtch::Status {
     tracing::info!("Shutting down fswtch_unicast module");
 
     // Drop per-call state while the tokio runtime is still alive so UDP tasks
