@@ -1014,19 +1014,28 @@ impl EndpointInterfaceRef {
 
 impl Drop for EndpointInterfaceRef {
     fn drop(&mut self) {
-        // SAFETY: we own a refcount from `lookup`; `UNPROTECT_INTERFACE`
-        // decrements it. Calling the inline equivalent here avoids depending
-        // on the macro: we lock reflock, decrement refs, unlock.
-        // FreeSWITCH's UNPROTECT_INTERFACE: if refs>0 refs--; if hits 0
-        // signal cleanup. We do the minimal safe decrement.
+        // SAFETY: we own one PROTECT_INTERFACE reference from `lookup`
+        // (`switch_loadable_module_get_endpoint_interface`). Mirror
+        // FreeSWITCH's `UNPROTECT_INTERFACE` macro
+        // (`switch_module_interfaces.h`) exactly: under `reflock`, decrement
+        // BOTH the interface's `refs` and the parent module's `refs`, then
+        // release the two read locks PROTECT_INTERFACE acquired — the
+        // interface `rwlock` first, then the parent's (reverse of
+        // acquisition). A partial implementation leaks `parent->refs` and
+        // both read locks, and `unload <module>` then fails with
+        // "Module in use." The locks are non-null by construction: lookup
+        // succeeded, so PROTECT_INTERFACE already dereferenced them.
         unsafe {
             let ep = self.raw.as_ptr();
-            if !(*ep).reflock.is_null() {
-                sys::switch_mutex_lock((*ep).reflock);
-                if (*ep).refs > 0 {
-                    (*ep).refs -= 1;
-                }
-                sys::switch_mutex_unlock((*ep).reflock);
+            sys::switch_mutex_lock((*ep).reflock);
+            (*ep).refs -= 1;
+            if !(*ep).parent.is_null() {
+                (*(*ep).parent).refs -= 1;
+            }
+            sys::switch_mutex_unlock((*ep).reflock);
+            sys::switch_thread_rwlock_unlock((*ep).rwlock);
+            if !(*ep).parent.is_null() {
+                sys::switch_thread_rwlock_unlock((*(*ep).parent).rwlock);
             }
         }
     }
