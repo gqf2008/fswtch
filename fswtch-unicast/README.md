@@ -94,6 +94,26 @@ FreeSWITCH (`outgoing_channel: created session <uuid> remote=<addr>`).
 
 ## Verification
 
+### Automated end-to-end check
+
+`examples/udp_peer_verify.py` (stdlib only) originates a call to
+`fswtch_unicast/127.0.0.1:5000 &echo` itself and asserts the media path:
+
+1. **Silence framing** — before the peer sends anything, the module emits
+   well-formed 320-byte L16 frames of pure silence.
+2. **Round-trip order** — uniquely marked frames sent to the module come
+   back bit-exact and in FIFO order (frames may be dropped by the bounded
+   channel under overload, but never reordered or corrupted).
+3. **Source filter** — frames from a foreign source port are never
+   accepted (see *Peer contract*).
+
+```bash
+python3 examples/udp_peer_verify.py            # exits 0 when all pass
+python3 examples/udp_peer_verify.py --no-originate   # just listen; you place the call
+```
+
+### Manual smoke
+
 1. Build and install the module.
 2. Start FreeSWITCH and confirm `fswtch_unicast` loaded:
    ```
