@@ -16,7 +16,7 @@ bundled = ["dep:fswtch-src"]
 
 [build-dependencies]
 bindgen = { version = "0.71" }
-fswtch-src = { version = "0.4.0", path = "../fswtch-src", optional = true }
+fswtch-src = { version = "0.4.1", path = "../fswtch-src", optional = true }
 pkg-config = "0.3"
 
 [lints]
