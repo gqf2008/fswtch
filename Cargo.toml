@@ -17,7 +17,7 @@ authors = ["Yehor Smoliakov <egorsmkv@gmail.com>"]
 license = "MIT"
 description = "Rust bindings and helpers for writing FreeSWITCH modules"
 readme = "README.md"
-repository = "https://github.com/RustedBytes/fswtch"
+repository = "https://github.com/gqf2008/fswtch-rs"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
