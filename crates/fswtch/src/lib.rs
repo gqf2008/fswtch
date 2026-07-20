@@ -110,9 +110,9 @@ pub use plc::Plc;
 pub use pool::*;
 pub use regex::{CaptureCallback, Regex, RegexMatch, is_match, is_match_partial};
 pub use resample::{
-    Agc, AgcConfig, DEFAULT_QUALITY, Resample, calc_buffer_size, change_sln_volume,
-    change_sln_volume_granular, char_to_float, float_to_char, float_to_short, generate_sln_silence,
-    merge_sln, mux_channels, short_to_float, swap_linear, unmerge_sln,
+    Agc, AgcConfig, DEFAULT_QUALITY, Resample, StreamingResample, calc_buffer_size,
+    change_sln_volume, change_sln_volume_granular, char_to_float, float_to_char, float_to_short,
+    generate_sln_silence, merge_sln, mux_channels, short_to_float, swap_linear, unmerge_sln,
 };
 pub use rtp::*;
 pub use scheduler::{
